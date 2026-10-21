@@ -14,7 +14,14 @@ services:
       CI: "1"
     volumes:
       - ./.env:/opt/lexful-qa-opencode/.env:ro
-      - harness-runs:/opt/lexful-qa-opencode/runs
+      - ./opencode.jsonc:/opt/lexful-qa-opencode/opencode.jsonc:ro
+      - ./scripts:/opt/lexful-qa-opencode/scripts:ro
+      - ./server/app:/opt/lexful-qa-opencode/server/app:ro
+      - ./.agents:/opt/lexful-qa-opencode/.agents:ro
+      - ./playwright.config.ts:/opt/lexful-qa-opencode/playwright.config.ts:ro
+      - ./auth-helper.ts:/opt/lexful-qa-opencode/auth-helper.ts:ro
+      - "./e2e test cases:/opt/lexful-qa-opencode/e2e test cases:ro"
+      - ./runs:/opt/lexful-qa-opencode/runs
     shm_size: "2gb"
     init: true
     restart: unless-stopped
@@ -24,6 +31,3 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 5
-
-volumes:
-  harness-runs:

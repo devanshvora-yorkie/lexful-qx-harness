@@ -9,7 +9,8 @@
     "preflight:tools": "node scripts/preflight.mjs --tools",
     "context": "node scripts/context.mjs",
     "serve": "node scripts/serve.mjs",
-    "ticket": "node scripts/ticket.mjs"
+    "ticket": "node scripts/ticket.mjs",
+    "specs": "node scripts/specs.mjs"
   },
   "keywords": [],
   "author": "",

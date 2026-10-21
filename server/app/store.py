@@ -1,9 +1,10 @@
-"""One index for every run. Folders live under runs/<id>/."""
+"""One index for every run. Folders live under runs/<ticket>/<run-id>/."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import string
 import time
@@ -28,8 +29,21 @@ def runs_root() -> Path:
     return root
 
 
+_GROUP = re.compile(r"^(LEX-\d+|pr-\d+|sha-[0-9a-fA-F]+|specs|manual|tools)")
+
+
+def run_group(run_id: str) -> str:
+    match = _GROUP.match(run_id)
+    return match.group(1) if match else "manual"
+
+
 def run_dir(run_id: str) -> Path:
-    return runs_root() / run_id
+    """New runs live at runs/<ticket>/<run-id>/. Older flat runs/<run-id>/ folders still resolve."""
+    flat = runs_root() / run_id
+    nested = runs_root() / run_group(run_id) / run_id
+    if flat.is_dir() and not nested.is_dir():
+        return flat
+    return nested
 
 
 def _index_path() -> Path:
@@ -149,6 +163,7 @@ def create_run(*, ticket: str | None, pr: int | None, sha: str | None, spec_coun
         (folder / "opencode").mkdir(exist_ok=True)
         (folder / "playwright").mkdir(exist_ok=True)
         (folder / "explore").mkdir(exist_ok=True)
+        (folder / "specs").mkdir(exist_ok=True)
         _write_manifest(row)
         return dict(row)
 

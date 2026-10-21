@@ -6,8 +6,10 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import termios
@@ -15,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.logbook import Logbook, SubagentTail
+from app.logbook import Logbook, SubagentTail, plain, row, session_id_from_text
 from app.settings import SECRET_ENV, get_settings
 
 
@@ -40,53 +42,86 @@ def _playwright_env(run_dir: Path) -> dict[str, str]:
     return env
 
 
-def reload_opencode() -> None:
-    """The background server is what loads project agents. A private --standalone server does not."""
-    settings = get_settings()
-    subprocess.run(
-        ["opencode", "reload"],
-        cwd=settings.root,
-        env=_opencode_env(settings.root),
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
-
-
 def last_opencode_error(run_dir: Path, log_name: str) -> str:
     path = run_dir / "opencode" / log_name
     if not path.is_file():
         return ""
     message = ""
+    plain_line = ""
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.startswith("{"):
+        cleaned = plain(line)
+        if not cleaned:
             continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
+        if cleaned.startswith("{"):
+            try:
+                payload = json.loads(cleaned)
+            except json.JSONDecodeError:
+                payload = None
+            error = payload.get("error") if isinstance(payload, dict) else None
+            if isinstance(error, dict) and error.get("message"):
+                message = str(error["message"]).split("\n", 1)[0][:300]
+            elif isinstance(error, str) and error.strip():
+                message = error.split("\n", 1)[0][:300]
             continue
-        error = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(error, dict) and error.get("message"):
-            message = str(error["message"]).split("\n", 1)[0][:300]
-    return message
+        lowered = cleaned.lower()
+        if lowered.startswith("error") or "not found" in lowered:
+            plain_line = cleaned.split("\n", 1)[0][:300]
+    return message or plain_line
 
 
-def run_opencode(run_dir: Path, *, session_id: str, prompt: str, title: str, log_name: str) -> int:
-    """Run OpenCode on a terminal so each JSON line is flushed into run.log immediately."""
+def _recent_root_session(started_ms: int) -> str:
+    database = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    if not database.is_file():
+        return ""
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=1)
+    except sqlite3.Error:
+        return ""
+    try:
+        names = {item[0] for item in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        table = "session_v2" if "session_v2" in names else "session" if "session" in names else ""
+        if not table:
+            return ""
+        found = connection.execute(
+            f"""
+            SELECT id FROM {table}
+            WHERE parent_id IS NULL AND time_created >= ?
+            ORDER BY time_created DESC
+            LIMIT 1
+            """,
+            (started_ms - 2_000,),
+        ).fetchone()
+        return str(found[0]) if found and str(found[0]).startswith("ses_") else ""
+    except sqlite3.Error:
+        return ""
+    finally:
+        connection.close()
+
+
+def run_opencode(
+    run_dir: Path,
+    *,
+    session_id: str | None,
+    prompt: str,
+    title: str,
+    log_name: str,
+    resume: bool = False,
+) -> tuple[int, str]:
+    """Run OpenCode on a terminal so each JSON line is flushed into run.log immediately.
+
+    A new run omits ``--session``. OpenCode creates the session and prints its id.
+    ``--session`` is only passed when resuming that real id.
+    """
     settings = get_settings()
-    reload_opencode()
     book = Logbook(run_dir)
-    tail = SubagentTail(session_id, book)
+    active_session = session_id if resume and session_id else ""
+    tail = SubagentTail(active_session, book)
     log_path = run_dir / "opencode" / log_name
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "opencode",
-        "run",
-        "--format",
-        "json",
-        "--session",
-        session_id,
+    command = ["opencode", "run", "--format", "json"]
+    if active_session:
+        command.extend(["--session", active_session])
+    command.extend([
         "--agent",
         "qa",
         "--model",
@@ -95,7 +130,21 @@ def run_opencode(run_dir: Path, *, session_id: str, prompt: str, title: str, log
         title,
         "--auto",
         prompt,
-    ]
+    ])
+    book.row("qa", "launch", f"continue {active_session}" if active_session else f"new session  {settings.main_model}")
+    started_ms = int(time.time() * 1000)
+
+    def remember(text: str) -> None:
+        nonlocal active_session
+        book.event(text)
+        if active_session:
+            return
+        found = session_id_from_text(text)
+        if not found:
+            return
+        active_session = found
+        tail.parent_id = found
+        book.row("qa", "session", found)
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 200, 400, 0, 0))
     process = subprocess.Popen(
@@ -139,25 +188,31 @@ def run_opencode(run_dir: Path, *, session_id: str, prompt: str, title: str, log
                 text = raw.decode("utf-8", errors="replace").replace("\r", "")
                 handle.write(text + "\n")
                 handle.flush()
-                book.event(text)
+                remember(text)
         if pending.strip():
             text = pending.decode("utf-8", errors="replace").replace("\r", "")
             handle.write(text + "\n")
             handle.flush()
-            book.event(text)
+            remember(text)
         if timed_out:
             handle.write("opencode timed out\n")
             book.row("qa", "error", "opencode timed out")
     os.close(master)
+    if not active_session:
+        active_session = _recent_root_session(started_ms)
+        if active_session:
+            tail.parent_id = active_session
+            book.row("qa", "session", active_session)
     tail.poll()
     tail.write_index(run_dir / "opencode" / "children.json")
     export_children(run_dir, tail.children, book)
     try:
-        return 124 if timed_out else process.wait(timeout=20)
+        code = 124 if timed_out else process.wait(timeout=20)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
-        return 124
+        code = 124
+    return code, active_session
 
 
 def export_children(run_dir: Path, children: list[dict[str, Any]], book: Logbook) -> None:
@@ -196,6 +251,8 @@ def export_children(run_dir: Path, children: list[dict[str, Any]], book: Logbook
 
 
 def export_session(run_dir: Path, session_id: str) -> None:
+    if not session_id:
+        return
     settings = get_settings()
     result = subprocess.run(
         ["opencode", "session", "export", session_id],
@@ -218,6 +275,21 @@ def export_session(run_dir: Path, session_id: str) -> None:
     target.write_text(json.dumps(note, indent=2) + "\n", encoding="utf-8")
 
 
+_PREFLIGHT_CHECK = re.compile(r"^(PASS|FAIL)\s{2}([^:]+):\s*(.*)$")
+
+
+def _preflight_row(line: str) -> str | None:
+    text = plain(line)
+    match = _PREFLIGHT_CHECK.match(text)
+    if match:
+        verb = "pass" if match.group(1) == "PASS" else "fail"
+        return row("preflight", verb, f"{match.group(2).strip()} — {match.group(3).strip()}")
+    if text.startswith("ok →") or text.startswith("failed →"):
+        verb = "ok" if text.startswith("ok") else "failed"
+        return row("preflight", verb, text.split("→", 1)[-1].strip())
+    return None
+
+
 def run_preflight(run_dir: Path, *, ticket: str | None, pr: int | None, sha: str | None) -> int:
     settings = get_settings()
     command = ["node", "scripts/preflight.mjs", "--out", str(run_dir)]
@@ -230,28 +302,39 @@ def run_preflight(run_dir: Path, *, ticket: str | None, pr: int | None, sha: str
     log_path = run_dir / "preflight.log"
     env = os.environ.copy()
     env["QA_RUN_DIR"] = str(run_dir)
+    book = Logbook(run_dir)
+    process = subprocess.Popen(
+        command,
+        cwd=settings.root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    assert process.stdout is not None
     with log_path.open("w", encoding="utf-8") as handle:
-        process = subprocess.run(
-            command,
-            cwd=settings.root,
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
-    return process.returncode
+        for line in process.stdout:
+            handle.write(line)
+            handle.flush()
+            formatted = _preflight_row(line)
+            if formatted:
+                book.line(formatted)
+    return process.wait()
 
 
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     settings = get_settings()
     log_path = run_dir / "playwright" / "output.log"
-    command = ["npx", "playwright", "test", "--workers=1", *specs]
+    command = ["npx", "playwright", "test", "--workers=1", "--project=e2e", *specs]
+    env = _playwright_env(run_dir)
+    parents = {str(Path(spec).parent) for spec in specs}
+    if len(parents) == 1:
+        env["QA_TEST_DIR"] = str((settings.root / next(iter(parents))).resolve())
     with log_path.open("w", encoding="utf-8") as handle:
         process = subprocess.run(
             command,
             cwd=settings.root,
-            env=_playwright_env(run_dir),
+            env=env,
             stdout=handle,
             stderr=subprocess.STDOUT,
             text=True,

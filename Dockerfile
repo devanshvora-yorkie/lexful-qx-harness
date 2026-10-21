@@ -10,7 +10,8 @@ RUN apt-get update \
     git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://opencode.ai/install | bash
+# The v1 installer refuses 2.x. Pin the same release that completed LEX-2293 locally.
+RUN curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.0.30 --no-modify-path
 ENV PATH="/root/.opencode/bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -29,6 +30,11 @@ RUN python3 -m venv server/.venv \
 COPY . .
 RUN chmod +x docker/entrypoint.sh \
   && mkdir -p runs
+
+# xvfb-run is already pulled in by Playwright's browser deps. It refuses to start without xauth.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xauth \
+  && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8787
 

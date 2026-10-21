@@ -41,6 +41,9 @@ try {
     runId = started.runId;
     console.log(`started ${runId} (${started.status})`);
   }
+  console.log('');
+  console.log(`${ticket}  ${runId}`);
+  console.log('');
 } catch (error) {
   console.error(`Cannot reach ${base}. Start it with: npm run serve`);
   console.error(error.message);
@@ -68,7 +71,8 @@ for (;;) {
     seen = text;
   }
   if (done.has(row.status)) {
-    console.log(row.error ? `${row.status}: ${row.error}` : row.status);
+    console.log('');
+    console.log(row.error ? `${row.status}  ${row.error}` : row.status);
     process.exit(row.status === 'completed' ? 0 : 1);
   }
   await new Promise((resolve) => setTimeout(resolve, 1000));

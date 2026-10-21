@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test';
 const runDir = process.env.QA_RUN_DIR;
 
 export default defineConfig({
-  testDir: './tests',
+  testDir: process.env.QA_TEST_DIR || './tests',
   timeout: 30000,
   expect: {
     timeout: 10000,
@@ -25,6 +25,9 @@ export default defineConfig({
     navigationTimeout: 15000,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
+    launchOptions: process.env.QA_SLOWMO
+      ? { slowMo: Number(process.env.QA_SLOWMO) }
+      : undefined,
   },
   projects: [
     {

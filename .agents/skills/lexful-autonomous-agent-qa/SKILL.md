@@ -207,7 +207,7 @@ The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 
 ### 4. Verdict & Handoff
 
-The server writes `runs/<run-id>/qa-result.json` and `report.md`. It copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count.
+The server writes `runs/<ticket>/<run-id>/qa-result.json` and `report.md`. Specs and the POM live in that folder's `specs/` directory. The server copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count. Do not write a run's specs under `tests/`.
 
 ## Verification
 

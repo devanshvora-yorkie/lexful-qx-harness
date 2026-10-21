@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Any
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_SESSION_ID = re.compile(r"\bses_[A-Za-z0-9]{10,}\b")
+
+
+def plain(text: str) -> str:
+    return _ANSI.sub("", text).replace("\r", "").strip()
+
+
 def _stamp(moment: datetime | None = None) -> str:
     return (moment or datetime.now()).strftime("%H:%M:%S")
 
@@ -31,7 +39,7 @@ def _clip(text: str, limit: int = 180) -> str:
 
 def _public(text: str) -> str:
     """Drop provider key URLs. The rest of the error is what the run failed on."""
-    return re.sub(r"https://openrouter\.ai/\S+", "openrouter", text)
+    return re.sub(r"https://openrouter\.ai/\S+", "openrouter", plain(text))
 
 
 def _short_path(path: str) -> str:
@@ -63,7 +71,52 @@ def _duration(state: dict[str, Any]) -> str:
 
 
 def row(role: str, verb: str, detail: str = "") -> str:
-    return f"{role[:14]:<14}  {verb[:12]:<12}  {detail}".rstrip()
+    return f"{role[:16]:<16}  {verb[:14]:<14}  {detail}".rstrip()
+
+
+def plain_error(text: str) -> str | None:
+    """A readable error row for a non-JSON OpenCode line, or nothing for ordinary output."""
+    cleaned = plain(text)
+    if not cleaned or cleaned.startswith("{"):
+        return None
+    lowered = cleaned.lower()
+    if lowered.startswith("error") or "not found" in lowered or lowered.startswith("exception"):
+        return row("qa", "error", _clip(_public(cleaned), 240))
+    return None
+
+
+def session_id_from_text(text: str) -> str:
+    """The first real OpenCode session id in one event. Ignores ordinary prose."""
+    cleaned = plain(text)
+    try:
+        payload = json.loads(cleaned)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        found = _session_id(payload)
+        if found:
+            return found
+    if cleaned.startswith("{"):
+        match = _SESSION_ID.search(cleaned)
+        if match:
+            return match.group(0)
+    return ""
+
+
+def _session_id(payload: dict[str, Any]) -> str:
+    for key in ("sessionID", "sessionId", "session_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.startswith("ses_"):
+            return value
+    for key in ("session", "info", "properties", "part"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            found = _session_id(nested)
+            if found:
+                return found
+        if isinstance(nested, str) and nested.startswith("ses_"):
+            return nested
+    return ""
 
 
 def _shell_summary(command: str) -> str:
@@ -208,10 +261,19 @@ class Logbook:
     def row(self, role: str, verb: str, detail: str = "", *, moment: datetime | None = None) -> None:
         self.line(row(role, verb, detail), moment=moment)
 
+    def phase(self, title: str) -> None:
+        self.line(f"── {title}")
+
     def event(self, raw: str) -> None:
+        cleaned = plain(raw)
+        if not cleaned:
+            return
         try:
-            payload = json.loads(raw)
+            payload = json.loads(cleaned)
         except json.JSONDecodeError:
+            note = plain_error(cleaned)
+            if note:
+                self.line(note)
             return
         if not isinstance(payload, dict):
             return
@@ -224,6 +286,15 @@ class Logbook:
             return []
         lines = self.path.read_text(encoding="utf-8", errors="replace").splitlines()
         return lines[-limit:]
+
+
+def _session_table(connection: sqlite3.Connection) -> str | None:
+    names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "session_v2" in names:
+        return "session_v2"
+    if "session" in names:
+        return "session"
+    return None
 
 
 class SubagentTail:
@@ -251,11 +322,15 @@ class SubagentTail:
         except sqlite3.Error:
             return
         try:
+            table = _session_table(connection)
+            if table is None:
+                return
+            idle = "time_idle" if table == "session_v2" else "time_archived"
             rows = connection.execute(
-                """
+                f"""
                 SELECT id, agent, title, cost, tokens_input, tokens_output, tokens_reasoning,
-                       time_created, time_updated, time_idle
-                FROM session_v2
+                       time_created, time_updated, {idle}
+                FROM {table}
                 WHERE parent_id = ?
                 ORDER BY time_created
                 """,

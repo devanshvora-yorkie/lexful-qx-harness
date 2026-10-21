@@ -7,7 +7,8 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.logbook import Logbook, SubagentTail, child_message_lines, format_event
+from app.logbook import Logbook, SubagentTail, child_message_lines, format_event, plain_error, session_id_from_text
+from app.runners import _preflight_row
 from app.main import health, run_ticket
 from app.pipeline import verdict_for
 from app.store import create_run, find_active_sha, get_run, list_runs, update_run
@@ -127,6 +128,22 @@ class LogbookTest(unittest.TestCase):
             self.assertEqual(text.count("finished"), 1)
             self.assertIn("$0.4000", text)
             self.assertEqual(text.count("context-pack.json"), 1)
+
+    def test_plain_error_names_the_missing_session(self):
+        line = plain_error("\x1b[91m\x1b[1mError: \x1b[0mSession not found")
+        self.assertIn("Session not found", line)
+        self.assertNotIn("\x1b", line)
+        self.assertIsNone(plain_error("ordinary progress"))
+        self.assertEqual(
+            session_id_from_text('{"type":"step_start","sessionID":"ses_abcDEF1234567890"}'),
+            "ses_abcDEF1234567890",
+        )
+        self.assertEqual(session_id_from_text("no session here"), "")
+        check = _preflight_row("PASS  npm packages: @playwright/test and @playwright/cli are installed")
+        self.assertIn("preflight", check)
+        self.assertIn("pass", check)
+        self.assertIn("npm packages", check)
+        self.assertIn("installed", check)
 
     def test_appends_a_readable_line(self):
         with tempfile.TemporaryDirectory() as tmp:

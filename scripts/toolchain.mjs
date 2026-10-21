@@ -106,11 +106,47 @@ function ensureOpenCode() {
   return check('OpenCode', 'pass', `${bin} ${version}`);
 }
 
+function stripJsonc(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '"') {
+      out += c;
+      i += 1;
+      while (i < text.length) {
+        const ch = text[i];
+        out += ch;
+        if (ch === '\\') {
+          if (i + 1 < text.length) out += text[i + 1];
+          i += 2;
+          continue;
+        }
+        i += 1;
+        if (ch === '"') break;
+      }
+      continue;
+    }
+    if (c === '/' && next === '/') {
+      i += 2;
+      while (i < text.length && text[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
 function loadJsonc(file) {
-  const text = readFileSync(file, 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
-  return JSON.parse(text);
+  return JSON.parse(stripJsonc(readFileSync(file, 'utf8')));
 }
 
 function ensureOpenCodeSetup() {

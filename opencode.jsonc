@@ -6,23 +6,38 @@
   "instructions": [
     ".agents/skills/lexful-autonomous-agent-qa/references/custom-instructions.md"
   ],
-  // Last matching rule wins. Deny anything outside this repo so Downloads and other folders are not prompted.
-  // Copilot ids, if you want that bill instead: github-copilot/claude-sonnet-5.5 and github-copilot/claude-haiku-5.5
+  // OpenCode 2. Last matching rule wins.
+  // The working directory is /opt/lexful-qa-opencode inside the container.
+  // external_directory deny blocks every other path, on any host.
   "permissions": [
     { "action": "external_directory", "resource": "*", "effect": "deny" },
-    { "action": "read", "resource": "/Users/*/Downloads/*", "effect": "deny" },
-    { "action": "read", "resource": "/Users/*/Desktop/*", "effect": "deny" },
-    { "action": "read", "resource": "/Users/*/Documents/*", "effect": "deny" },
-    { "action": "edit", "resource": "/Users/*/Downloads/*", "effect": "deny" },
-    { "action": "edit", "resource": "/Users/*/Desktop/*", "effect": "deny" },
-    { "action": "edit", "resource": "/Users/*/Documents/*", "effect": "deny" },
     { "action": "read", "resource": ".env", "effect": "deny" },
     { "action": "read", "resource": "*.env", "effect": "deny" },
     { "action": "read", "resource": ".env.*", "effect": "deny" },
+    { "action": "read", "resource": "**/.env", "effect": "deny" },
+    { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+    { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+    { "action": "edit", "resource": ".env", "effect": "deny" },
+    { "action": "edit", "resource": "*.env", "effect": "deny" },
+    { "action": "edit", "resource": ".env.*", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env.*", "effect": "deny" },
+    { "action": "edit", "resource": ".env.example", "effect": "deny" },
+    { "action": "edit", "resource": "auth-state.json", "effect": "deny" },
+    { "action": "edit", "resource": "**/auth-state.json", "effect": "deny" },
+    { "action": "edit", "resource": "runs/cache/**", "effect": "deny" },
+    { "action": "webfetch", "resource": "*", "effect": "deny" },
+    { "action": "websearch", "resource": "*", "effect": "deny" },
+    { "action": "bash", "resource": "git clone *", "effect": "deny" },
+    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
+    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
+    { "action": "bash", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
+    { "action": "shell", "resource": "git clone *", "effect": "deny" },
+    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
+    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
+    { "action": "shell", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
     { "action": "read", "resource": ".env.example", "effect": "allow" },
-    { "action": "webfetch", "resource": "https://api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
-    { "action": "webfetch", "resource": "https://api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
-    { "action": "webfetch", "resource": "https://github.com/Lexful-ai/docu-stack*", "effect": "deny" }
+    { "action": "read", "resource": "**/.env.example", "effect": "allow" }
   ],
   "agents": {
     "build": {
@@ -49,44 +64,72 @@
       "mode": "primary",
       "model": "openrouter/anthropic/claude-sonnet-5.5",
       "description": "Coordinates one LEX ticket and delegates exploration, authoring, and healing",
-      "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You coordinate. Delegate Phase 1 to qa-explorer, Phase 2 to qa-author, and fixes to qa-healer.",
+      "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You coordinate. Delegate Phase 1 to qa-explorer, Phase 2 to qa-author, and fixes to qa-healer. Stay inside this repository. Do not read .env. Do not clone a product repo.",
       "steps": 24,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" }
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
       ]
     },
     "qa-explorer": {
       "mode": "subagent",
       "model": "openrouter/anthropic/claude-haiku-5.5",
       "description": "Explore the live UAT app with playwright-cli and write FEATURE.md. No specs, no login, no Linear or GitHub.",
-      "system": "Read .agents/prompts/qa-explorer.md and Phase 1 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Use playwright-cli only. Do not write specs.",
+      "system": "Read .agents/prompts/qa-explorer.md and Phase 1 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Use playwright-cli only. Do not write specs. Reuse the run directory auth-state.json. Do not read .env.",
       "steps": 40,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" }
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
       ]
     },
     "qa-author": {
       "mode": "subagent",
       "model": "openrouter/anthropic/claude-haiku-5.5",
       "description": "Write POM and Playwright specs from FEATURE.md and the context pack. No browser exploration.",
-      "system": "Read .agents/prompts/qa-author.md and Phase 2 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Write specs from FEATURE.md. Do not explore.",
+      "system": "Read .agents/prompts/qa-author.md and Phase 2 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Write specs from FEATURE.md and the context pack. Do not explore. Do not read .env. Do not clone a product repo.",
       "steps": 40,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" }
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
       ]
     },
     "qa-healer": {
       "mode": "subagent",
       "model": "openrouter/anthropic/claude-haiku-5.5",
       "description": "Patch the failing specs from the Playwright report. One attempt, no new scenarios.",
-      "system": "Read .agents/prompts/qa-healer.md and the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch the named specs only.",
+      "system": "Read .agents/prompts/qa-healer.md and the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch the named specs only. Do not read .env.",
       "steps": 20,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" }
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
       ]
     }
   }

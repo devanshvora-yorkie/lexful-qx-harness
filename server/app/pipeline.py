@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app import runners, store
-from app.logbook import Logbook
+from app.logbook import Logbook, plain
 from app.settings import get_settings
 
 log = logging.getLogger("qa.pipeline")
@@ -42,8 +42,10 @@ def execute_run(run_id: str) -> None:
 
 def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
     settings = get_settings()
+    book.phase(str(row.get("ticket") or run_id))
     book.row("server", "queued", str(row.get("ticket") or run_id))
     store.update_run(run_id, status="preflight")
+    book.phase("preflight")
     book.row("server", "preflight", "started")
     code = runners.run_preflight(folder, ticket=row.get("ticket"), pr=row.get("pr"), sha=row.get("sha"))
     preflight = _read_json(folder / "preflight.json")
@@ -52,32 +54,35 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     if ticket and ticket != row.get("ticket"):
         store.update_run(run_id, ticket=ticket, pr=preflight.get("primaryPr"), sha=row.get("sha"))
     if not preflight_ok:
-        detail = _failed_check(preflight) or "preflight failed"
+        detail = plain(_failed_check(preflight) or "preflight failed")
         book.row("server", "preflight", f"failed  {detail}")
         store.update_run(run_id, status="halted", error=detail)
         _write_qa_result(folder, ticket or None, "HALTED", {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}, [detail])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
         return
 
+    checks = [item for item in (preflight.get("checks") or []) if isinstance(item, dict)]
+    passed = sum(1 for item in checks if item.get("status") == "pass")
     book.row(
         "server",
         "preflight",
         f"ok  {ticket or 'no ticket'}  PR {preflight.get('primaryPr') or 'none'}  "
-        f"{len(preflight.get('checks') or [])} checks",
+        f"{passed}/{len(checks)} checks  {preflight.get('appUrl') or settings.qa_url}",
     )
     store.update_run(run_id, status="agent", ticket=ticket, pr=preflight.get("primaryPr"))
-    session_id = _opencode_session(run_id, row)
-    book.row("qa", "started", f"{settings.main_model}  {session_id}")
+    book.phase("coordinator")
     prompt = _lead_prompt(folder, ticket, row.get("specCount"), preflight)
     (folder / "prompt.md").write_text(prompt + "\n", encoding="utf-8")
     started = time.time()
-    agent_code = runners.run_opencode(
+    agent_code, session_id = runners.run_opencode(
         folder,
-        session_id=session_id,
+        session_id=None,
         prompt=prompt,
         title=f"{ticket} {run_id}",
         log_name="agent.jsonl",
     )
+    if session_id:
+        store.update_run(run_id, opencodeSession=session_id)
     runners.export_session(folder, session_id)
     if agent_code != 0:
         reason = _opencode_failure(folder, "agent.jsonl", agent_code)
@@ -89,6 +94,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         return
 
     book.row("qa", "finished", "coordinator returned")
+    book.phase("playwright")
     specs = runners.planned_specs(folder, started)
     if not specs:
         detail = "the agent did not write a spec file"
@@ -98,7 +104,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
         return
 
-    book.row("server", "specs", f"{len(specs)} files")
+    book.row("server", "specs", f"{len(specs)} files  {', '.join(specs)}"[:240])
     summary = _execute_and_heal(run_id, folder, ticket, specs, settings.heal_attempts, session_id, book)
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
     status = "completed" if verdict == "PERFECT" else "needs_revision"
@@ -111,15 +117,6 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     store.update_run(run_id, status=status, error=None)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
-
-
-def _opencode_session(run_id: str, row: dict[str, Any]) -> str:
-    current = str(row.get("opencodeSession") or "")
-    if current.startswith("ses"):
-        return current
-    session_id = store.new_opencode_session_id()
-    store.update_run(run_id, opencodeSession=session_id)
-    return session_id
 
 
 def _opencode_failure(folder: Path, log_name: str, code: int) -> str:
@@ -139,7 +136,7 @@ def _execute_and_heal(
     book: Logbook,
 ) -> dict[str, int]:
     store.update_run(run_id, status="execute")
-    book.row("playwright", "started", f"{len(specs)} files")
+    book.row("playwright", "started", f"{len(specs)} files  {', '.join(specs)}"[:240])
     result = runners.run_playwright(folder, specs)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
@@ -147,18 +144,23 @@ def _execute_and_heal(
         return summary
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
-        book.row("server", "heal", f"{attempt} of {heal_attempts}")
+        book.phase(f"heal {attempt} of {heal_attempts}")
+        book.row("server", "heal", f"{attempt} of {heal_attempts}  {len(specs)} specs still open")
         prompt = _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
-        runners.run_opencode(
+        _heal_code, session_id = runners.run_opencode(
             folder,
-            session_id=session_id,
+            session_id=session_id or None,
             prompt=prompt,
             title=f"{ticket} heal {attempt}",
             log_name=f"heal-{attempt}.jsonl",
+            resume=bool(session_id),
         )
+        if session_id:
+            store.update_run(run_id, opencodeSession=session_id)
         runners.export_session(folder, session_id)
         store.update_run(run_id, status="execute")
+        book.phase("playwright")
         book.row("playwright", "started", f"after heal {attempt}")
         result = runners.run_playwright(folder, specs)
         summary = result["summary"]
@@ -173,6 +175,11 @@ def _counts(summary: dict[str, int]) -> str:
         f"passed {summary.get('passed', 0)}  failed {summary.get('failed', 0)}  "
         f"skipped {summary.get('skipped', 0)}  flaky {summary.get('flaky', 0)}"
     )
+
+
+def _import_prefix(relative: str) -> str:
+    depth = len(Path(relative).joinpath("specs").parts)
+    return "/".join([".."] * depth) or "."
 
 
 def _display(folder: Path) -> str:
@@ -199,9 +206,11 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         f"Context pack: {relative}/context-pack.json",
         f"Auth cookies: {relative}/auth-state.json",
         f"The live URL is the appUrl in the context pack. Put snapshots in {relative}/explore/.",
-        "Delegate Phase 1 to qa-explorer. It writes FEATURE.md with the URL, API calls, and action matrix.",
-        "Then delegate Phase 2 to qa-author. It writes the POM, specs, and planned-specs.json.",
-        f"planned-specs.json goes in {relative}/ and lists test_files, pom_files, and plan_file.",
+        "Delegate Phase 1 to qa-explorer. It writes FEATURE.md in the run directory, with the URL, API calls, and action matrix.",
+        f"Then delegate Phase 2 to qa-author. It writes the POM and specs only in {relative}/specs/.",
+        "Do not write spec files, POMs, or FEATURE.md under tests/.",
+        f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
+        f"planned-specs.json goes in {relative}/ and lists test_files, pom_files, and plan_file as paths like {relative}/specs/<name>.spec.ts.",
         "Do not run preflight, do not call /auth/password, and do not run the Playwright suite.",
     ])
 
