@@ -3,7 +3,7 @@
  *
  * Surface : https://e2e-test.uat.lexful.net/docs/d/all/system.document
  * API host: https://api.uat.lexful.net
- * POM     : playwright-tests/pages/docs/document.page.ts
+ * POM     : ./document-pom.ts, ./document-fixtures.ts
  *
  * Companion to `tests/document-editing-e2e/doceditspec.ts` (which holds TC-DOC-001 … TC-DOC-010). The
  * harness caps a spec file at 10 tests, so the edge cases live here.
@@ -16,16 +16,20 @@
  *   TC-DOC-013  Clear an expiry date           → only the expiry is removed
  *
  * Run:
- *   cd playwright-tests && npx playwright test tests/document-editing-e2e/doceditspec-2.spec.ts --project=chromium
+ *   node scripts/specs.mjs --headed "e2e test cases/document editing"
  */
 import { test, expect } from '@playwright/test'
-import { ApiContext, DocumentRecordDrawer, DOCUMENT_TYPE } from '../../pages/docs/document.page'
+import { injectAuthCookies } from '../../auth-helper'
+import { ApiContext, DocumentRecordDrawer, DOCUMENT_TYPE } from './document-pom'
 import {
   cleanupCreatedRecords,
   createDocument,
-  TEST_ORGANIZATION,
   uniqueName,
-} from '../../support/document-fixtures'
+} from './document-fixtures'
+
+test.beforeEach(async ({ page }) => {
+  await injectAuthCookies(page.context())
+})
 
 test.afterEach(async ({ page }) => {
   await cleanupCreatedRecords(page)

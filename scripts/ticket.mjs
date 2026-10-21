@@ -11,8 +11,16 @@ if (!ticket) {
   process.exit(1);
 }
 
-async function readJson(path, options) {
-  const response = await fetch(`${base}${path}`, options);
+function requestHeaders() {
+  const secret = process.env.HARNESS_DEPLOY_SECRET;
+  return secret ? { 'x-harness-deploy-secret': secret } : {};
+}
+
+async function readJson(path, options = {}) {
+  const response = await fetch(`${base}${path}`, {
+    ...options,
+    headers: { ...requestHeaders(), ...(options.headers || {}) },
+  });
   const text = await response.text();
   let body = {};
   try {
@@ -59,7 +67,7 @@ for (;;) {
     console.error(error.message);
     process.exit(1);
   }
-  const log = await fetch(`${base}/runs/${runId}/log`);
+  const log = await fetch(`${base}/runs/${runId}/log`, { headers: requestHeaders() });
   if (log.ok) {
     const text = await log.text();
     if (text.startsWith(seen)) {

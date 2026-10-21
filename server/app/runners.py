@@ -34,8 +34,14 @@ def _opencode_env(run_dir: Path) -> dict[str, str]:
 
 
 def _playwright_env(run_dir: Path) -> dict[str, str]:
+    """Playwright runs model-written specs, so it does not inherit API keys or passwords.
+
+    The session is already in auth-state.json. A spec that prints process.env cannot see the secrets.
+    """
     settings = get_settings()
     env = os.environ.copy()
+    for key in (*SECRET_ENV, "OPENROUTER_API_KEY"):
+        env.pop(key, None)
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(run_dir / "auth-state.json")
     env["QA_ENV_URL"] = settings.qa_url
@@ -325,22 +331,36 @@ def run_preflight(run_dir: Path, *, ticket: str | None, pr: int | None, sha: str
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     settings = get_settings()
     log_path = run_dir / "playwright" / "output.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     command = ["npx", "playwright", "test", "--workers=1", "--project=e2e", *specs]
     env = _playwright_env(run_dir)
     parents = {str(Path(spec).parent) for spec in specs}
     if len(parents) == 1:
         env["QA_TEST_DIR"] = str((settings.root / next(iter(parents))).resolve())
     with log_path.open("w", encoding="utf-8") as handle:
-        process = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=settings.root,
             env=env,
             stdout=handle,
             stderr=subprocess.STDOUT,
             text=True,
-            check=False,
+            start_new_session=True,
         )
-    return {"exitCode": process.returncode, "summary": read_playwright_summary(run_dir)}
+        try:
+            code = process.wait(timeout=settings.playwright_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
+            handle.write("\nplaywright timed out\n")
+            code = 124
+    summary = read_playwright_summary(run_dir)
+    if code != 0 and summary["failed"] == 0 and summary["passed"] == 0:
+        summary["failed"] = 1
+    return {"exitCode": code, "summary": summary}
 
 
 def read_playwright_summary(run_dir: Path) -> dict[str, int]:
@@ -379,10 +399,14 @@ def planned_specs(run_dir: Path, started_at: float) -> list[str]:
             if existing:
                 return existing
     found: list[str] = []
-    tests = settings.root / "tests"
-    if not tests.is_dir():
+    specs_dir = run_dir / "specs"
+    if not specs_dir.is_dir():
         return found
-    for spec in tests.rglob("*.spec.ts"):
-        if spec.stat().st_mtime >= started_at - 1:
+    for spec in sorted(specs_dir.rglob("*.spec.ts")):
+        if spec.stat().st_mtime < started_at - 1:
+            continue
+        try:
             found.append(str(spec.relative_to(settings.root)))
+        except ValueError:
+            continue
     return found

@@ -51,6 +51,7 @@ class Settings:
     main_model: str
     sub_model: str
     agent_timeout_seconds: int
+    playwright_timeout_seconds: int
     heal_attempts: int
     qa_url: str
 
@@ -70,6 +71,7 @@ def get_settings() -> Settings:
         main_model=os.getenv("OPENCODE_MAIN_MODEL", MAIN_MODEL_DEFAULT).strip(),
         sub_model=os.getenv("OPENCODE_SUB_MODEL", SUB_MODEL_DEFAULT).strip(),
         agent_timeout_seconds=int(os.getenv("QA_AGENT_TIMEOUT_SECONDS", "2700")),
+        playwright_timeout_seconds=int(os.getenv("QA_PLAYWRIGHT_TIMEOUT_SECONDS", "2700")),
         heal_attempts=int(os.getenv("QA_HEAL_ATTEMPTS", "3")),
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
     )

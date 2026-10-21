@@ -1,6 +1,6 @@
 # Lexful UAT Playwright suite
 
-Start a ticket from the server. Preflight, the Stytch session, and the context pack are written under `runs/<run-id>/` before OpenCode starts.
+Start a ticket from the server. Preflight, the Stytch session, and the context pack are written under `runs/<ticket>/<run-id>/` before OpenCode starts. Specs for that attempt go in that folder's `specs/` directory. Checked-in suites live in `e2e test cases/`.
 
 ```bash
 npm run serve

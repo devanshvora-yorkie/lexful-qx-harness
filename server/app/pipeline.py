@@ -148,7 +148,7 @@ def _execute_and_heal(
         book.row("server", "heal", f"{attempt} of {heal_attempts}  {len(specs)} specs still open")
         prompt = _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
-        _heal_code, session_id = runners.run_opencode(
+        heal_code, session_id = runners.run_opencode(
             folder,
             session_id=session_id or None,
             prompt=prompt,
@@ -159,6 +159,9 @@ def _execute_and_heal(
         if session_id:
             store.update_run(run_id, opencodeSession=session_id)
         runners.export_session(folder, session_id)
+        if heal_code != 0:
+            book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
+            continue
         store.update_run(run_id, status="execute")
         book.phase("playwright")
         book.row("playwright", "started", f"after heal {attempt}")

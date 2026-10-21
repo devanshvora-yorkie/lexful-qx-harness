@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from app.logbook import Logbook
 from app.pipeline import execute_run
 from app.settings import get_settings
-from app.store import create_run, find_active_sha, get_run, list_runs, run_dir, update_run
+from app.store import create_run, find_active_sha, get_run, list_runs, recover_runs, run_dir, update_run
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("qa.api")
@@ -25,6 +25,8 @@ _queue: asyncio.Queue[str] = asyncio.Queue()
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    for run_id in recover_runs():
+        _queue.put_nowait(run_id)
     worker = asyncio.create_task(_worker())
     try:
         yield
@@ -101,12 +103,12 @@ def health() -> dict[str, Any]:
     return {"status": "ok", "port": settings.port, "runs": str(settings.runs)}
 
 
-@app.get("/runs")
+@app.get("/runs", dependencies=[Depends(require_secret)])
 def runs(ticket: str | None = None) -> dict[str, Any]:
     return {"runs": _with_activity(list_runs(ticket))}
 
 
-@app.get("/runs/{run_id}")
+@app.get("/runs/{run_id}", dependencies=[Depends(require_secret)])
 def run_detail(run_id: str) -> dict[str, Any]:
     row = get_run(run_id)
     if row is None:
@@ -115,7 +117,7 @@ def run_detail(run_id: str) -> dict[str, Any]:
     return row
 
 
-@app.get("/runs/{run_id}/log")
+@app.get("/runs/{run_id}/log", dependencies=[Depends(require_secret)])
 def run_log(run_id: str) -> PlainTextResponse:
     path = run_dir(run_id) / "run.log"
     if not path.is_file():

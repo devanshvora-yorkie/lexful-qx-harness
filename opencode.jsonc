@@ -37,7 +37,30 @@
     { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
     { "action": "shell", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
     { "action": "read", "resource": ".env.example", "effect": "allow" },
-    { "action": "read", "resource": "**/.env.example", "effect": "allow" }
+    { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+    { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+    { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+    { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*head*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*tail*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*less*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*sed*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*awk*.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+    { "action": "bash", "resource": "env", "effect": "deny" },
+    { "action": "bash", "resource": "env *", "effect": "deny" },
+    { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+    { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*head*auth-state.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*tail*auth-state.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+    { "action": "shell", "resource": "env", "effect": "deny" },
+    { "action": "shell", "resource": "env *", "effect": "deny" },
+    { "action": "shell", "resource": "*process.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
   ],
   "agents": {
     "build": {
@@ -75,7 +98,19 @@
         { "action": "read", "resource": "**/.env.*", "effect": "deny" },
         { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
         { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
       ]
     },
     "qa-explorer": {
@@ -93,7 +128,19 @@
         { "action": "read", "resource": "**/.env.*", "effect": "deny" },
         { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
         { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
       ]
     },
     "qa-author": {
@@ -111,7 +158,19 @@
         { "action": "read", "resource": "**/.env.*", "effect": "deny" },
         { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
         { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
       ]
     },
     "qa-healer": {
@@ -129,7 +188,19 @@
         { "action": "read", "resource": "**/.env.*", "effect": "deny" },
         { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
         { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" }
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
       ]
     }
   }

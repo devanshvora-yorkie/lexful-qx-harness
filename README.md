@@ -27,7 +27,7 @@ Then:
 docker compose up --build -d
 ```
 
-`make up` does the same check and start. The API is on [http://127.0.0.1:8787](http://127.0.0.1:8787).
+`make up` does the same check and start. The API is on [http://127.0.0.1:8787](http://127.0.0.1:8787). Docker publishes that port on this machine only. `.env` is passed into the container as variables and is not mounted into the working directory.
 
 With `LOCAL_MODE=true` the API does not require `HARNESS_DEPLOY_SECRET`. Set `LOCAL_MODE=false` and a secret before exposing the port.
 
@@ -85,7 +85,9 @@ docker compose exec harness node scripts/specs.mjs runs/LEX-2293/<run-id>/specs
 
 ## Checked-in e2e suites
 
-These live in `e2e test cases/` and use the same runner. With the container up:
+Each folder under `e2e test cases/` is one suite: `FEATURE.md`, the spec files, and the page objects for that suite. Nothing in a suite imports a page object from outside its folder. Auth is `auth-helper.ts`. Paths such as `/docs/assets` are resolved against `QA_ENV_URL`.
+
+With the container up:
 
 ```bash
 docker compose exec harness node scripts/specs.mjs "e2e test cases/search"
@@ -100,8 +102,6 @@ node scripts/specs.mjs --headed "e2e test cases/search"
 node scripts/specs.mjs --headed "e2e test cases/asset crud"
 node scripts/specs.mjs --headed "e2e test cases/document editing"
 ```
-
-`tests/` is the older suite. A new ticket does not write there, and these three suites do not read it. You can delete `tests/` when you no longer need those older specs.
 
 The image installs Node, Playwright Chromium, the Python server, and OpenCode. On startup the OpenRouter key from `.env` is written into the container auth store. `.env` is mounted read-only and is not copied into the image.
 

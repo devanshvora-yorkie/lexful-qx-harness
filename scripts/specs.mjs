@@ -111,9 +111,20 @@ function testDirFor(specs) {
   return path.join(ROOT, prefix.join(path.sep) || '.');
 }
 
-function summary(runDir) {
+const HIDDEN_FROM_PLAYWRIGHT = [
+  'STYTCH_ADMIN_PASSWORD',
+  'STYTCH_SUPPORT_PASSWORD',
+  'STYTCH_VIEWER_PASSWORD',
+  'LINEAR_API_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'HARNESS_DEPLOY_SECRET',
+  'OPENROUTER_API_KEY',
+];
+
+function summary(runDir, exitCode) {
   const report = path.join(runDir, 'playwright', 'results.json');
-  const empty = { passed: 0, failed: 0, skipped: 0, flaky: 0 };
+  const empty = { passed: 0, failed: exitCode ? 1 : 0, skipped: 0, flaky: 0 };
   if (!existsSync(report)) return empty;
   try {
     const stats = JSON.parse(readFileSync(report, 'utf8')).stats || {};
@@ -147,7 +158,7 @@ function runPlaywright(runDir, specs, headed) {
       {
         cwd: ROOT,
         env: {
-          ...process.env,
+          ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !HIDDEN_FROM_PLAYWRIGHT.includes(key))),
           QA_RUN_DIR: runDir,
           QA_TEST_DIR: testDirFor(specs),
           AUTH_STATE: authState,
@@ -200,7 +211,10 @@ async function main() {
   console.log('');
 
   const exitCode = await runPlaywright(runDir, specs, parsed.headed);
-  const counts = summary(runDir);
+  const counts = summary(runDir, exitCode);
+  if (!existsSync(path.join(runDir, 'playwright', 'results.json')) && exitCode) {
+    console.error('playwright exited before writing a report');
+  }
   writeFileSync(
     path.join(runDir, 'manifest.json'),
     `${JSON.stringify({

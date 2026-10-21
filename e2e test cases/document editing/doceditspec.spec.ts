@@ -3,7 +3,7 @@
  *
  * Surface : https://e2e-test.uat.lexful.net/docs/d/all/system.document
  * API host: https://api.uat.lexful.net
- * POM     : playwright-tests/pages/docs/document.page.ts
+ * POM     : ./document-pom.ts, ./assets-list-pom.ts, ./document-fixtures.ts
  *
  * A Document (`system.document`) carries three properties:
  *   name        string          required
@@ -20,7 +20,7 @@
  * run leaves the UAT sandbox as it found it. Tag assignment is removed the same way.
  *
  * Run:
- *   cd playwright-tests && npx playwright test tests/document-editing-e2e/doceditspec.ts --project=chromium
+ *   node scripts/specs.mjs --headed "e2e test cases/document editing"
  *
  * Preconditions:
  *   - The UAT session (Stytch storageState.json) is valid; run `npm run stytch:capture`
@@ -28,7 +28,8 @@
  *   - The "E2E Demo" organization exists and accepts assets (asset_management_usable).
  */
 import { test, expect } from '@playwright/test'
-import { AssetRecordListPage } from '../../pages/docs/assets-list.page'
+import { injectAuthCookies } from '../../auth-helper'
+import { AssetRecordListPage } from './assets-list-pom'
 import {
   ApiContext,
   DocumentCreateDrawer,
@@ -37,18 +38,22 @@ import {
   expectedExpiresOn,
   friendlyDate,
   gridExpiryText,
-} from '../../pages/docs/document.page'
+} from './document-pom'
 import {
   cleanupCreatedRecords,
   createDocument,
   createdRecords,
   TEST_ORGANIZATION,
   uniqueName,
-} from '../../support/document-fixtures'
+} from './document-fixtures'
 
 // ---------------------------------------------------------------------------------------
 // Fixture plumbing — created records are archived again after each test
 // ---------------------------------------------------------------------------------------
+
+test.beforeEach(async ({ page }) => {
+  await injectAuthCookies(page.context())
+})
 
 test.afterEach(async ({ page }) => {
   await cleanupCreatedRecords(page)

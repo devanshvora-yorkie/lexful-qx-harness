@@ -4,10 +4,11 @@
  * Merge of Assets-E2E (listing, auth, bulk, filters, detail) and
  * asset-crud-e2e (create cancel, create/find/edit/archive, tag/duplicate/archive).
  *
- * Run from lexful-qa-opencode:
- *   npx playwright test Assets-crud-E2E/assets-crud.spec.ts --headed --retries=0 --reporter=line
+ * Run:
+ *   node scripts/specs.mjs --headed "e2e test cases/asset crud"
  *
- * Needs: ../auth-helper.ts, .env (STYTCH_ADMIN_* or LEXFUL_*), Chromium installed.
+ * Page objects live in this folder. Auth is ../../auth-helper.
+ * Paths are relative to QA_ENV_URL (/docs/assets, /docs/d/all/servers).
  */
 import { test, expect } from '@playwright/test';
 import { injectAuthCookies, getLexfulCookies } from '../../auth-helper';
@@ -16,8 +17,8 @@ import { ServersListingPOM } from './servers-listing-pom';
 import { ServersDetailPOM } from './servers-detail-pom';
 import { CreateAssetPOM } from './create-asset-pom';
 
-const SERVERS_URL = 'https://e2e-test.uat.lexful.net/docs/d/all/servers';
-const ASSETS_URL = 'https://e2e-test.uat.lexful.net/docs/assets';
+const SERVERS_URL = '/docs/d/all/servers';
+const ASSETS_URL = '/docs/assets';
 const SEEDED_SERVER = 'AAA-SRV-001';
 
 async function openServersListing(page: import('@playwright/test').Page) {

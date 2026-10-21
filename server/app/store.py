@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
-import string
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -126,12 +124,6 @@ def _write_manifest(row: dict[str, Any]) -> None:
     manifest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
 
 
-def new_opencode_session_id() -> str:
-    """OpenCode only accepts session ids that start with ``ses``."""
-    alphabet = string.ascii_letters + string.digits
-    return "ses_" + "".join(secrets.choice(alphabet) for _ in range(26))
-
-
 def create_run(*, ticket: str | None, pr: int | None, sha: str | None, spec_count: int | None) -> dict[str, Any]:
     label = ticket or (f"pr-{pr}" if pr else "manual")
     run_id = f"{label}-{_stamp()}-{os.urandom(2).hex()}"
@@ -150,7 +142,7 @@ def create_run(*, ticket: str | None, pr: int | None, sha: str | None, spec_coun
             "subagents": get_settings().sub_model,
         },
         "healAttempts": 0,
-        "opencodeSession": new_opencode_session_id(),
+        "opencodeSession": None,
         "error": None,
     }
 
@@ -186,7 +178,26 @@ def list_runs(ticket: str | None = None) -> list[dict[str, Any]]:
 
 
 def find_active_sha(sha: str) -> dict[str, Any] | None:
+    """Skip a sha that is already running or already finished cleanly. A needs-revision run can be tried again."""
+    closed = {"failed", "halted", "needs_revision"}
     for row in _read_index()["runs"]:
-        if row.get("sha") == sha and row.get("status") not in {"failed", "halted"}:
+        if row.get("sha") == sha and row.get("status") not in closed:
             return dict(row)
     return None
+
+
+def recover_runs() -> list[str]:
+    """After a restart, fail runs that were mid-flight and return the ones still waiting to start."""
+    interrupted = {"preflight", "agent", "execute", "heal"}
+    waiting = {"accepted", "queued"}
+    requeue: list[str] = []
+    for row in reversed(list_runs()):
+        status = row.get("status")
+        run_id = str(row.get("id") or "")
+        if not run_id:
+            continue
+        if status in interrupted:
+            update_run(run_id, status="failed", error="server restarted during the run")
+        elif status in waiting:
+            requeue.append(run_id)
+    return requeue

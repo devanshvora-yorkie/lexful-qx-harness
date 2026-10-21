@@ -7,11 +7,10 @@ Combines `Assets-E2E` (31) and `asset-crud-e2e` (3) into one spec.
 ## Run
 
 ```bash
-cd lexful-qa-opencode
-npx playwright test Assets-crud-E2E/assets-crud.spec.ts --headed --retries=0 --reporter=line
+node scripts/specs.mjs --headed "e2e test cases/asset crud"
 ```
 
-Share this folder plus `auth-helper.ts`, `playwright.config.ts`, and `.env` from the repo root.
+Page objects are in this folder. Auth is `../../auth-helper`. Paths are relative to `QA_ENV_URL`.
 
 ## Tests
 

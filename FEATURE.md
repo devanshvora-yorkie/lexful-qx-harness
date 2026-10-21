@@ -151,42 +151,9 @@ Access Points(40), Applications(58), Backups(30), Cameras(29), Computers(95), Co
 
 ---
 
-## 5. Test File Plan
+## 5. Where the suites live now
 
-### POM Structure
-```
-lexful-test/
-├── FEATURE.md                    ← this overview
-├── .agents/skills/lexful-autonomous-agent-qa/  ← project QA skill: SKILL.md + references/custom-instructions.md
-├── auth-helper.ts                ← cookie load + expiry-checked API refresh
-├── auth-state.json               ← saved session cookies
-└── tests/
-    ├── common-pom.ts             ← shared shell locators (sidebar, topbar, drawers)
-    ├── auth/FEATURE.md + auth.spec.ts
-    ├── assets-main/FEATURE.md + assets-main.spec.ts + assets-listing-pom.ts
-    ├── servers-listing/FEATURE.md + servers-listing.spec.ts + servers-listing-pom.ts
-    ├── servers-detail/FEATURE.md + servers-detail.spec.ts + servers-detail-pom.ts
-    ├── create-server/FEATURE.md + create-server.spec.ts + create-asset-pom.ts
-    ├── bulk-actions/FEATURE.md + bulk-actions.spec.ts   ← pom via ../servers-listing/
-    └── filters/FEATURE.md + filters.spec.ts             ← pom via ../servers-listing/
-```
-
-### Test Scenarios by Feature
-
-Each feature's scenarios and live status of record:
-
-| Feature | Tests | Status |
-|---|---|---|
-| [auth](tests/auth/FEATURE.md) | 4 | green |
-| [assets-main](tests/assets-main/FEATURE.md) | 10 | green |
-| [assets-empty-types](tests/assets-empty-types/FEATURE.md) | 15 | green (LEX-3500) |
-| [servers-listing](tests/servers-listing/FEATURE.md) | 14 | green |
-| [servers-detail](tests/servers-detail/FEATURE.md) | 10 | green |
-| [create-server](tests/create-server/FEATURE.md) | 7 | green |
-| [bulk-actions](tests/bulk-actions/FEATURE.md) | 7 | green |
-| [filters](tests/filters/FEATURE.md) | 12 | green |
-
-*(Last full run 2026-10-16: 64/64 passing. Original per-spec planning lists live in git history / the linked files supersede them.)*
+Checked-in suites are under `e2e test cases/`. Each folder has its own spec and page objects. A ticket run writes new specs under `runs/<ticket>/<run-id>/specs/`. There is no `tests/` directory.
 
 ---
 
@@ -227,20 +194,13 @@ Each feature's scenarios and live status of record:
 
 ## 7. Execution Commands
 
-### Run all tests
 ```bash
-cd ~/lexful-test && npx playwright test --workers=1 --timeout=30000   # 1 worker: UAT rate limits
+node scripts/specs.mjs --headed "e2e test cases/search"
+node scripts/specs.mjs --headed "e2e test cases/asset crud"
+node scripts/specs.mjs --headed "e2e test cases/document editing"
 ```
 
-### Run single feature
-```bash
-npx playwright test tests/auth/
-```
-
-### With headed browser (for debugging)
-```bash
-npx playwright test --headed
-```
+A ticket run is `docker compose exec harness npm run ticket -- LEX-1234`.
 
 ### Auth state refresh
 No manual step — `auth-helper.ts` checks `auth-state.json` expiry on first test and refreshes via API when stale.

@@ -4,7 +4,7 @@ services:
     build: .
     image: lexful-qx-harness:local
     ports:
-      - "${QA_SERVER_PORT:-8787}:8787"
+      - "127.0.0.1:${QA_SERVER_PORT:-8787}:8787"
     env_file:
       - .env
     environment:
@@ -13,7 +13,6 @@ services:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       CI: "1"
     volumes:
-      - ./.env:/opt/lexful-qa-opencode/.env:ro
       - ./opencode.jsonc:/opt/lexful-qa-opencode/opencode.jsonc:ro
       - ./scripts:/opt/lexful-qa-opencode/scripts:ro
       - ./server/app:/opt/lexful-qa-opencode/server/app:ro

@@ -4,18 +4,12 @@
 - **Environment:** `QA_ENV_URL` → `e2e-test.uat.lexful.net` (remote UAT; no local DB, no global setup)
 - **API host:** `https://api.uat.lexful.net`
 - **Account / primary org:** `01a0ee54-00c2-7054-ae8b-a4cb9e1b7d8b` = **E2E Demo** (`asset_management_usable: true`)
-- **Spec files**
-  - `playwright-tests/tests/docs/doceditspec.ts` — TC-DOC-001 … TC-DOC-010 (positive + negative) ← **the deliverable**
-  - `playwright-tests/tests/docs/doceditspec-2.spec.ts` — TC-DOC-011 … TC-DOC-013 (edge)
-  - Split because the harness caps a spec at 10 tests (`MAX_TESTS_PER_SPEC` in `src/agents/agent3-automation-analyser/spec-layout.ts`)
-- **POM:** `playwright-tests/pages/docs/document.page.ts` (`DocumentCreateDrawer`, `DocumentRecordDrawer`, `ApiContext`)
-- **Shared fixtures:** `playwright-tests/support/document-fixtures.ts` (data helpers + archive-on-finish cleanup)
-- **Session handling:** `playwright-tests/utils/lexful-uat-session.ts` (replay state + on-the-fly refresh)
-- **Exploration log:** `outputs/doc-edit-e2e/EXPLORATION-LOG.md`
-- **Snapshots:** `outputs/doc-edit-e2e/snapshots/`
-- **Run:** `cd playwright-tests && npx playwright test tests/docs/doceditspec.ts tests/docs/doceditspec-2.spec.ts --project=chromium`
-- **Headed:** `HEADLESS=false npx playwright test tests/docs/doceditspec.ts`
-- **Auth:** Stytch `playwright/.auth/storageState.json`. Re-capture with `npm run stytch:capture -- --persona admin`, then `npm run session:verify`. Google SSO is disabled — never write a `*.sso.spec.ts`.
+- **Run:** `node scripts/specs.mjs --headed "e2e test cases/document editing"`
+- **Spec files** (this folder)
+  - `doceditspec.spec.ts` — TC-DOC-001 … TC-DOC-010
+  - `doceditspec-2.spec.ts` — TC-DOC-011 … TC-DOC-013
+- **Page objects** (this folder): `document-pom.ts`, `assets-list-pom.ts`, `document-fixtures.ts`, `document-session.ts`
+- **Auth:** `../../auth-helper`. App paths are relative to `QA_ENV_URL`. Google SSO is disabled.
 
 ---
 

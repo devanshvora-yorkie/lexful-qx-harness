@@ -11,7 +11,8 @@ from app.logbook import Logbook, SubagentTail, child_message_lines, format_event
 from app.runners import _preflight_row
 from app.main import health, run_ticket
 from app.pipeline import verdict_for
-from app.store import create_run, find_active_sha, get_run, list_runs, update_run
+from app.runners import planned_specs
+from app.store import create_run, find_active_sha, get_run, list_runs, recover_runs, update_run
 
 
 class LogbookTest(unittest.TestCase):
@@ -166,7 +167,9 @@ class VerdictTest(unittest.TestCase):
 
 class StoreTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(__file__).resolve().parents[2] / "runs"
+        root.mkdir(exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(dir=root)
         os.environ["QA_RUNS_DIR"] = self.tmp.name
 
     def tearDown(self):
@@ -175,16 +178,33 @@ class StoreTest(unittest.TestCase):
     def test_round_trip(self):
         created = create_run(ticket="LEX-3371", pr=1418, sha="abc123", spec_count=15)
         self.assertEqual(created["status"], "accepted")
-        self.assertTrue(str(created["opencodeSession"]).startswith("ses_"))
-        self.assertTrue((Path(self.tmp.name) / created["id"] / "manifest.json").is_file())
+        self.assertIsNone(created["opencodeSession"])
+        folder = Path(self.tmp.name) / "LEX-3371" / created["id"]
+        self.assertTrue((folder / "manifest.json").is_file())
         update_run(created["id"], status="preflight")
         again = get_run(created["id"])
         self.assertIsNotNone(again)
         self.assertEqual(again["status"], "preflight")
         self.assertEqual(list_runs("LEX-3371")[0]["id"], created["id"])
         self.assertEqual(find_active_sha("abc123")["id"], created["id"])
+        update_run(created["id"], status="needs_revision")
+        self.assertIsNone(find_active_sha("abc123"))
         update_run(created["id"], status="failed")
         self.assertIsNone(find_active_sha("abc123"))
+
+    def test_recovery_and_spec_discovery(self):
+        created = create_run(ticket="LEX-3400", pr=None, sha=None, spec_count=None)
+        spec = Path(self.tmp.name) / "LEX-3400" / created["id"] / "specs" / "added.spec.ts"
+        spec.write_text("import { test } from '@playwright/test'\n")
+        found = planned_specs(spec.parents[1], 0)
+        self.assertTrue(any(item.endswith("added.spec.ts") for item in found))
+        update_run(created["id"], status="agent")
+        waiting = create_run(ticket="LEX-3401", pr=None, sha=None, spec_count=None)
+        update_run(waiting["id"], status="queued")
+        requeued = recover_runs()
+        self.assertIn(waiting["id"], requeued)
+        self.assertEqual(get_run(created["id"])["status"], "failed")
+        self.assertIn("restarted", get_run(created["id"])["error"])
 
 
 class ApiTest(unittest.TestCase):
