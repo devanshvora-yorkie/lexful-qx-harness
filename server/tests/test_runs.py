@@ -1,0 +1,193 @@
+import json
+import os
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from fastapi import HTTPException
+
+from app.logbook import Logbook, SubagentTail, child_message_lines, format_event
+from app.main import health, run_ticket
+from app.pipeline import verdict_for
+from app.store import create_run, find_active_sha, get_run, list_runs, update_run
+
+
+class LogbookTest(unittest.TestCase):
+    def test_tool_and_error_lines(self):
+        self.assertIsNone(format_event({"type": "step_start"}))
+        shell = format_event({
+            "type": "tool_use",
+            "part": {"tool": "shell", "state": {"status": "completed", "input": {"command": "ls explore"}}},
+        })
+        self.assertIn("qa", shell)
+        self.assertIn("shell", shell)
+        self.assertIn("ls explore", shell)
+        subagent = format_event({
+            "type": "tool_use",
+            "part": {
+                "tool": "subagent",
+                "state": {
+                    "status": "error",
+                    "input": {"agent": "qa-explorer", "description": "Explore the drawer", "prompt": "long prompt"},
+                    "error": "Subagent failed (sessionID: ses_abc): Provider returned error",
+                    "time": {"start": 1_000, "end": 61_000},
+                },
+            },
+        })
+        self.assertIn("qa-explorer", subagent)
+        self.assertIn("Explore the drawer", subagent)
+        self.assertIn("Provider returned error", subagent)
+        self.assertIn("1m 00s", subagent)
+        self.assertNotIn("long prompt", subagent)
+        self.assertIn("ses", format_event({"type": "error", "error": {"message": "Expected a string starting with ses"}}))
+        hidden = format_event({
+            "type": "error",
+            "error": {"message": "budget https://openrouter.ai/workspaces/lexful/keys/secret"},
+        })
+        self.assertNotIn("keys/secret", hidden)
+        self.assertIn("openrouter", hidden)
+
+    def test_child_message_names_the_action(self):
+        lines = child_message_lines("qa-explorer", {
+            "content": [
+                {"type": "reasoning", "text": "hidden chain of thought"},
+                {
+                    "type": "tool",
+                    "name": "shell",
+                    "state": {
+                        "status": "completed",
+                        "input": {"command": "cd /tmp/lexful-qa-opencode/explore && playwright-cli open https://e2e-test.uat.lexful.net"},
+                    },
+                },
+                {"type": "text", "text": "Opened the contacts list and found the Relationships tab."},
+            ],
+        })
+        self.assertTrue(any("playwright-cli open https://e2e-test.uat.lexful.net" in line for line in lines))
+        self.assertTrue(any("Relationships tab" in line for line in lines))
+        self.assertFalse(any("chain of thought" in line for line in lines))
+        self.assertFalse(any("cd /tmp" in line for line in lines))
+
+    def test_subagent_tail_writes_child_tools_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            database = folder / "opencode.db"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                CREATE TABLE session_v2 (
+                    id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL,
+                    directory text NOT NULL, title text, version text NOT NULL, cost real DEFAULT 0,
+                    tokens_input integer DEFAULT 0, tokens_output integer DEFAULT 0, tokens_reasoning integer DEFAULT 0,
+                    time_created integer NOT NULL, time_updated integer NOT NULL, time_idle integer, agent text
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE session_message (
+                    id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
+                    time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO session_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("ses_child", "project", "ses_parent", "slug", "/work", "Phase 1", "1", 0.4, 10, 20, 0, 1_000, 5_000, None, "qa-explorer"),
+            )
+            payload = {
+                "content": [{
+                    "type": "tool",
+                    "name": "read",
+                    "state": {"status": "completed", "input": {"path": "/work/lexful-qa-opencode/runs/demo/context-pack.json"}},
+                }],
+            }
+            connection.execute(
+                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
+                ("msg1", "ses_child", "assistant", 1, 1_000, 2_000, json.dumps(payload)),
+            )
+            connection.commit()
+            connection.close()
+            book = Logbook(folder)
+            tail = SubagentTail("ses_parent", book, database)
+            tail.opened_at = 0
+            tail.poll()
+            tail.poll()
+            text = (folder / "run.log").read_text(encoding="utf-8")
+            self.assertEqual(text.count("qa-explorer"), 2)
+            self.assertIn("started", text)
+            self.assertIn("runs/demo/context-pack.json", text)
+            self.assertNotIn("finished", text)
+            connection = sqlite3.connect(database)
+            connection.execute("UPDATE session_v2 SET time_idle = 61000, cost = 0.4 WHERE id = 'ses_child'")
+            connection.commit()
+            connection.close()
+            tail.poll()
+            text = (folder / "run.log").read_text(encoding="utf-8")
+            self.assertEqual(text.count("finished"), 1)
+            self.assertIn("$0.4000", text)
+            self.assertEqual(text.count("context-pack.json"), 1)
+
+    def test_appends_a_readable_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            book = Logbook(Path(tmp))
+            book.row("server", "preflight", "ok")
+            book.event('{"type":"step_finish","part":{"reason":"tool-calls","cost":0.02,"tokens":{"input":4,"output":10}}}')
+            text = (Path(tmp) / "run.log").read_text(encoding="utf-8")
+            self.assertIn("preflight", text)
+            self.assertIn("$0.0200", text)
+            self.assertIn("in 4 out 10", text)
+
+
+class VerdictTest(unittest.TestCase):
+    def test_matrix(self):
+        self.assertEqual(verdict_for({"passed": 0, "failed": 0}, preflight_ok=False, produced_specs=False), "HALTED")
+        self.assertEqual(verdict_for({"passed": 0, "failed": 0}, preflight_ok=True, produced_specs=False), "HALTED")
+        self.assertEqual(verdict_for({"passed": 4, "failed": 0}, preflight_ok=True, produced_specs=True), "PERFECT")
+        self.assertEqual(verdict_for({"passed": 3, "failed": 1}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
+
+
+class StoreTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["QA_RUNS_DIR"] = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_round_trip(self):
+        created = create_run(ticket="LEX-3371", pr=1418, sha="abc123", spec_count=15)
+        self.assertEqual(created["status"], "accepted")
+        self.assertTrue(str(created["opencodeSession"]).startswith("ses_"))
+        self.assertTrue((Path(self.tmp.name) / created["id"] / "manifest.json").is_file())
+        update_run(created["id"], status="preflight")
+        again = get_run(created["id"])
+        self.assertIsNotNone(again)
+        self.assertEqual(again["status"], "preflight")
+        self.assertEqual(list_runs("LEX-3371")[0]["id"], created["id"])
+        self.assertEqual(find_active_sha("abc123")["id"], created["id"])
+        update_run(created["id"], status="failed")
+        self.assertIsNone(find_active_sha("abc123"))
+
+
+class ApiTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["QA_RUNS_DIR"] = self.tmp.name
+        os.environ["LOCAL_MODE"] = "true"
+        os.environ.pop("HARNESS_DEPLOY_SECRET", None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_health_and_ticket_shape(self):
+        body = health()
+        self.assertEqual(body["status"], "ok")
+        with self.assertRaises(HTTPException) as raised:
+            run_ticket("not-a-ticket")
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(list_runs(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
