@@ -103,7 +103,7 @@ node scripts/specs.mjs --headed "e2e test cases/asset crud"
 node scripts/specs.mjs --headed "e2e test cases/document editing"
 ```
 
-The image installs Node, Playwright Chromium, the Python server, and OpenCode. On startup the OpenRouter key from `.env` is written into the container auth store. `.env` is mounted read-only and is not copied into the image.
+The image installs Node, Playwright Chromium, the Python server, and OpenCode. On startup the OpenRouter key from the container environment is written into the auth store. `.env` is not mounted into the working directory and is not copied into the image.
 
 ## Local process
 

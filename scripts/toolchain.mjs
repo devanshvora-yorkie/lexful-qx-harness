@@ -149,6 +149,15 @@ function loadJsonc(file) {
   return JSON.parse(stripJsonc(readFileSync(file, 'utf8')));
 }
 
+function configuredValue(name) {
+  const file = path.join(ROOT, '.env');
+  if (existsSync(file)) {
+    const match = readFileSync(file, 'utf8').match(new RegExp(`^${name}=(.*)$`, 'm'));
+    if (match) return match[1].trim().replace(/^['"]|['"]$/g, '');
+  }
+  return (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '');
+}
+
 function ensureOpenCodeSetup() {
   const config = loadJsonc(path.join(ROOT, 'opencode.jsonc'));
   const agents = config.agents || {};
@@ -162,13 +171,8 @@ function ensureOpenCodeSetup() {
   for (const [name, model] of Object.entries(expected)) {
     if (agents[name]?.model !== model) problems.push(`${name} is ${agents[name]?.model || 'missing'}`);
   }
-  const fileEnv = readFileSync(path.join(ROOT, '.env'), 'utf8');
-  const fromFile = (name) => {
-    const match = fileEnv.match(new RegExp(`^${name}=(.*)$`, 'm'));
-    return match ? match[1].trim().replace(/^['"]|['"]$/g, '') : '';
-  };
-  const mainFile = fromFile('OPENCODE_MAIN_MODEL');
-  const subFile = fromFile('OPENCODE_SUB_MODEL');
+  const mainFile = configuredValue('OPENCODE_MAIN_MODEL');
+  const subFile = configuredValue('OPENCODE_SUB_MODEL');
   if (mainFile !== MAIN_MODEL) problems.push(`OPENCODE_MAIN_MODEL is ${mainFile || 'missing'}`);
   if (subFile !== SUB_MODEL) problems.push(`OPENCODE_SUB_MODEL is ${subFile || 'missing'}`);
   const quiet = (args) => {
@@ -176,7 +180,7 @@ function ensureOpenCodeSetup() {
     if (result.status !== 0) throw new Error((result.stderr || result.stdout || 'opencode failed').trim().slice(0, 300));
     return result.stdout || '';
   };
-  const openrouterKey = fromFile('OPENROUTER_API_KEY') || (process.env.OPENROUTER_API_KEY || '').trim();
+  const openrouterKey = configuredValue('OPENROUTER_API_KEY');
   if (!openrouterKey) {
     const auth = quiet(['auth', 'list']);
     const openrouter = auth.split('\n').find((line) => /openrouter/i.test(line));
