@@ -5,7 +5,7 @@ import { ROOT, check, playwrightCliBin } from './harness-env.mjs';
 
 const VENV_PYTHON = path.join(ROOT, 'server', '.venv', 'bin', 'python');
 const REQUIREMENTS = path.join(ROOT, 'server', 'requirements.txt');
-const MAIN_MODEL = 'openrouter/anthropic/claude-sonnet-5.5';
+const MAIN_MODEL = 'openrouter/anthropic/claude-haiku-5.5';
 const SUB_MODEL = 'openrouter/anthropic/claude-haiku-5.5';
 
 function log(line) {

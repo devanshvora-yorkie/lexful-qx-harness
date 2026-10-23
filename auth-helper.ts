@@ -114,18 +114,33 @@ function loadSavedCookies(): AuthCookies[] | null {
   return null;
 }
 
+/** Stytch session end from the JWT. Cookie Max-Age is not the session lifetime. */
+function sessionExpiry(cookies: AuthCookies[]): number {
+  const jwt = cookies.find(c => c.name === 'stytch_session_jwt')?.value;
+  const part = jwt?.split('.')[1];
+  if (!part) return 0;
+  try {
+    const padded = part.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (part.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+    const raw = payload?.['https://stytch.com/session']?.expires_at;
+    const seconds = raw ? Math.floor(Date.parse(raw) / 1000) : NaN;
+    return Number.isFinite(seconds) ? seconds : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Get auth cookies — uses saved file first (fast, avoids rate limits),
- * falls back to API call if no saved state exists.
+ * Get auth cookies — uses a still-valid saved session first (avoids rate limits),
+ * otherwise signs in again.
  */
 export async function getLexfulCookies(): Promise<AuthCookies[]> {
   const saved = loadSavedCookies();
   if (saved) {
-    // shortcut: sessions last ~12h, <1h of slack; upgrade to proactive refresh if a run ever spans expiry
+    // Sessions last ~12h. One minute of slack; a run that crosses the end refreshes.
     const now = Math.floor(Date.now() / 1000);
-    const alive = saved.every(c => !c.expires || c.expires > now + 60);
-    if (alive) return saved;
-    console.warn('auth-state.json expired — refreshing via API');
+    if (sessionExpiry(saved) > now + 60) return saved;
+    console.warn('auth-state.json session expired — refreshing via API');
   }
   return fetchFreshCookies();
 }

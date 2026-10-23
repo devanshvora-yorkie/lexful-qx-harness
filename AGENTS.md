@@ -9,7 +9,7 @@ npm run ticket -- LEX-3371
 
 `npm run ticket` starts the run and prints `run.log` until it finishes. If that ticket is already in progress, it follows that run. Add `--new` to start another one.
 
-The coordinator is Sonnet 5.5 (`qa`). Exploration, spec writing, and healing are Haiku 5.5 subagents (`qa-explorer`, `qa-author`, `qa-healer`). The server runs Playwright and writes `qa-result.json` and `report.md` in the same run folder. Cached Stytch cookies live in `runs/cache/stytch/`.
+Every step uses Haiku 5.5. `qa` coordinates. `qa-explorer`, `qa-author`, and `qa-healer` explore, write specs, and heal. The server runs Playwright and writes `qa-result.json` and `report.md` in the same run folder. Cached Stytch cookies live in `runs/cache/stytch/`.
 
 Stay inside this directory. Do not read `~/Downloads`, `~/Desktop`, `~/Documents`, or any other checkout. Do not clone `docu-stack`.
 

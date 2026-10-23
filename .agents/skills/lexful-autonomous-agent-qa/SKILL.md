@@ -13,7 +13,7 @@ Two-phase QA workflow: (1) explore UI and create a structured test plan, (2) gen
 ## Prerequisites
 
 - The server has already written `runs/<run-id>/preflight.json` with `"ok": true` and a `context-pack.json` beside it
-- Application URL or dev server running
+- `appUrl` in the context pack is the live target
 - Workspace exists with target repository
 - `references/custom-instructions.md` in this skill's directory (read it at Step 0; it is not auto-loaded)
 - No Using Browser-use tool, or preview-pane. or chrome remote-debugging. use playwright-cli only.
@@ -22,17 +22,17 @@ Two-phase QA workflow: (1) explore UI and create a structured test plan, (2) gen
 
 The server is the orchestrator. It runs preflight, starts the `qa` agent, then runs Playwright. `qa` reads this skill and delegates. `qa-explorer` does Phase 1. `qa-author` does Phase 2. `qa-healer` does the debug loop. The files in `.agents/prompts/` are the role limits. They are not a second procedure.
 
-Phase 1 always runs against `appUrl` in the context pack. Do not start a local dev server when that URL is present. If `autonomous-agent-v2` already produced a FEATURE.md for this exact commit, Phase 1 may reuse it instead of repeating the exploration.
+Phase 1 always runs against `appUrl` in the context pack. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
 
 ## Quick Reference
 
 | Step | Action |
 |------|--------|
 | Step 0 | Read `runs/<run-id>/preflight.json` (`ok: true`) and `context-pack.json`. Do not call Linear, GitHub, or `/auth/password` yourself |
-| Step 0b | Resolve a live URL — use the supplied one if it serves, otherwise start the dev server and wait for 200 |
-| Phase 1 | Explore the running app → read playwright config → write FEATURE.md → user approval gate |
-| Phase 2 | Generate common POM → generate module POMs → generate specs → run → debug → verdict |
-| Debug cap | 3 attempts per test, then document gap and stop |
+| Step 0b | Use `appUrl` from the context pack. Do not start a dev server. A 403 does not change the target |
+| Phase 1 | Explore the running app → write `FEATURE.md` in the run directory. Do not write specs |
+| Phase 2 | Generate common POM → generate module POMs → generate specs → write `planned-specs.json` |
+| Debug cap | 3 heals of the whole suite. Each heal patches once and stops. The server re-runs |
 | Handoff | The server writes `runs/<run-id>/qa-result.json` from the Playwright reporter |
 
 **Phase 1 is not optional.** Skipping it and inferring the flow from source code is the single most common failure mode this skill exists to prevent.
@@ -53,53 +53,25 @@ Phase 1 always runs against `appUrl` in the context pack. Do not start a local d
 
 ### 0b. Establish a live target (MANDATORY — do this before any exploration)
 
-You cannot explore what is not running. Resolve a URL that actually serves the app:
+The live target is `appUrl` in the context pack. Do not start a local dev server. Do not run `pnpm dev`, `npm run dev`, or `make dev`.
 
-1. **If the ticket, task, or user supplied a URL**, use it — but verify it first:
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$URL"
-   ```
-   Non-2xx/3xx, or a timeout, means it is not usable. Do not explore it. Fall through to (2).
+Use that URL even when a probe returns 403. CloudFront 403 on UAT is a known response and is not a reason to change targets.
 
-2. **If no usable URL was supplied, start the app yourself.** This is not optional and not a question for the user.
-   - Read `package.json` scripts and `AGENTS.md` for the dev command. Usually `pnpm dev`, `npm run dev`, or `make dev`.
-   - If the dev command needs a database, start it too (e.g. `pnpm db:up`) before the app.
-   - **Start it in the background** so it survives across tool calls:
-     ```bash
-     nohup <dev command> > /tmp/qa-devserver.log 2>&1 &
-     echo $! > /tmp/qa-devserver.pid
-     ```
-   - **Wait for it to actually serve.** Poll until 200, with a timeout:
-     ```bash
-     for i in $(seq 1 60); do
-       code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$URL")
-       [ "$code" = "200" ] && { echo "up"; break; }
-       sleep 2
-     done
-     ```
-   - Read the port from `playwright.config.ts` `baseURL`, the dev server log, or an already-bound listener. Do not guess.
-   - If it never comes up, **read `/tmp/qa-devserver.log`, fix the startup error, and retry.** Exhausting the fix attempts is a real blocker; guessing the UI without a running app is not.
-
-3. **Record the resolved URL** at the top of the FEATURE.md. Every snapshot and API observation in Phase 1 must come from this one target.
+Record that URL at the top of `FEATURE.md` in the run directory. Every snapshot and API observation in Phase 1 must come from it.
 
 **Never derive the flow from source code alone.** Reading route files, components, or specs tells you what the code *claims*; it does not tell you what renders, what is gated, what the API actually returns, or what a user actually sees. Code reading is an input to exploration, never a substitute for it.
 
 ### 0c. Phase 1 gate — exploration cannot be skipped
 
-Phase 1 is **mandatory in every run**. It may only be skipped when a `FEATURE.md` already exists for this module **and** it carries live-observation evidence: a recorded URL, dated snapshots, and captured API endpoints. A FEATURE.md written without those is a plan, not evidence — re-explore it.
+Phase 1 runs on every ticket. Do not reuse a `FEATURE.md` from a previous run or from another agent.
 
-- Being called from `autonomous-agent-v2` does **not** skip Phase 1. If the master orchestrator already ran it for this exact commit, reuse that FEATURE.md; otherwise run Phase 1 yourself.
-- An existing FEATURE.md from a previous run does not skip Phase 1. The UI may have changed. Re-explore and update it.
-- **You may not write FEATURE.md until you have actually navigated the app in this run.** If you have not loaded a page and taken a snapshot, exploration has not happened.
-- Never present a flow diagram derived from reading components. Every route, control, and endpoint in FEATURE.md must trace back to something you observed.
+You may not write `FEATURE.md` until you have navigated the app in this run and saved a snapshot. Every route, control, and endpoint in it must trace back to something you observed.
 
 ### 1. Phase 1: UI Exploration & Test Planning
 
-**1a. Explore the Application** — With the live target from 0b, navigate it using the Playwright CLI (`playwright-cli --help`). 
-Note down each interaction, elementref, navigation paths, interactive elements, form fields, and data dependencies. and write a basic flow test side by side.
-1 line at a time.
-for example, if you navigated to a site, use playwright cli to navigate to url, see if that worked, if yes, add to flow-test.spec.ts file, move to next interaction.
-also keep track of console errors, info msgs, network api calls being made. when you interact and it makes an api call, add page.waitforresponse in the test file before the interaction.(track api calls with `playwright-cli requests` — the `--static` flag is BOOLEAN, so `--static=false` crashes the CLI; the default already excludes static assets.
+**1a. Explore the Application** — With the live target from 0b, navigate it using the Playwright CLI (`playwright-cli --help`). Do not write spec files. Record each interaction, navigation path, interactive element, form field, and data dependency for `FEATURE.md`.
+
+Track console errors, info messages, and network API calls. When an interaction triggers an API call, record the method, URL pattern, and the action in the API Endpoints section of `FEATURE.md`. Phase 2 uses that list for `page.waitForResponse`. Track API calls with `playwright-cli requests`. The `--static` flag is boolean, so `--static=false` crashes the CLI; the default already excludes static assets.
 
 **playwright-cli mechanics that cost time (verified):**
 - Element refs (`e15`) go stale after ANY re-render — never carry a ref across two actions; re-snapshot or use locators (`getByRole(...)`).
@@ -125,7 +97,7 @@ for example, if its a listing page, check
 5. combination + complex edge cases(like on search, if i am on page 5, page should revert to page 1.)
 6. cover negative flow path, toast message capture, console, network capture and assert in testcases.
 
-Analyze the api call request and response and expand testing scenario based on that. capture all the possible scenario, elementref, and write it down in a file, then reference that to test using playwright cli. doesn't matter if it fails or succeeds, we need to capture the flow in a spec.ts file(or in plan so that phase 2 can work on it.)
+Analyze the API request and response and expand the scenarios from that. Write every scenario, selector, and API call into `FEATURE.md`. Do not write a spec file in Phase 1.
 
 **MANDATORY: Example: Every listing page must be tested at 100% action coverage.** Phase 1 must identify and plan tests for EVERY action on every listing/table page. Do not skip any action. The following checklist is exhaustive — verify each one during exploration and mark `[x]` or `[ ]` in the FEATURE.md:
 
@@ -146,15 +118,13 @@ Analyze the api call request and response and expand testing scenario based on t
 - **CRUD round-trip** — Create data → verify in list → update → verify change → delete → verify removal
 - **Permissions** — Verify roles without access cannot see/hide actions (e.g., "Add New" button hidden for advisors without permission)
 
-**1e. Write the FEATURE.md** — Save a `FEATURE.md` file **in the same directory as the test files** (not in a separate `plans/` folder). The FEATURE.md documents:
+**1e. Write the FEATURE.md** — Save `FEATURE.md` in the run directory (`runs/<ticket>/<run-id>/FEATURE.md`). Do not put it under `specs/` or `tests/`. The coordinator reads that file. It documents:
 - URL, role-based access, data models
-- **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it
+- **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Phase 2 can wait on it
 - **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
 - Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
-- Test file paths
+- Detailed selectors from a fresh snapshot
 - Execution commands
-- can reference the partial spec file that we wrote (flow/navigation one).
-- Mention detailed selectors, api calls before/after for better phase 2.
 
 This is the single source of truth for what each module tests and its current status.
 
@@ -194,7 +164,7 @@ This common POM is imported by all module POMs to avoid duplication.
 - **Every data-loading action must use `page.waitForResponse`** — reference the API Endpoints section from Phase 1. Never use `waitForTimeout` for data loading.
 - **Test every checkbox from Phase 1** — if Phase 1 marked `[ ]` for an action, Phase 2 MUST write a test for it.
 
-**2e. Hand off** — Write `planned-specs.json` in the run directory. The server runs `npx playwright test` on `test_files`. Do not run the suite yourself.
+**2e. Hand off** — Write `planned-specs.json` in the run directory. `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run the suite yourself.
 
 ### 3. Debug Loop
 
@@ -203,15 +173,15 @@ The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 1. Read `playwright/results.json` and `playwright/output.log`.
 2. Replay the failing step with `playwright-cli`.
 3. Patch the spec or POM.
-4. Stop. The server re-runs the suite. It allows 3 heal attempts, then records the gap.
+4. Stop after this one patch. Do not run the suite. The server re-runs it. The cap is 3 heals of the whole suite, not 3 attempts per test.
 
 ### 4. Verdict & Handoff
 
-The server writes `runs/<ticket>/<run-id>/qa-result.json` and `report.md`. Specs and the POM live in that folder's `specs/` directory. The server copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count. Do not write a run's specs under `tests/`.
+The server writes `runs/<ticket>/<run-id>/qa-result.json` and `report.md`. `FEATURE.md` stays in the run directory. Specs and the POM live in that folder's `specs/` directory. The server copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count. Do not write a run's specs under `tests/`.
 
 ## Verification
 
-The server treats a run as `PERFECT` only when Playwright exits 0 and the JSON reporter has zero unexpected tests.
+The server treats a run as `PERFECT` only when Playwright exits 0, at least one test passed, and the JSON reporter has zero unexpected tests and zero skipped tests. A skipped test does not count as a pass.
 
 ## Customization
 

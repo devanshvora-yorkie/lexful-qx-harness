@@ -48,7 +48,7 @@ The script writes `runs/<run-id>/preflight.json` and `context-pack.json`. It ins
 | Chromium | `npx playwright install chromium` has a browser binary |
 | Playwright CLI | `playwright-cli` runs |
 | FastAPI | `server/.venv` imports fastapi, uvicorn, and pydantic |
-| OpenCode | `opencode` is on PATH, OpenRouter is logged in, and the agents are Sonnet 5.5 and Haiku 5.5 |
+| OpenCode | `opencode` is on PATH, OpenRouter is logged in, and every agent is Haiku 5.5 |
 | Env file | `LINEAR_API_KEY`, `GITHUB_TOKEN`, `STYTCH_ORGANIZATION_ID`, `STYTCH_ADMIN_EMAIL`, and `STYTCH_ADMIN_PASSWORD` are set |
 | Linear | Viewer query succeeds. With a ticket, that issue is fetched |
 | GitHub | The token is accepted. Files are loaded only from the pull request diff |

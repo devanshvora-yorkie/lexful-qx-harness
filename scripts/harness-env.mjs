@@ -145,10 +145,27 @@ function writeSecretJson(file, value) {
   try { chmodSync(file, 0o600); } catch { /* volume may ignore mode */ }
 }
 
-function cookieExpiry(cookies) {
-  const expiries = cookies.map((cookie) => cookie.expires).filter((value) => Number.isFinite(value));
-  if (!expiries.length) return Math.floor(Date.now() / 1000) + 11 * 3600;
-  return Math.min(...expiries);
+function jwtPayload(token) {
+  const part = String(token || '').split('.')[1];
+  if (!part) return null;
+  try {
+    const padded = part.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (part.length % 4)) % 4);
+    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stytch's real session end. Cookie Max-Age is only how long the browser keeps
+ * the cookie (months here) and is not the session lifetime (~12h).
+ * Returns 0 when the claim is missing so a stale file cannot be reused.
+ */
+function sessionExpiry(cookies) {
+  const jwt = (cookies || []).find((cookie) => cookie.name === 'stytch_session_jwt')?.value;
+  const raw = jwtPayload(jwt)?.['https://stytch.com/session']?.expires_at;
+  const seconds = raw ? Math.floor(Date.parse(raw) / 1000) : NaN;
+  return Number.isFinite(seconds) ? seconds : 0;
 }
 
 async function probeApp(cookies) {
@@ -210,10 +227,11 @@ export async function ensureStytchSession(destDir) {
   if (existsSync(file)) {
     try {
       const cached = JSON.parse(readFileSync(file, 'utf8'));
-      if (cached.expiresAt > now + 300 && Array.isArray(cached.cookies) && cached.cookies.length) {
+      const expiresAt = sessionExpiry(cached.cookies);
+      if (expiresAt > now + 300 && Array.isArray(cached.cookies) && cached.cookies.length) {
         const probe = await probeApp(cached.cookies);
         if (sessionUsable(probe)) {
-          const record = { ...cached, probe, reusedAt: new Date().toISOString() };
+          const record = { ...cached, expiresAt, probe, reusedAt: new Date().toISOString() };
           publishSession(record, destDir);
           return {
             reused: true,
@@ -231,7 +249,7 @@ export async function ensureStytchSession(destDir) {
   const record = {
     persona: CFG.email,
     capturedAt: new Date().toISOString(),
-    expiresAt: cookieExpiry(fresh.cookies),
+    expiresAt: sessionExpiry(fresh.cookies),
     status: fresh.status,
     cookies: fresh.cookies,
     probe: { landed: fresh.landed, onLogin: fresh.onLogin, pageStatus: fresh.pageStatus },

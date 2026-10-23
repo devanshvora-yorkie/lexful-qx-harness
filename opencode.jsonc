@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/anthropic/claude-sonnet-5.5",
+  "model": "openrouter/anthropic/claude-haiku-5.5",
   "small_model": "openrouter/anthropic/claude-haiku-5.5",
   "default_agent": "qa",
   "instructions": [
@@ -85,7 +85,7 @@
     },
     "qa": {
       "mode": "primary",
-      "model": "openrouter/anthropic/claude-sonnet-5.5",
+      "model": "openrouter/anthropic/claude-haiku-5.5",
       "description": "Coordinates one LEX ticket and delegates exploration, authoring, and healing",
       "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You coordinate. Delegate Phase 1 to qa-explorer, Phase 2 to qa-author, and fixes to qa-healer. Stay inside this repository. Do not read .env. Do not clone a product repo.",
       "steps": 24,

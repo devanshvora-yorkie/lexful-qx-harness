@@ -161,8 +161,9 @@ class VerdictTest(unittest.TestCase):
     def test_matrix(self):
         self.assertEqual(verdict_for({"passed": 0, "failed": 0}, preflight_ok=False, produced_specs=False), "HALTED")
         self.assertEqual(verdict_for({"passed": 0, "failed": 0}, preflight_ok=True, produced_specs=False), "HALTED")
-        self.assertEqual(verdict_for({"passed": 4, "failed": 0}, preflight_ok=True, produced_specs=True), "PERFECT")
+        self.assertEqual(verdict_for({"passed": 4, "failed": 0, "skipped": 0}, preflight_ok=True, produced_specs=True), "PERFECT")
         self.assertEqual(verdict_for({"passed": 3, "failed": 1}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
+        self.assertEqual(verdict_for({"passed": 4, "failed": 0, "skipped": 2}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
 
 
 class StoreTest(unittest.TestCase):

@@ -1,4 +1,4 @@
-"""Ticket run: preflight, Sonnet coordinator, Playwright, then at most three Haiku heals."""
+"""Ticket run: preflight, Haiku coordinator, Playwright, then at most three Haiku heals."""
 
 from __future__ import annotations
 
@@ -20,9 +20,28 @@ def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: 
         return "HALTED"
     if not produced_specs:
         return "HALTED"
-    if summary.get("failed", 0) == 0 and summary.get("passed", 0) > 0:
+    if (
+        summary.get("failed", 0) == 0
+        and summary.get("skipped", 0) == 0
+        and summary.get("passed", 0) > 0
+    ):
         return "PERFECT"
     return "NEEDS_REVISION"
+
+
+def _suite_passed(exit_code: int, summary: dict[str, int]) -> bool:
+    return exit_code == 0 and verdict_for(summary, preflight_ok=True, produced_specs=True) == "PERFECT"
+
+
+def _open_issue(summary: dict[str, int]) -> str:
+    parts: list[str] = []
+    if summary.get("failed", 0):
+        parts.append(f"{summary['failed']} test(s) still failing")
+    if summary.get("skipped", 0):
+        parts.append(f"{summary['skipped']} test(s) skipped")
+    if not parts:
+        parts.append("no passing tests")
+    return "; ".join(parts)
 
 
 def execute_run(run_id: str) -> None:
@@ -108,7 +127,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     summary = _execute_and_heal(run_id, folder, ticket, specs, settings.heal_attempts, session_id, book)
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
     status = "completed" if verdict == "PERFECT" else "needs_revision"
-    issues = [] if verdict == "PERFECT" else [f"{summary['failed']} test(s) still failing"]
+    issues = [] if verdict == "PERFECT" else [_open_issue(summary)]
     book.row(
         "server",
         "verdict",
@@ -140,7 +159,7 @@ def _execute_and_heal(
     result = runners.run_playwright(folder, specs)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
-    if result["exitCode"] == 0 and summary["failed"] == 0 and summary["passed"] > 0:
+    if _suite_passed(result["exitCode"], summary):
         return summary
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
@@ -168,7 +187,7 @@ def _execute_and_heal(
         result = runners.run_playwright(folder, specs)
         summary = result["summary"]
         book.row("playwright", "result", _counts(summary))
-        if result["exitCode"] == 0 and summary["failed"] == 0 and summary["passed"] > 0:
+        if _suite_passed(result["exitCode"], summary):
             return summary
     return summary
 
@@ -208,12 +227,12 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         f"Preflight is already ok: {relative}/preflight.json",
         f"Context pack: {relative}/context-pack.json",
         f"Auth cookies: {relative}/auth-state.json",
-        f"The live URL is the appUrl in the context pack. Put snapshots in {relative}/explore/.",
-        "Delegate Phase 1 to qa-explorer. It writes FEATURE.md in the run directory, with the URL, API calls, and action matrix.",
-        f"Then delegate Phase 2 to qa-author. It writes the POM and specs only in {relative}/specs/.",
-        "Do not write spec files, POMs, or FEATURE.md under tests/.",
+        f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
+        f"Delegate Phase 1 to qa-explorer. It writes {relative}/FEATURE.md, with the URL, API calls, and action matrix. It does not write specs.",
+        f"Read that file. Then delegate Phase 2 to qa-author. It writes the POM and specs only in {relative}/specs/.",
+        f"Leave FEATURE.md at {relative}/FEATURE.md. Do not copy it into specs/ or tests/.",
         f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
-        f"planned-specs.json goes in {relative}/ and lists test_files, pom_files, and plan_file as paths like {relative}/specs/<name>.spec.ts.",
+        f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
         "Do not run preflight, do not call /auth/password, and do not run the Playwright suite.",
     ])
 
@@ -227,7 +246,8 @@ def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: lis
         f"Playwright log: {relative}/playwright/output.log",
         f"Specs: {listed}",
         "Follow the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
-        "Delegate only to qa-healer. Do not re-explore and do not add scenarios.",
+        "Delegate only to qa-healer for one patch. This is one heal of the whole suite, not three attempts per test.",
+        "Do not re-explore and do not add scenarios.",
         "Do not run the suite. The server will run it after you return.",
     ])
 
@@ -289,7 +309,7 @@ def _write_report(
         f"- Run: `{row.get('id')}`",
         f"- Status: {row.get('status')}",
         f"- Verdict: {verdict}",
-        f"- Models: {get_settings().main_model} coordinates, {get_settings().sub_model} does the subagent work",
+        f"- Model: {get_settings().main_model} for every step",
         f"- Passed: {counts['passed']}",
         f"- Failed: {counts['failed']}",
         f"- Skipped: {counts['skipped']}",
