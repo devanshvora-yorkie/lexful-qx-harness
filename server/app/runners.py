@@ -296,10 +296,20 @@ def _preflight_row(line: str) -> str | None:
     return None
 
 
-def run_preflight(run_dir: Path, *, ticket: str | None, pr: int | None, sha: str | None) -> int:
+def run_preflight(
+    run_dir: Path,
+    *,
+    ticket: str | None,
+    pr: int | None,
+    sha: str | None,
+    session_only: bool = False,
+) -> int:
     settings = get_settings()
     command = ["node", "scripts/preflight.mjs", "--out", str(run_dir)]
-    if ticket:
+    if session_only:
+        # Sign in only. The checked-in suite does not read or write Linear.
+        command.append("--session-only")
+    elif ticket:
         command.append(ticket)
     elif pr:
         command.extend(["--pr", str(pr)])
@@ -328,39 +338,139 @@ def run_preflight(run_dir: Path, *, ticket: str | None, pr: int | None, sha: str
     return process.wait()
 
 
+def checked_in_specs() -> list[str]:
+    """Specs under `e2e test cases`. The space stays inside one path; callers pass it as one argument."""
+    settings = get_settings()
+    root = settings.root / "e2e test cases"
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    for spec in sorted(root.rglob("*.spec.ts")):
+        if spec.name.startswith("auth.spec."):
+            continue
+        found.append(spec.relative_to(settings.root).as_posix())
+    return found
+
+
+def common_test_dir(specs: list[str]) -> Path:
+    """Directory that contains every spec. Playwright only collects files inside testDir."""
+    settings = get_settings()
+    dirs = [Path(spec).parent.as_posix() for spec in specs]
+    if not dirs:
+        return (settings.root / "tests").resolve()
+    prefix = dirs[0].split("/")
+    for directory in dirs[1:]:
+        parts = directory.split("/")
+        while prefix and prefix != parts[: len(prefix)]:
+            prefix.pop()
+    relative = "/".join(prefix) if prefix else "."
+    return (settings.root / relative).resolve()
+
+
+def _dot_progress(text: str) -> bool:
+    return bool(text) and set(text) <= set("·.×xXF±T° ")
+
+
+def _next_break(pending: bytes) -> int | None:
+    indexes = [index for index in (pending.find(b"\n"), pending.find(b"\r")) if index >= 0]
+    return min(indexes) if indexes else None
+
+
+def _stream_playwright(process: subprocess.Popen[bytes], master: int, handle: Any, book: Logbook, deadline: float) -> bool:
+    """Copy Playwright's terminal into the run log. A quiet stretch is logged as still working."""
+    pending = b""
+    last_beat = time.monotonic()
+    last_text = "browser starting"
+    timed_out = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            break
+        ready, _, _ = select.select([master], [], [], min(15.0, remaining))
+        if not ready:
+            if process.poll() is not None:
+                break
+            if time.monotonic() - last_beat >= 20:
+                book.row("playwright", "working", f"still in the browser  {last_text}"[:220])
+                last_beat = time.monotonic()
+            continue
+        try:
+            chunk = os.read(master, 8192)
+        except OSError:
+            break
+        if not chunk:
+            break
+        handle.write(chunk.decode("utf-8", errors="replace"))
+        handle.flush()
+        pending += chunk
+        while True:
+            cut = _next_break(pending)
+            if cut is None:
+                break
+            raw, pending = pending[:cut], pending[cut + 1:]
+            text = plain(raw.decode("utf-8", errors="replace"))
+            if not text or _dot_progress(text):
+                continue
+            last_text = text
+            last_beat = time.monotonic()
+            book.row("playwright", "test", text[:220])
+    if pending.strip():
+        text = plain(pending.decode("utf-8", errors="replace"))
+        if text and not _dot_progress(text):
+            book.row("playwright", "test", text[:220])
+    return timed_out
+
+
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     settings = get_settings()
+    book = Logbook(run_dir)
     log_path = run_dir / "playwright" / "output.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = ["npx", "playwright", "test", "--workers=1", "--project=e2e", *specs]
     env = _playwright_env(run_dir)
-    parents = {str(Path(spec).parent) for spec in specs}
-    if len(parents) == 1:
-        env["QA_TEST_DIR"] = str((settings.root / next(iter(parents))).resolve())
+    env["QA_TEST_DIR"] = str(common_test_dir(specs))
+    book.row(
+        "playwright",
+        "running",
+        f"{len(specs)} files, one at a time. Each finished test is logged. A quiet gap is a test still in the browser.",
+    )
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 80, 200, 0, 0))
+    process = subprocess.Popen(
+        command,
+        cwd=settings.root,
+        env=env,
+        stdout=slave,
+        stderr=slave,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    os.close(slave)
+    deadline = time.monotonic() + settings.playwright_timeout_seconds
     with log_path.open("w", encoding="utf-8") as handle:
-        process = subprocess.Popen(
-            command,
-            cwd=settings.root,
-            env=env,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-            start_new_session=True,
-        )
-        try:
-            code = process.wait(timeout=settings.playwright_timeout_seconds)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=10)
+        timed_out = _stream_playwright(process, master, handle, book, deadline)
+        if timed_out:
             handle.write("\nplaywright timed out\n")
-            code = 124
+    os.close(master)
+    try:
+        code = 124 if timed_out else process.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=10)
+        code = 124
     summary = read_playwright_summary(run_dir)
-    if code != 0 and summary["failed"] == 0 and summary["passed"] == 0:
+    setup_error = ""
+    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+    if "No tests found" in log_text:
+        setup_error = "No tests found. The spec paths were outside the Playwright testDir."
+    elif code != 0 and summary["failed"] == 0 and summary["passed"] == 0:
         summary["failed"] = 1
-    return {"exitCode": code, "summary": summary}
+    return {"exitCode": code, "summary": summary, "setupError": setup_error}
 
 
 def read_playwright_summary(run_dir: Path) -> dict[str, int]:

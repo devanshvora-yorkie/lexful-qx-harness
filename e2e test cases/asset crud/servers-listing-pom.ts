@@ -63,7 +63,7 @@ export class ServersListingPOM extends CommonPOM {
 
   /** Select-all checkbox in header — AG Grid uses input[type=checkbox], NOT role=checkbox */
   selectAllCheckbox(): Locator {
-    return this.page.locator('input.ag-checkbox-input[aria-label="Select loaded rows"]');
+    return this.page.getByRole('checkbox', { name: 'Select all matching filters', exact: true });
   }
 
   /** Get all row checkboxes — AG Grid inputs have aria-label with "Press Space to toggle" */
@@ -99,9 +99,22 @@ export class ServersListingPOM extends CommonPOM {
     return this.page.getByRole('button', { name: 'Clear selection' });
   }
 
-  /** Selection count text, e.g. "0 selected" */
+  /**
+   * Bulk-bar selection label. The word "selected" is its own muted span, so
+   * `text=selected` also matches the select-all bar and other copies of it.
+   * Pick the exact label and take the first match.
+   */
   selectionCount(): Locator {
-    return this.page.locator('text=selected');
+    return this.page.getByText('selected', { exact: true }).first();
+  }
+
+  /**
+   * The whole count element. The number and the word are separate spans, so the
+   * text is "0selected" (no space node; the gap is CSS). Use a regex that allows
+   * optional whitespace, e.g. /^0\s*selected$/.
+   */
+  selectionCountText(): Locator {
+    return this.selectionCount().locator('xpath=..');
   }
 
   // ── Column headers (NO aria-label — match by exact text content) ──

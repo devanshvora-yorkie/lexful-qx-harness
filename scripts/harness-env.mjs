@@ -412,14 +412,16 @@ export function parseArgs(argv) {
   let out = null;
   let sha = null;
   let toolsOnly = false;
+  let sessionOnly = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--pr') pr = Number(args[++i]);
     else if (/^--pr=\d+$/.test(args[i])) pr = Number(args[i].slice(5));
     else if (args[i] === '--out') out = args[++i];
     else if (args[i] === '--sha') sha = args[++i];
     else if (args[i] === '--tools') toolsOnly = true;
+    else if (args[i] === '--session-only') sessionOnly = true;
     else if (/^LEX-\d+$/i.test(args[i])) ticket = args[i].toUpperCase();
     else if (/^\d+$/.test(args[i])) pr = Number(args[i]);
   }
-  return { pr, ticket, out, sha, toolsOnly };
+  return { pr, ticket, out, sha, toolsOnly, sessionOnly };
 }

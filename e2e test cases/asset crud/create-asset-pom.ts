@@ -95,6 +95,6 @@ export class CreateAssetPOM extends CommonPOM {
 
   /** Organization combobox in the create form */
   organizationCombobox(): Locator {
-    return this.page.getByRole('combobox').filter({ hasText: 'Select organization' });
+    return this.page.getByRole('combobox').filter({ hasText: 'Choose an organization' });
   }
 }

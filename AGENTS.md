@@ -11,6 +11,8 @@ npm run ticket -- LEX-3371
 
 Every step uses Haiku 5.5. `qa` coordinates. `qa-explorer`, `qa-author`, and `qa-healer` explore, write specs, and heal. The server runs Playwright and writes `qa-result.json` and `report.md` in the same run folder. Cached Stytch cookies live in `runs/cache/stytch/`.
 
+`npm run phase1` runs the checked-in specs in `e2e test cases` against UAT before any ticket work. That run does not call Linear. `qa-healer` patches a changed locator and writes a product bug into the run folder.
+
 Stay inside this directory. Do not read `~/Downloads`, `~/Desktop`, `~/Documents`, or any other checkout. Do not clone `docu-stack`.
 
 - Linear access is the named ticket plus the parent, children, and related issues on that ticket.

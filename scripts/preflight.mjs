@@ -55,7 +55,7 @@ function versionCheck() {
 async function main() {
   const args = parseArgs(process.argv);
   let owned = null;
-  if (!args.out && !args.toolsOnly) {
+  if (!args.out && !args.toolsOnly && !args.sessionOnly) {
     const label = args.ticket || (args.pr ? `pr-${args.pr}` : args.sha ? `sha-${args.sha.slice(0, 7)}` : 'tools');
     owned = createCliRun(label);
     args.out = owned.dir;
@@ -76,6 +76,37 @@ async function main() {
   };
 
   checks.push(...ensureToolchain());
+  if (args.sessionOnly) {
+    if (!args.out) {
+      console.error('--session-only needs --out');
+      process.exit(1);
+    }
+    const missing = [];
+    if (!CFG.org) missing.push('STYTCH_ORGANIZATION_ID');
+    if (!CFG.email) missing.push('STYTCH_ADMIN_EMAIL');
+    if (!CFG.password) missing.push('STYTCH_ADMIN_PASSWORD');
+    if (missing.length) checks.push(check('Env file', 'fail', `Missing ${missing.join(', ')}`));
+    else {
+      checks.push(check('Env file', 'pass', 'Stytch credentials are set. Linear and GitHub are not called'));
+      await run('Stytch', () => stytchCheck(args.out));
+    }
+    await run('Playwright', versionCheck);
+    const report = {
+      ok: !checks.some((row) => row.status === 'fail'),
+      checkedAt: new Date().toISOString(),
+      appUrl: CFG.qaUrl,
+      phase: 'checked-in-suite',
+      linear: false,
+      runDir: path.relative(ROOT, path.resolve(args.out)),
+      checks,
+    };
+    const outFile = path.join(path.resolve(args.out), 'preflight.json');
+    writeJson(outFile, report);
+    for (const row of checks) console.log(`${row.status.toUpperCase()}  ${row.name}: ${row.detail}`);
+    console.log(report.ok ? `ok → ${outFile}` : `failed → ${outFile}`);
+    if (!report.ok) process.exit(1);
+    return;
+  }
   if (args.toolsOnly) {
     for (const row of checks) console.log(`${row.status.toUpperCase()}  ${row.name}: ${row.detail}`);
     if (checks.some((row) => row.status === 'fail')) process.exit(1);

@@ -370,7 +370,7 @@ test.describe('Filters and Search', () => {
     await page.waitForTimeout(500);
     await expect(pom.bulkAccessButton()).toBeVisible({ timeout: 5000 });
     await pom.clearSelectionButton().click({ timeout: 10000, force: true });
-    await expect(page.getByText(/0 selected/)).toBeVisible({ timeout: 5000 });
+    await expect(pom.selectionCountText()).toHaveText(/^0\s*selected$/, { timeout: 5000 });
   });
 });
 
@@ -397,7 +397,7 @@ test.describe('Bulk Actions — Row Selection', () => {
     await page.waitForTimeout(500);
     await expect(pom.bulkAccessButton()).toBeVisible({ timeout: 5000 });
     await pom.clearSelectionButton().click({ timeout: 10000, force: true });
-    await expect(page.getByText(/0 selected/)).toBeVisible({ timeout: 5000 });
+    await expect(pom.selectionCountText()).toHaveText(/^0\s*selected$/, { timeout: 5000 });
   });
 
   test('multiple rows can be selected', async ({ page }) => {

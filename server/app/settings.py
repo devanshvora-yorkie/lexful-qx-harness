@@ -54,6 +54,7 @@ class Settings:
     playwright_timeout_seconds: int
     heal_attempts: int
     qa_url: str
+    phase1_on_start: bool
 
 
 def get_settings() -> Settings:
@@ -74,4 +75,5 @@ def get_settings() -> Settings:
         playwright_timeout_seconds=int(os.getenv("QA_PLAYWRIGHT_TIMEOUT_SECONDS", "2700")),
         heal_attempts=int(os.getenv("QA_HEAL_ATTEMPTS", "3")),
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
+        phase1_on_start=_flag("QA_PHASE1_ON_START", default=False),
     )

@@ -176,9 +176,9 @@
     "qa-healer": {
       "mode": "subagent",
       "model": "openrouter/anthropic/claude-haiku-5.5",
-      "description": "Patch the failing specs from the Playwright report. One attempt, no new scenarios.",
-      "system": "Read .agents/prompts/qa-healer.md and the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch the named specs only. Do not read .env.",
-      "steps": 20,
+      "description": "Heal spec drift in the checked-in suite. Report a product bug. Do not add tests or call Linear.",
+      "system": "Read .agents/prompts/qa-healer.md and the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch renamed locators, strict-mode locators, and an existing wait that expired while the control was already visible. Write triage.json. Do not add a test. Do not edit a spec to hide a product bug. Do not read .env.",
+      "steps": 30,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
@@ -200,7 +200,15 @@
         { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
         { "action": "shell", "resource": "*printenv*", "effect": "deny" },
         { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "edit", "resource": "server/**", "effect": "deny" },
+        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
+        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
+        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
+        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
+        { "action": "edit", "resource": "e2e test cases/**", "effect": "allow" },
+        { "action": "edit", "resource": "runs/**", "effect": "allow" },
+        { "action": "edit", "resource": "**/FEATURE.md", "effect": "deny" }
       ]
     }
   }

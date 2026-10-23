@@ -41,6 +41,29 @@ docker compose exec harness npm run ticket -- LEX-2293
 
 That starts the run and streams the log. Preflight signs in, the coordinator explores live UAT, the author writes specs, and Playwright runs them. `docker compose down` stops the server and keeps the run volume.
 
+## Phase 1 — checked-in suite
+
+Docker queues this before any ticket. It runs the specs already in `e2e test cases` against UAT. No explorer, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
+
+On startup the container signs in, runs that suite, and writes the log under `runs/regression/<run-id>/`. Follow it with:
+
+```bash
+make phase1
+```
+
+That is `docker compose exec harness npm run phase1`. If a phase 1 run is already queued, the command follows it instead of starting a second one.
+
+`run.log` prints each finished test. A line that says `still in the browser` means a test is running, not that the run has stopped.
+
+A failure is classified by `qa-healer` only. The explorer and the author are not called, and no new test is written.
+
+- Spec drift is patched in the existing spec or page object: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. The edit is written back into `e2e test cases/` on this machine. The server re-runs the suite only when a file changed, up to 3 heals.
+- A product bug is left in the spec and recorded in `report.md` and `triage-1.json` in the run folder. It is not sent to Linear.
+
+Set `QA_PHASE1_ON_START=false` in `.env` before `docker compose up` to skip the automatic run. `npm run phase1` still starts one.
+
+A ticket run still uses Linear for the context pack. Phase 1 does not.
+
 ## Where a run is stored
 
 Everything for one attempt lives in one folder:

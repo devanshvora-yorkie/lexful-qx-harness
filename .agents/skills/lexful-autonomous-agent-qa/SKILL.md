@@ -22,7 +22,9 @@ Two-phase QA workflow: (1) explore UI and create a structured test plan, (2) gen
 
 The server is the orchestrator. It runs preflight, starts the `qa` agent, then runs Playwright. `qa` reads this skill and delegates. `qa-explorer` does Phase 1. `qa-author` does Phase 2. `qa-healer` does the debug loop. The files in `.agents/prompts/` are the role limits. They are not a second procedure.
 
-Phase 1 always runs against `appUrl` in the context pack. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
+A ticket run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
+
+A checked-in suite run is not a ticket. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Delegate to `qa-healer`. Patch spec drift: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. Do not add `waitForTimeout`. Report a product bug in `triage.json` and leave that spec alone. The result stays in the run folder.
 
 ## Quick Reference
 
@@ -171,9 +173,11 @@ This common POM is imported by all module POMs to avoid duplication.
 The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 
 1. Read `playwright/results.json` and `playwright/output.log`.
-2. Replay the failing step with `playwright-cli`.
-3. Patch the spec or POM.
-4. Stop after this one patch. Do not run the suite. The server re-runs it. The cap is 3 heals of the whole suite, not 3 attempts per test.
+2. Replay the failing step with `playwright-cli` and the run directory `auth-state.json`. Do not log in.
+3. Classify every failure and write `triage.json` in the run directory as `{"failures":[...]}`.
+   - `spec`: the test is wrong and the product behavior is unchanged. Patch every spec failure in this one return. This includes a renamed role, name, or test id; a locator that matches several elements, which you narrow without changing the expected outcome; and an existing `waitForResponse` or `expect` timeout that expired while the snapshot already shows that control, which you raise without adding `waitForTimeout` and without editing `playwright.config.ts`. `action` is `patched`.
+   - `bug`: the product did the wrong thing. A loaded value is wrong, a request was sent that must be blocked, or the page is an error response and the control is absent because of it. Do not edit the spec. `action` is `reported`. The server keeps this in the run folder and does not call Linear.
+4. If you are unsure, class it as `bug` and do not edit. Do not add a test. Do not run the suite. The server re-runs it only when a spec file changed during this heal. The cap is 3 heals of the whole suite, not 3 attempts per test.
 
 ### 4. Verdict & Handoff
 

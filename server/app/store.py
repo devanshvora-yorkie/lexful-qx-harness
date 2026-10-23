@@ -27,7 +27,7 @@ def runs_root() -> Path:
     return root
 
 
-_GROUP = re.compile(r"^(LEX-\d+|pr-\d+|sha-[0-9a-fA-F]+|specs|manual|tools)")
+_GROUP = re.compile(r"^(LEX-\d+|pr-\d+|sha-[0-9a-fA-F]+|specs|manual|tools|regression)")
 
 
 def run_group(run_id: str) -> str:
@@ -124,13 +124,21 @@ def _write_manifest(row: dict[str, Any]) -> None:
     manifest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
 
 
-def create_run(*, ticket: str | None, pr: int | None, sha: str | None, spec_count: int | None) -> dict[str, Any]:
-    label = ticket or (f"pr-{pr}" if pr else "manual")
+def create_run(
+    *,
+    ticket: str | None,
+    pr: int | None,
+    sha: str | None,
+    spec_count: int | None,
+    kind: str = "ticket",
+) -> dict[str, Any]:
+    label = "regression" if kind == "phase1" else ticket or (f"pr-{pr}" if pr else "manual")
     run_id = f"{label}-{_stamp()}-{os.urandom(2).hex()}"
     now = _now()
     row = {
         "id": run_id,
-        "ticket": ticket,
+        "kind": kind,
+        "ticket": None if kind == "phase1" else ticket,
         "pr": pr,
         "sha": sha,
         "specCount": spec_count,
@@ -154,8 +162,9 @@ def create_run(*, ticket: str | None, pr: int | None, sha: str | None, spec_coun
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "opencode").mkdir(exist_ok=True)
         (folder / "playwright").mkdir(exist_ok=True)
-        (folder / "explore").mkdir(exist_ok=True)
-        (folder / "specs").mkdir(exist_ok=True)
+        if kind != "phase1":
+            (folder / "explore").mkdir(exist_ok=True)
+            (folder / "specs").mkdir(exist_ok=True)
         _write_manifest(row)
         return dict(row)
 
@@ -175,6 +184,15 @@ def list_runs(ticket: str | None = None) -> list[dict[str, Any]]:
         key = ticket.upper()
         rows = [row for row in rows if str(row.get("ticket") or "").upper() == key]
     return rows
+
+
+def find_active_phase1() -> dict[str, Any] | None:
+    """A checked-in suite run that has not finished. A second trigger follows this one."""
+    active = {"accepted", "queued", "preflight", "agent", "execute", "heal"}
+    for row in _read_index()["runs"]:
+        if row.get("kind") == "phase1" and row.get("status") in active:
+            return dict(row)
+    return None
 
 
 def find_active_sha(sha: str) -> dict[str, Any] | None:

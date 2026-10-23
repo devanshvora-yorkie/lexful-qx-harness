@@ -13,9 +13,18 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.logbook import Logbook
-from app.pipeline import execute_run
+from app.pipeline import execute_run, startup_order
 from app.settings import get_settings
-from app.store import create_run, find_active_sha, get_run, list_runs, recover_runs, run_dir, update_run
+from app.store import (
+    create_run,
+    find_active_phase1,
+    find_active_sha,
+    get_run,
+    list_runs,
+    recover_runs,
+    run_dir,
+    update_run,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("qa.api")
@@ -25,7 +34,15 @@ _queue: asyncio.Queue[str] = asyncio.Queue()
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    for run_id in recover_runs():
+    waiting_ids = recover_runs()
+    waiting = [row for row in (get_run(run_id) for run_id in waiting_ids) if row]
+    fresh = None
+    if get_settings().phase1_on_start and not any(row.get("kind") == "phase1" for row in waiting):
+        created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+        update_run(created["id"], status="queued")
+        fresh = created["id"]
+        log.info("phase 1 queued %s", fresh)
+    for run_id in startup_order(waiting, fresh):
         _queue.put_nowait(run_id)
     worker = asyncio.create_task(_worker())
     try:
@@ -123,6 +140,24 @@ def run_log(run_id: str) -> PlainTextResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No log yet")
     return PlainTextResponse(path.read_text(encoding="utf-8", errors="replace"))
+
+
+@app.post("/run/phase1", status_code=202, dependencies=[Depends(require_secret)])
+def run_phase1() -> dict[str, Any]:
+    """Queue the checked-in suite. An in-flight phase 1 run is returned instead of a second one."""
+    existing = find_active_phase1()
+    if existing:
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "phase 1 already queued",
+            "runId": existing["id"],
+            "status": existing["status"],
+        }
+    row = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+    queued = _enqueue(row)
+    log.info("phase 1 queued %s", row["id"])
+    return queued
 
 
 @app.post("/run/{ticket_key}", status_code=202, dependencies=[Depends(require_secret)])

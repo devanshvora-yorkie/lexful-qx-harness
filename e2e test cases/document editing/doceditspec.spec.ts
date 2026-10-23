@@ -94,7 +94,8 @@ test.describe('Document editing — positive', () => {
 
     // And the record is reachable from the grid by name.
     await list.search(name)
-    await expect(page.getByRole('gridcell', { name, exact: true }).first()).toBeVisible()
+    // The grid cell's accessible name is "Native document <name>", so match the name as a substring.
+    await expect(page.getByRole('gridcell', { name }).first()).toBeVisible()
   })
 
   test('TC-DOC-002: Rename a document from the record drawer', async ({ page }) => {
@@ -123,7 +124,8 @@ test.describe('Document editing — positive', () => {
     // The new name is what the grid serves.
     await list.goto()
     await list.search(renamed)
-    await expect(page.getByRole('gridcell', { name: renamed, exact: true }).first()).toBeVisible()
+    // Grid cell name is "Native document <name>"; substring match on the unique name.
+    await expect(page.getByRole('gridcell', { name: renamed }).first()).toBeVisible()
   })
 
   test('TC-DOC-003: Edit the document body and save the change', async ({ page }) => {
@@ -240,7 +242,8 @@ test.describe('Document editing — positive', () => {
     await record.close()
     await list.goto()
     await list.search(name)
-    await expect(page.getByRole('gridcell', { name, exact: true }).first()).toBeVisible()
+    // Grid cell name is "Native document <name>"; substring match on the unique name.
+    await expect(page.getByRole('gridcell', { name }).first()).toBeVisible()
   })
 
   test('TC-DOC-007: Switch the body editor between Markdown and HTML modes', async ({ page }) => {

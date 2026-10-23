@@ -24,12 +24,17 @@ export class AssetRecordListPage {
 
   async search(name: string) {
     const input = this.page.locator("input[placeholder='Search Documents...']")
-    const results = this.page.waitForResponse(
-      response =>
-        response.request().method() === 'GET' &&
-        response.url().includes(`/v1/assets/${this.assetType}`) &&
-        response.url().includes('search='),
-    )
+    // The grid search is GET /v1/assets?search=…&asset_type=<type>[,…], not /v1/assets/<type>.
+    const results = this.page.waitForResponse(response => {
+      if (response.request().method() !== 'GET') return false
+      const url = new URL(response.url())
+      const types = (url.searchParams.get('asset_type') ?? '').split(',')
+      return (
+        url.pathname === '/v1/assets' &&
+        url.searchParams.has('search') &&
+        types.includes(this.assetType)
+      )
+    })
     await input.fill(name)
     await results
   }

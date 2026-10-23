@@ -12,6 +12,8 @@ services:
       OPENCODE_DISABLE_AUTOUPDATE: "1"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       CI: "1"
+      # Checked-in suite runs first. Set QA_PHASE1_ON_START=false in .env to skip it.
+      QA_PHASE1_ON_START: ${QA_PHASE1_ON_START:-true}
     volumes:
       - ./opencode.jsonc:/opt/lexful-qa-opencode/opencode.jsonc:ro
       - ./scripts:/opt/lexful-qa-opencode/scripts:ro
@@ -19,7 +21,8 @@ services:
       - ./.agents:/opt/lexful-qa-opencode/.agents:ro
       - ./playwright.config.ts:/opt/lexful-qa-opencode/playwright.config.ts:ro
       - ./auth-helper.ts:/opt/lexful-qa-opencode/auth-helper.ts:ro
-      - "./e2e test cases:/opt/lexful-qa-opencode/e2e test cases:ro"
+      # Read-write so a locator heal is written back to this folder. The space stays inside the quotes.
+      - "./e2e test cases:/opt/lexful-qa-opencode/e2e test cases"
       - ./runs:/opt/lexful-qa-opencode/runs
     shm_size: "2gb"
     init: true

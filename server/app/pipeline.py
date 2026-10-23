@@ -44,6 +44,85 @@ def _open_issue(summary: dict[str, int]) -> str:
     return "; ".join(parts)
 
 
+def startup_order(waiting: list[dict[str, Any]], fresh_phase1: str | None = None) -> list[str]:
+    """Checked-in suite runs go first. Ticket runs wait behind them."""
+    phase1: list[str] = []
+    tickets: list[str] = []
+    for row in waiting:
+        run_id = str(row.get("id") or "")
+        if not run_id:
+            continue
+        if row.get("kind") == "phase1":
+            phase1.append(run_id)
+        else:
+            tickets.append(run_id)
+    if fresh_phase1 and fresh_phase1 not in phase1:
+        phase1.insert(0, fresh_phase1)
+    return phase1 + tickets
+
+
+def failed_tests(report: dict[str, Any]) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+
+    def walk(node: Any, file_hint: str) -> None:
+        if not isinstance(node, dict):
+            return
+        current = str(node.get("file") or file_hint)
+        for spec in node.get("specs") or []:
+            if not isinstance(spec, dict) or spec.get("ok") is True:
+                continue
+            message = ""
+            unexpected = spec.get("ok") is False
+            for test in spec.get("tests") or []:
+                if not isinstance(test, dict):
+                    continue
+                if test.get("status") in {"unexpected", "failed"}:
+                    unexpected = True
+                for result in test.get("results") or []:
+                    if not isinstance(result, dict):
+                        continue
+                    if result.get("status") in {"failed", "timedOut", "interrupted"}:
+                        unexpected = True
+                    error = result.get("error")
+                    if isinstance(error, dict) and error.get("message") and not message:
+                        message = str(error["message"]).split("\n", 1)[0][:240]
+            if unexpected:
+                found.append({
+                    "title": str(spec.get("title") or "unnamed"),
+                    "file": str(spec.get("file") or current),
+                    "error": message,
+                })
+        for child in node.get("suites") or []:
+            walk(child, current)
+
+    for suite in report.get("suites") or []:
+        walk(suite, "")
+    return found
+
+
+def spec_was_patched(triage: dict[str, Any]) -> bool:
+    failures = triage.get("failures")
+    if not isinstance(failures, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("class") == "spec" and item.get("action") == "patched"
+        for item in failures
+    )
+
+
+def suspicious_patches(triage: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    failures = triage.get("failures")
+    if not isinstance(failures, list):
+        return lines
+    for item in failures:
+        if not isinstance(item, dict):
+            continue
+        if item.get("class") in {"bug", "timing"} and item.get("action") == "patched":
+            lines.append(f"healer edited a {item.get('class')} failure: {item.get('title')}")
+    return lines
+
+
 def execute_run(run_id: str) -> None:
     row = store.get_run(run_id)
     if row is None:
@@ -51,7 +130,10 @@ def execute_run(run_id: str) -> None:
     folder = store.run_dir(run_id)
     book = Logbook(folder)
     try:
-        _execute(run_id, row, folder, book)
+        if row.get("kind") == "phase1":
+            _execute_phase1(run_id, row, folder, book)
+        else:
+            _execute(run_id, row, folder, book)
     except Exception as exc:
         book.row("server", "failed", str(exc)[:220])
         log.exception("run failed")
@@ -138,6 +220,101 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
 
 
+def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
+    """Run the checked-in suite against UAT. Heal locators. Keep bugs in this folder."""
+    settings = get_settings()
+    book.phase("phase 1  checked-in e2e")
+    book.row(
+        "server",
+        "queued",
+        'suite "e2e test cases"  UAT  qa-healer only, no new tests  each test is logged below',
+    )
+    log.info("phase 1 %s started", run_id)
+    store.update_run(run_id, status="preflight")
+    book.phase("session")
+    book.row("server", "session", "signing in. Linear is not called")
+    code = runners.run_preflight(folder, ticket=None, pr=None, sha=None, session_only=True)
+    preflight = _read_json(folder / "preflight.json")
+    if code != 0 or not preflight.get("ok"):
+        detail = plain(_failed_check(preflight) or "session failed")
+        book.row("server", "session", f"failed  {detail}")
+        store.update_run(run_id, status="halted", error=detail)
+        summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        _write_qa_result(folder, None, "HALTED", summary, [detail], extra=_phase1_meta())
+        _write_report(
+            folder,
+            store.get_run(run_id) or row,
+            verdict="HALTED",
+            summary=summary,
+            issues=[detail],
+            extra=_phase1_report_lines(),
+        )
+        return
+
+    book.row("server", "session", f"ok  {preflight.get('appUrl') or settings.qa_url}")
+    specs = runners.checked_in_specs()
+    if not specs:
+        detail = 'no specs under "e2e test cases"'
+        book.row("server", "halted", detail)
+        store.update_run(run_id, status="halted", error=detail)
+        summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        _write_qa_result(folder, None, "HALTED", summary, [detail], extra=_phase1_meta())
+        _write_report(
+            folder,
+            store.get_run(run_id) or row,
+            verdict="HALTED",
+            summary=summary,
+            issues=[detail],
+            extra=_phase1_report_lines(),
+        )
+        return
+
+    book.row("server", "specs", f'{len(specs)} files in "e2e test cases"')
+    summary = _execute_and_heal(
+        run_id,
+        folder,
+        "checked-in",
+        specs,
+        settings.heal_attempts,
+        "",
+        book,
+        classify=True,
+    )
+    hidden = _healer_hid_a_bug(folder)
+    verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
+    issues = _phase1_issues(folder, summary)
+    if hidden and verdict == "PERFECT":
+        verdict = "NEEDS_REVISION"
+    status = "completed" if verdict == "PERFECT" else "needs_revision"
+    book.row(
+        "server",
+        "verdict",
+        f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}  not sent to Linear",
+    )
+    store.update_run(run_id, status=status, error=None)
+    _write_qa_result(folder, None, verdict, summary, issues, specs, extra=_phase1_meta())
+    _write_report(
+        folder,
+        store.get_run(run_id) or row,
+        verdict=verdict,
+        summary=summary,
+        issues=issues,
+        extra=_phase1_report_lines() + _triage_section(folder),
+    )
+
+
+def _phase1_meta() -> dict[str, Any]:
+    return {"phase": "checked-in-suite", "linear": False, "suite": "e2e test cases"}
+
+
+def _phase1_report_lines() -> list[str]:
+    return [
+        "Phase 1 ran the checked-in Playwright specs in `e2e test cases` against UAT.",
+        "Logged in this folder. Not sent to Linear.",
+        "",
+    ]
+
+
 def _opencode_failure(folder: Path, log_name: str, code: int) -> str:
     detail = runners.last_opencode_error(folder, log_name)
     if detail:
@@ -153,20 +330,30 @@ def _execute_and_heal(
     heal_attempts: int,
     session_id: str,
     book: Logbook,
+    *,
+    classify: bool = False,
 ) -> dict[str, int]:
     store.update_run(run_id, status="execute")
     book.row("playwright", "started", f"{len(specs)} files  {', '.join(specs)}"[:240])
     result = runners.run_playwright(folder, specs)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
+    if result.get("setupError"):
+        book.row("playwright", "error", str(result["setupError"]))
+        return summary
     if _suite_passed(result["exitCode"], summary):
         return summary
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
         book.phase(f"heal {attempt} of {heal_attempts}")
-        book.row("server", "heal", f"{attempt} of {heal_attempts}  {len(specs)} specs still open")
-        prompt = _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
+        book.row("server", "heal", f"{attempt} of {heal_attempts}  calling qa-healer for spec drift  {len(specs)} files")
+        prompt = (
+            _phase1_heal_prompt(folder, attempt, heal_attempts, specs)
+            if classify
+            else _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
+        )
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
+        before = _suite_revision()
         heal_code, session_id = runners.run_opencode(
             folder,
             session_id=session_id or None,
@@ -181,9 +368,23 @@ def _execute_and_heal(
         if heal_code != 0:
             book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
             continue
+        triage = _take_triage(folder, attempt) if classify else {}
+        changed = suite_files_changed(before, _suite_revision())
+        if classify and not changed:
+            book.row("server", "heal", _unchanged_heal_message(triage))
+            break
+        for line in suspicious_patches(triage):
+            book.row("server", "heal", line[:220])
+        if changed:
+            book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
         store.update_run(run_id, status="execute")
         book.phase("playwright")
-        book.row("playwright", "started", f"after heal {attempt}")
+        why = (
+            f"re-running after heal {attempt} because a spec file changed"
+            if changed
+            else f"re-running after heal {attempt}"
+        )
+        book.row("playwright", "started", why)
         result = runners.run_playwright(folder, specs)
         summary = result["summary"]
         book.row("playwright", "result", _counts(summary))
@@ -249,7 +450,173 @@ def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: lis
         "Delegate only to qa-healer for one patch. This is one heal of the whole suite, not three attempts per test.",
         "Do not re-explore and do not add scenarios.",
         "Do not run the suite. The server will run it after you return.",
+        "If the control is on the page and the product did the wrong thing, do not edit the spec.",
     ])
+
+
+def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]) -> str:
+    relative = _display(folder)
+    failures = failed_tests(_read_json(folder / "playwright" / "results.json"))
+    listed = "\n".join(
+        f"- {item['title']}  ({_short_file(item['file'])})  {item['error']}".rstrip()
+        for item in failures[:40]
+    ) or "- the Playwright report has failures, but no test title was parsed"
+    return "\n".join([
+        "This is a checked-in suite heal. It is not a ticket.",
+        "Do not call qa-explorer or qa-author. Do not write a new test. Do not call Linear, GitHub, or /auth/password.",
+        "Delegate only to qa-healer. In this one return, patch every spec-drift failure, then stop.",
+        f"Heal attempt {attempt} of {total}.",
+        f"Run directory: {relative}",
+        f"Playwright results: {relative}/playwright/results.json",
+        f"Playwright log: {relative}/playwright/output.log",
+        f"Auth cookies: {relative}/auth-state.json",
+        "The suite is \"e2e test cases\". Edit only a failing spec and the page object or fixture it imports.",
+        "Do not edit FEATURE.md, playwright.config.ts, or auth-helper.ts.",
+        'Write {"failures":[...]} to triage.json in the run directory. class is "spec" or "bug". action is "patched" or "reported".',
+        "spec: a renamed locator, a locator that matches several elements, or an existing wait that expired while the snapshot already shows that control. Narrow the locator or raise that timeout. Do not add waitForTimeout. Leave the expected outcome.",
+        "bug: a loaded value is wrong, a blocked request was sent, or the page is an error response. Do not edit the spec.",
+        "If you are unsure, class it as bug and do not edit.",
+        "Failures:",
+        listed,
+        f"Specs: {', '.join(specs)}",
+        "Do not run the suite. The server re-runs it only if you changed a spec file.",
+    ])
+
+
+def _short_file(file: str) -> str:
+    marker = "e2e test cases"
+    if marker in file:
+        return file[file.index(marker):]
+    return file
+
+
+def suite_files_changed(
+    before: tuple[tuple[str, int], ...],
+    after: tuple[tuple[str, int], ...],
+) -> list[str]:
+    """Files saved during this heal. An old triage entry that says patched does not count."""
+    previous = dict(before)
+    return [name for name, mtime in after if previous.get(name) != mtime]
+
+
+def _unchanged_heal_message(triage: dict[str, Any]) -> str:
+    failures = triage.get("failures")
+    if not isinstance(failures, list) or not failures:
+        return "no spec file changed. Remaining failures stay in this folder."
+    bugs = sum(1 for item in failures if isinstance(item, dict) and item.get("class") == "bug")
+    specs = sum(1 for item in failures if isinstance(item, dict) and item.get("class") == "spec")
+    parts = ["no spec file changed"]
+    if bugs:
+        parts.append(f"{bugs} product bug(s) logged in this folder")
+    if specs:
+        parts.append(f"{specs} spec note(s) had no file edit, so the suite is not re-run")
+    return ". ".join(parts) + "."
+
+
+def _suite_revision() -> tuple[tuple[str, int], ...]:
+    root = get_settings().root / "e2e test cases"
+    if not root.is_dir():
+        return tuple()
+    rows: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix not in {".ts", ".js"} or not path.is_file():
+            continue
+        rows.append((path.relative_to(root).as_posix(), path.stat().st_mtime_ns))
+    return tuple(rows)
+
+
+def _read_triage(path: Path) -> dict[str, Any]:
+    """Accept the object the prompt asks for, or the array the healer wrote."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, list):
+        return {"failures": data}
+    if isinstance(data, dict):
+        if isinstance(data.get("failures"), list):
+            return data
+        if data.get("class"):
+            return {"failures": [data]}
+        return data
+    return {}
+
+
+def _failure_title(item: dict[str, Any]) -> str:
+    return str(item.get("title") or item.get("test") or "unnamed")
+
+
+def _failure_reason(item: dict[str, Any]) -> str:
+    return str(item.get("reason") or item.get("evidence") or "").strip()
+
+
+def _take_triage(folder: Path, attempt: int) -> dict[str, Any]:
+    path = folder / "triage.json"
+    data = _read_triage(path)
+    if path.is_file():
+        path.replace(folder / f"triage-{attempt}.json")
+    return data
+
+
+def _healer_hid_a_bug(folder: Path) -> list[str]:
+    lines: list[str] = []
+    for path in sorted(folder.glob("triage-*.json")):
+        lines.extend(suspicious_patches(_read_triage(path)))
+    return lines
+
+
+def _phase1_issues(folder: Path, summary: dict[str, int]) -> list[str]:
+    issues = _healer_hid_a_bug(folder)
+    if (
+        summary.get("failed", 0) == 0
+        and summary.get("skipped", 0) == 0
+        and summary.get("passed", 0) > 0
+    ):
+        return issues
+    triages = sorted(folder.glob("triage-*.json"))
+    last = _read_triage(triages[-1]) if triages else {}
+    lines: list[str] = []
+    failures = last.get("failures")
+    if isinstance(failures, list):
+        for item in failures:
+            if not isinstance(item, dict) or item.get("class") not in {"bug", "timing"}:
+                continue
+            reason = _failure_reason(item)
+            text = f"{item.get('class')}: {_failure_title(item)}"
+            if reason:
+                text += f" — {reason}"
+            lines.append(text)
+    if not lines:
+        lines.append(_open_issue(summary))
+    return issues + lines
+
+
+def _triage_section(folder: Path) -> list[str]:
+    triages = sorted(folder.glob("triage-*.json"))
+    if not triages:
+        return []
+    lines = ["## Healer triage", ""]
+    for path in triages:
+        data = _read_triage(path)
+        failures = data.get("failures")
+        lines.append(f"### {path.name}")
+        lines.append("")
+        if not isinstance(failures, list) or not failures:
+            lines.append("- healer returned no classified failures")
+            lines.append("")
+            continue
+        for item in failures:
+            if not isinstance(item, dict):
+                continue
+            reason = _failure_reason(item)
+            text = f"- {item.get('class')} / {item.get('action')}: {_failure_title(item)}"
+            if reason:
+                text += f" — {reason}"
+            lines.append(text)
+        lines.append("")
+    return lines
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -276,6 +643,7 @@ def _write_qa_result(
     summary: dict[str, int],
     issues: list[str],
     specs: list[str] | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     settings = get_settings()
     drafted = _read_json(folder / "qa-result.json")
@@ -291,6 +659,8 @@ def _write_qa_result(
         "models": {"main": settings.main_model, "subagents": settings.sub_model},
         "open_issues": issues or drafted.get("open_issues") or [],
     }
+    if extra:
+        payload.update(extra)
     (folder / "qa-result.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
@@ -301,6 +671,7 @@ def _write_report(
     verdict: str,
     summary: dict[str, int] | None,
     issues: list[str],
+    extra: list[str] | None = None,
 ) -> None:
     counts = summary or {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
     lines = [
@@ -315,9 +686,13 @@ def _write_report(
         f"- Skipped: {counts['skipped']}",
         "",
     ]
+    if extra:
+        lines.extend(extra)
+        if extra[-1] != "":
+            lines.append("")
     if issues:
         lines.append("## Open issues")
         lines.extend(f"- {issue}" for issue in issues)
         lines.append("")
-    lines.append("Artifacts in this folder: `preflight.json`, `context-pack.json`, `auth-state.json`, `opencode/`, `playwright/`, `qa-result.json`.")
+    lines.append("Artifacts in this folder include `preflight.json`, `auth-state.json`, `opencode/`, `playwright/`, and `qa-result.json`.")
     (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

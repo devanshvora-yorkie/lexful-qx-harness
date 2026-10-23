@@ -1,13 +1,15 @@
 import process from 'node:process';
 
 const base = process.env.QA_SERVER_URL || `http://127.0.0.1:${process.env.QA_SERVER_PORT || '8787'}`;
+const phase1 = process.argv.includes('--phase1');
 const ticket = process.argv.find((arg) => /^LEX-\d+$/i.test(arg))?.toUpperCase();
 const forceNew = process.argv.includes('--new');
 const active = new Set(['accepted', 'queued', 'preflight', 'agent', 'execute', 'heal']);
 const done = new Set(['completed', 'needs_revision', 'halted', 'failed']);
 
-if (!ticket) {
+if (!phase1 && !ticket) {
   console.error('Usage: npm run ticket -- LEX-3500');
+  console.error('       npm run phase1');
   process.exit(1);
 }
 
@@ -37,20 +39,22 @@ async function readJson(path, options = {}) {
 let runId;
 try {
   if (!forceNew) {
-    const listed = await readJson(`/runs?ticket=${ticket}`);
-    const current = (listed.runs || []).find((row) => active.has(row.status));
+    const listed = await readJson(phase1 ? '/runs' : `/runs?ticket=${ticket}`);
+    const current = (listed.runs || []).find((row) => (
+      active.has(row.status) && (phase1 ? row.kind === 'phase1' : true)
+    ));
     if (current) {
       runId = current.id;
       console.log(`following ${runId} (${current.status})`);
     }
   }
   if (!runId) {
-    const started = await readJson(`/run/${ticket}`, { method: 'POST' });
+    const started = await readJson(phase1 ? '/run/phase1' : `/run/${ticket}`, { method: 'POST' });
     runId = started.runId;
-    console.log(`started ${runId} (${started.status})`);
+    console.log(`${started.skipped ? 'following' : 'started'} ${runId} (${started.status})`);
   }
   console.log('');
-  console.log(`${ticket}  ${runId}`);
+  console.log(`${phase1 ? 'phase 1' : ticket}  ${runId}`);
   console.log('');
 } catch (error) {
   console.error(`Cannot reach ${base}. Start it with: npm run serve`);

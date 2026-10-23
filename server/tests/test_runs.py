@@ -9,10 +9,17 @@ from fastapi import HTTPException
 
 from app.logbook import Logbook, SubagentTail, child_message_lines, format_event, plain_error, session_id_from_text
 from app.runners import _preflight_row
-from app.main import health, run_ticket
-from app.pipeline import verdict_for
-from app.runners import planned_specs
-from app.store import create_run, find_active_sha, get_run, list_runs, recover_runs, update_run
+from app.main import health, run_phase1, run_ticket
+from app.pipeline import (
+    failed_tests,
+    spec_was_patched,
+    startup_order,
+    suite_files_changed,
+    suspicious_patches,
+    verdict_for,
+)
+from app.runners import checked_in_specs, common_test_dir, planned_specs
+from app.store import create_run, find_active_phase1, find_active_sha, get_run, list_runs, recover_runs, update_run
 
 
 class LogbookTest(unittest.TestCase):
@@ -166,6 +173,55 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(verdict_for({"passed": 4, "failed": 0, "skipped": 2}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
 
 
+class Phase1Test(unittest.TestCase):
+    def test_queue_puts_the_checked_in_suite_first(self):
+        waiting = [
+            {"id": "LEX-1-a", "kind": "ticket"},
+            {"id": "regression-old", "kind": "phase1"},
+        ]
+        self.assertEqual(
+            startup_order(waiting, "regression-new"),
+            ["regression-new", "regression-old", "LEX-1-a"],
+        )
+        self.assertEqual(startup_order(waiting, "regression-old"), ["regression-old", "LEX-1-a"])
+
+    def test_failure_class_and_suite_path(self):
+        report = {
+            "suites": [{
+                "file": "e2e test cases/search/search.spec.ts",
+                "specs": [
+                    {"title": "renamed button", "ok": False, "tests": [{"status": "unexpected", "results": [{"status": "failed", "error": {"message": "waiting for getByRole('button', { name: 'Search' })"}}]}]},
+                    {"title": "passes", "ok": True, "tests": []},
+                ],
+                "suites": [],
+            }],
+        }
+        found = failed_tests(report)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["title"], "renamed button")
+        self.assertTrue(found[0]["error"].startswith("waiting for getByRole"))
+        self.assertTrue(spec_was_patched({"failures": [{"class": "spec", "action": "patched"}]}))
+        self.assertFalse(spec_was_patched({"failures": [{"class": "bug", "action": "reported"}]}))
+        self.assertEqual(
+            suspicious_patches({"failures": [{"class": "bug", "action": "patched", "title": "save failed"}]}),
+            ["healer edited a bug failure: save failed"],
+        )
+        self.assertEqual(
+            suite_files_changed((("a.ts", 1),), (("a.ts", 1), ("b.ts", 2))),
+            ["b.ts"],
+        )
+        self.assertEqual(suite_files_changed((("a.ts", 1),), (("a.ts", 1),)), [])
+        specs = checked_in_specs()
+        self.assertGreaterEqual(len(specs), 3)
+        self.assertTrue(all(item.startswith("e2e test cases/") for item in specs))
+        directory = common_test_dir([
+            "e2e test cases/asset crud/assets-crud.spec.ts",
+            "e2e test cases/document editing/doceditspec.spec.ts",
+            "e2e test cases/search/search.spec.ts",
+        ])
+        self.assertTrue(str(directory).endswith("e2e test cases"))
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[2] / "runs"
@@ -207,6 +263,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(get_run(created["id"])["status"], "failed")
         self.assertIn("restarted", get_run(created["id"])["error"])
 
+    def test_phase1_folder(self):
+        created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+        self.assertTrue(created["id"].startswith("regression-"))
+        self.assertEqual(created["kind"], "phase1")
+        self.assertIsNone(created["ticket"])
+        folder = Path(self.tmp.name) / "regression" / created["id"]
+        self.assertTrue((folder / "manifest.json").is_file())
+        self.assertFalse((folder / "specs").exists())
+        update_run(created["id"], status="queued")
+        self.assertEqual(find_active_phase1()["id"], created["id"])
+        update_run(created["id"], status="completed")
+        self.assertIsNone(find_active_phase1())
+
 
 class ApiTest(unittest.TestCase):
     def setUp(self):
@@ -225,6 +294,12 @@ class ApiTest(unittest.TestCase):
             run_ticket("not-a-ticket")
         self.assertEqual(raised.exception.status_code, 400)
         self.assertEqual(list_runs(), [])
+        started = run_phase1()
+        self.assertTrue(started["runId"].startswith("regression-"))
+        self.assertEqual(get_run(started["runId"])["status"], "queued")
+        again = run_phase1()
+        self.assertTrue(again["skipped"])
+        self.assertEqual(again["runId"], started["runId"])
 
 
 if __name__ == "__main__":
