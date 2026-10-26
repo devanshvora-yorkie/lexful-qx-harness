@@ -120,13 +120,15 @@ Analyze the API request and response and expand the scenarios from that. Write e
 - **CRUD round-trip** — Create data → verify in list → update → verify change → delete → verify removal
 - **Permissions** — Verify roles without access cannot see/hide actions (e.g., "Add New" button hidden for advisors without permission)
 
-**1e. Write the FEATURE.md** — Save `FEATURE.md` in the run directory (`runs/<ticket>/<run-id>/FEATURE.md`). Do not put it under `specs/` or `tests/`. The coordinator reads that file. It documents:
-- URL, role-based access, data models
-- **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Phase 2 can wait on it
-- **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
-- Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
-- Detailed selectors from a fresh snapshot
-- Execution commands
+**1e. Write and Progressively Save FEATURE.md** — Save `FEATURE.md` in the run directory (`runs/<ticket>/<run-id>/FEATURE.md`). Do not put it under `specs/` or `tests/`. The coordinator reads that file.
+- **Progressive saving (Mandatory)**: Do not hold the entire plan in memory until exploration finishes. Create `FEATURE.md` after the first page snapshot, and update it incrementally on disk as each route, API endpoint, selector, and acceptance criterion is observed. If `explore/` already contains snapshots or network logs from an earlier pass, review and synthesize them immediately.
+- It documents:
+  - URL, role-based access, data models
+  - **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Phase 2 can wait on it
+  - **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
+  - Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
+  - Detailed selectors from a fresh snapshot
+  - Execution commands
 
 This is the single source of truth for what each module tests and its current status.
 
