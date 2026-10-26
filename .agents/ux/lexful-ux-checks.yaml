@@ -1,0 +1,585 @@
+# Lexful UX Checks v0.5 (DRAFT, unsigned)
+# Machine-readable version of the UX Rulebook v0.5 + Bad UX Pattern Library v0.6.
+# The automated audit reads THIS file. Humans edit it. Rule IDs must match the two documents.
+#
+# verify:  script = deterministic Playwright/axe check | ai = model judges screenshot + page structure | human = needs a person
+# qa_refs: QA test case ids from qa-specs/ that cover the same behavior. Cite them in findings as qaRefs.
+# confidence: confirmed = seen in the real product or confirmed by Lexful | unconfirmed = suspected, verify first
+
+meta:
+  version: 0.6.0
+  source_docs: [Lexful_UX_Rulebook_v0.5, Lexful_Bad_UX_Pattern_Library_v0.6]
+  environment: UAT only, demo/synthetic data only
+  default_persona: Support        # technician role. Use Admin only for admin screens, Viewer for read-only checks
+  accessibility_bar: WCAG 2.1 AA
+  severity_scale:                 # v2 (Oct 16): a working UI passes
+    S0: "Broken: the journey cannot be completed, data is lost or corrupted, or the page crashes"
+    S1: "A core task cannot be completed by any normal path (no workaround)"
+    S2: "The task completes, but a typical technician would be misled or slowed (observed, not assumed)"
+    S3: "Polish or a minor inconsistency; no real slowdown. Also a WCAG AA miss on a non-essential element"
+    O: "Observation: it works as intended and is understandable. A design suggestion. No ticket weight, no score impact, never fails a run"
+  pass_bar: "Any S0 or S1 finding = FAIL. S2 and S3 are logged and scored but do not block. Observations (O) are never scored and never block."
+  calibration_rules:              # keeps working UI from being penalized
+    - "Working UI passes: if it works, is understandable and meets WCAG 2.1 AA, it is a pass. Do not write a ticket, or write an Observation."
+    - "Rate what you observed, not what the UI should ideally do. Design preferences and alternative layouts are Observations."
+    - "Visible outcome counts as feedback: a missing toast is S3 when the result is plainly visible (the record appears, the panel closes). It is S2 only when the outcome cannot be seen."
+    - "Intended by design (see the do-not-flag list) is not a finding."
+    - "A WCAG A or AA failure is at least S3. It is S2 only if it blocks keyboard or screen-reader use of a core task."
+    - "S2 needs a reason a typical technician would be misled or slowed. If you cannot write that reason, it is S3 or an Observation."
+  adjustment_rules:               # one step at most, always explain why
+    - "Workaround exists: one step less severe"
+    - "Step technicians repeat all day (search, save): one step more severe"
+    - "Regression from the previous release: one step more severe"
+    - "S0 and S1 can never be lowered by the AI. A human confirms."
+  evidence_gate:                  # enforced by make-ticket-pdf.mjs
+    - "An S0 or S1 is accepted only if reproduced at least 2 times, your own screenshot shows the problem (not the opposite), and you tried to disprove it."
+    - "If your evidence contradicts your claim, withdraw or downgrade the finding and list it under heldForReview as Withdrawn."
+    - "Never copy wording, ids or findings from any sample or demo file. Every ticket comes from what you observed in this run."
+  environment_notes:              # from QA, see QA_TRACEABILITY.md section 1
+    - "CloudFront WAF can answer bursts with 403 Request blocked. Stop 45 seconds, retry at most 3 times, one worker. This is the environment, not an app defect."
+    - "The Stytch session JWT lives 5 minutes. If you land on a login page mid-run, stop and ask the user to log in again. Never loop."
+    - "URL patterns: /docs/assets, /docs/d/all/<type> (example servers), /docs/d/all/system.document, record drawer in the URL as ?drawer=. Do not guess URLs."
+    - "Only the org owner persona has been exercised by QA. If Settings, Account and Platform are visible, report the role as Admin or owner (inferred). Never write Support unless the app shows it."
+  visual_suggestions:             # used by the lexful-ui-before-after skill
+    - Checks with visual_fix true can get a Before/After pair. shadcn_hint names the implementation (shadcn/ui component); fluent_hint gives the Fluent design rationale.
+    - "Direction (Oct 13): shadcn/ui components with Fluent-aligned design. Authority order: Lexful Storybook and style guide, then Fluent, then shadcn defaults."
+    - Confirm component props in the official docs, and run the quick stack check first (see fluent-ui-design-system).
+    - Max 4 pairs per run. After images are concept mocks, never the live product.
+  output_rules:
+    - Every finding must cite a check id or rule ref. No reference = discard.
+    - Low-confidence findings go in the report only, never to Linear.
+    - Human review (the designer) approves every finding before it reaches Linear.
+    - "Evidence required: screenshot, page step, numbered repro steps."
+
+checks:
+  # ---------------- SEARCH ----------------
+  - id: SRCH-01
+    ref: [A2, A4]
+    journey: Search
+    lens: Flows and speed
+    title: Keyboard-only search
+    check: Open search with the keyboard shortcut, type a query, move through results and open one, without using the mouse.
+    default_severity: S2
+    verify: [script, ai]
+    automation_hint: Playwright keyboard.press for the shortcut, type, ArrowDown, Enter. Assert the record opens and focus lands somewhere sensible.
+    confidence: confirmed
+    qa_refs: ["TC-SRCH142", "TC-SRCH143", "SPEC-TC-01", "SPEC-TC-02", "SPEC-TC-11"]
+
+  - id: SRCH-02
+    ref: [E4, BP-11]
+    journey: Search
+    lens: Navigation
+    title: Results visibly relate to the query
+    check: Each result should contain the query text, or the UI should show why it matched.
+    default_severity: S2
+    visual_fix: true
+    fluent_hint: "Emphasize the matched text in each result with Text (semibold) and show which field matched as secondary text. No dedicated highlight component in v9."
+    shadcn_hint: "Matched text in font-semibold inside each result; show the matched field as secondary text-xs text inside Command items."
+    verify: [script, ai]
+    automation_hint: Type a short query, read result titles, flag any result whose visible text lacks the query. Test short queries (1-3 characters) on purpose.
+    known_issue: "Oct 5 - searching 'To' returned 3 results with no visible match (Findings Log #11)."
+    confidence: confirmed
+    qa_refs: ["TC-SRCH105", "TC-SRCH106", "TC-SRCH107", "TC-SRCH136", "TC-SRCH138", "TC-SRCH139", "SPEC-TC-04", "SPEC-TC-05", "SPEC-TC-07"]
+    qa_note: "Matching is decided by the server (GET /v1/search, 20 per page). The shorthand AD is rewritten to Active Directory on purpose, and a hint shows it (SPEC-TC-04): do not flag that. Check the hint is visible and that a result's visible text explains the match."
+
+  - id: SRCH-03
+    ref: [BP-12]
+    journey: Search
+    lens: Clarity
+    title: Match highlighting
+    check: The matched term or field is visibly highlighted so the user can see why a result appeared.
+    default_severity: O          # design suggestion when the UI works
+    visual_fix: true
+    fluent_hint: "Compose Text with emphasis on the matched substring. No dedicated highlight component in v9."
+    shadcn_hint: "Wrap the matched substring in a font-semibold span inside Command items."
+    verify: [ai]
+    confidence: confirmed
+
+  - id: SRCH-04
+    ref: [BP-101]
+    journey: Search
+    lens: Navigation
+    title: Global vs in-page search is distinguishable
+    check: A user can tell the header (global) search from the in-page table search at a glance, via placeholder, icon or position.
+    default_severity: O          # design suggestion when the UI works
+    visual_fix: true
+    fluent_hint: "SearchBox with a distinct placeholder naming the scope (for example 'Search documents'); optional Tag showing the active scope."
+    shadcn_hint: "Input Group with a distinct placeholder naming the scope; optional Badge showing the active scope."
+    verify: [ai, human]
+    note: The two-tier design is intentional (QA TC-SRCH149). Only discoverability is checked.
+    confidence: confirmed
+    qa_refs: [TC-SRCH149]
+
+  - id: SRCH-05
+    ref: [D5]
+    journey: Search
+    lens: Accessibility
+    title: Escape closes the search popup and the Ask Lex drawer
+    check: Pressing Escape closes each one, the page behind is unchanged, and focus returns to where it was.
+    default_severity: S2
+    verify: [script]
+    automation_hint: Open the popup, press Escape, assert hidden and document.activeElement is the header search control. Repeat for the drawer.
+    known_issue: QA flagged Escape support as uncertain (TC-SRCH143).
+    confidence: unconfirmed
+    qa_refs: ["TC-SRCH103", "TC-SRCH112", "TC-SRCH143", "SPEC-TC-01", "assets-crud_spec.ts:L482"]
+    qa_note: "QA verified Escape closes the search palette (SPEC-TC-01) and the record drawer (assets-crud_spec.ts:L482). Expect PASS for both. Still test the Ask Lex panel."
+
+  - id: SRCH-06
+    ref: [A7, B3]
+    journey: Search
+    lens: Flows and speed
+    title: Closing search keeps page state
+    check: Closing the popup (X or Escape) never navigates away or loses the page behind it.
+    default_severity: S2
+    verify: [script]
+    note: Expected to PASS (QA TC-SRCH103, 112, 128). Do not flag if it holds.
+    confidence: confirmed
+    qa_refs: [TC-SRCH103, TC-SRCH104, TC-SRCH108, TC-SRCH112, TC-SRCH128, TC-SRCH146]
+
+  - id: SRCH-07
+    ref: [BP-100]
+    journey: Search
+    lens: Clarity
+    title: Ask Lex checks access before acting
+    check: Asking about a read-only organization declines immediately with a clear reason, instead of making tool calls first and failing.
+    default_severity: S2
+    verify: [ai, human]
+    persona: Support
+    known_issue: Sept 29 - Sherwin named this as a needed UX fix.
+    confidence: confirmed
+    qa_refs: [TC-SRCH109, TC-SRCH110, TC-SRCH111]
+
+  - id: SRCH-08
+    ref: [E5]
+    journey: Search
+    lens: Navigation
+    title: Filter switching clears stale results
+    check: Switching organization or asset-type filters removes the previous filter's results.
+    default_severity: S3
+    verify: [script]
+    note: Expected to PASS (QA TC-SRCH135).
+    confidence: confirmed
+    qa_refs: ["TC-SRCH113", "TC-SRCH114", "TC-SRCH115", "TC-SRCH116", "TC-SRCH117", "TC-SRCH118", "TC-SRCH119", "TC-SRCH120", "TC-SRCH121", "TC-SRCH129", "TC-SRCH130", "TC-SRCH135", "TC-SRCH145", "SPEC-TC-08", "SPEC-TC-09", "SPEC-TC-10"]
+
+  - id: SRCH-09
+    ref: [BP-10, E4]
+    journey: Search
+    lens: Clarity
+    title: No-results state keeps a next step
+    check: A query with no matches (including an organization or type filter with no records) shows a clear no-results message, and Ask Lex for that query stays available. The popup never looks blank or broken.
+    default_severity: S3
+    verify: [script, ai]
+    qa_refs: ["TC-SRCH125", "TC-SRCH129", "SPEC-TC-06"]
+    qa_note: "QA verified a no-results state with a Reset button that returns focus to the search box (SPEC-TC-06). Expect PASS."
+    confidence: unconfirmed
+
+  - id: SRCH-10
+    ref: [A6, BP-80]
+    journey: Search
+    lens: Flows and speed
+    title: Odd input does not break the popup
+    check: Whitespace-only input, special characters, a 300-character string, leading and trailing spaces and fast typing leave the popup usable. Results match the final text, the close button stays visible and clickable, and nothing freezes.
+    default_severity: S2
+    verify: [script]
+    automation_hint: Type each input, assert the popup is still open and responsive, then close it with X and Escape. For fast typing, assert the final list matches the final query.
+    qa_refs: ["TC-SRCH126", "TC-SRCH134", "TC-SRCH137", "TC-SRCH138", "TC-SRCH140", "TC-SRCH141", "TC-SRCH150", "SPEC-TC-03"]
+    confidence: unconfirmed
+
+  - id: SRCH-11
+    ref: [B2, BP-41]
+    journey: Search
+    lens: Clarity
+    title: Ask Lex composer handles empty input and reopening
+    check: An empty or whitespace-only message is not sent. Opening Ask Lex a second time starts a clean conversation (or clearly continues one), never stacks two drawers. The at-sign mention picker opens and inserts a mention.
+    default_severity: S3
+    verify: [script]
+    note: Use at most 2 Ask Lex prompts per run.
+    qa_refs: [TC-SRCH131, TC-SRCH132, TC-SRCH147, TC-SRCH148]
+    confidence: unconfirmed
+
+  - id: SRCH-12
+    ref: [E1, A6]
+    journey: Search
+    lens: Navigation
+    title: Default empty state shows the shortcuts it promises
+    check: With an empty input the popup shows the filter chips, the Ask Lex row, GO TO links and CREATE actions. GO TO Documents navigates and closes the popup. Create document starts the create flow, with no error state. The slash shortcut list opens.
+    default_severity: S3
+    verify: [script]
+    qa_refs: [TC-SRCH102, TC-SRCH122, TC-SRCH123, TC-SRCH124]
+    confidence: unconfirmed
+
+  # ---------------- ASSET CRUD ----------------
+  - id: CRUD-01
+    ref: [BP-20]
+    journey: Assets CRUD
+    lens: Clarity
+    title: All validation errors shown together
+    check: Submitting an incomplete create form lists every missing required field at once, with specific messages.
+    default_severity: S3
+    visual_fix: true
+    fluent_hint: "Field with validationState 'error' and validationMessage around every required Input; show all errors after one submit. Verify prop names in the Field doc."
+    shadcn_hint: "Field with an error message on every required control, all shown after one submit. Verify Field subcomponents in the shadcn docs."
+    verify: [script]
+    automation_hint: Fill only the name, submit, count visible field errors, compare to the number of required fields.
+    known_issue: Oct 1 - errors appeared one at a time (Findings Log #1).
+    confidence: confirmed
+    qa_refs: ["TC-DOC-009", "TC-DOC-010", "assets-crud_spec.ts:L162-L178"]
+    qa_note: "QA treats these as expected: Create stays disabled until Name and Organization (and Role for Servers) are set (TC-DOC-009, assets-crud_spec.ts:L162-L178), and an empty name triggers native browser validation (TC-DOC-010). So disabled-until-ready is not a defect. The UX gap is only that required fields are not marked or explained: rate S3 or Observation, S2 only if you could not work out what was missing."
+
+  - id: CRUD-02
+    ref: [A7]
+    journey: Assets CRUD
+    lens: Flows and speed
+    title: Unsaved-change warning
+    check: Leaving an edit in progress warns before discarding changes.
+    default_severity: S1          # data loss
+    verify: [script]
+    confidence: unconfirmed
+    qa_refs: ["TC-DOC-011", "TC-DOC-012", "assets-crud_spec.ts:L149"]
+    qa_note: "The app has staged edits with a change counter and Save / Discard / Cancel (TC-DOC-011, 012), and an unsaved-changes dialog (Discard unsaved changes? Keep editing / Discard changes) was captured on Oct 16. A claim of 'no warning' needs a screenshot that really shows data lost without any dialog. Test sidebar navigation, closing the drawer, and Cancel separately."
+
+  - id: CRUD-03
+    ref: [A8]
+    journey: Assets CRUD
+    lens: Flows and speed
+    title: Destructive actions confirm clearly
+    check: Archive or delete asks for confirmation and states what will happen. Archive is a soft delete, so the item must be restorable.
+    default_severity: S1
+    visual_fix: true
+    fluent_hint: "Dialog with modalType 'alert'; default focus on the safe action (Cancel); destructive button is not the default focus."
+    shadcn_hint: "AlertDialog; autofocus Cancel; destructive action uses Button variant destructive."
+    verify: [script, ai]
+    confidence: unconfirmed
+    qa_refs: ["TC-DOC-008", "assets-crud_spec.ts:L215-L273"]
+    qa_note: "QA drives an archive confirmation and proves archive is a soft delete on the server (deleted_at). Expect PASS."
+
+  - id: CRUD-04
+    ref: [BP-102]
+    journey: Assets CRUD
+    lens: Clarity
+    title: Irreversible settings warn first
+    check: Marking a custom field as the record-name field cannot be undone. A warning must appear before commit.
+    default_severity: S2
+    visual_fix: true
+    fluent_hint: "Field hint text plus a Dialog (alert) before committing an irreversible setting."
+    shadcn_hint: "Field description text plus AlertDialog before committing an irreversible setting."
+    verify: [ai, human]
+    persona: Admin
+    known_issue: Sept 29 - confirmed one-way, even Sherwin was confused.
+    confidence: confirmed
+
+  - id: CRUD-05
+    ref: [BP-103]
+    journey: Assets CRUD
+    lens: Consistency
+    title: Moved controls leave a trace
+    check: When a control moves between releases (example, include-archived now under Filters), some in-app cue helps users find it.
+    default_severity: O          # design suggestion when the UI works
+    verify: [human]
+    note: Compare against the previous release. Pair with the release-notes recommendation.
+    confidence: confirmed
+
+  - id: CRUD-06
+    ref: [B3, BP-108]
+    journey: Assets CRUD
+    lens: Clarity
+    title: Visible confirmation after create, save, link
+    check: A toast or inline message confirms each action. A Toaster component exists in Storybook, so check which screens use it and which do not.
+    default_severity: S3          # S2 only when the outcome cannot be seen (calibration_rules)
+    visual_fix: true
+    fluent_hint: "Toast (via Toaster) for transient confirmation; MessageBar if the notice must stay. Verify hook and prop names in the Toast doc."
+    shadcn_hint: "Sonner toast for create, save and link; Alert if the notice must persist."
+    verify: [script]
+    automation_hint: After each action, wait up to 3 seconds for a status or toast element.
+    known_issue: Oct 1 - none observed in multiple screenshots (Findings Log #2).
+    confidence: confirmed
+    qa_refs: []
+    qa_note: "No QA test asserts a toast. QA's POM looks for react-toastify classes (Toastify__toast), which may not be the library the app uses (Lexful's Storybook has a Toaster). Confirm which library the app uses before recommending Sonner. Staged edits close the save bar, so a visible result may already exist: apply the visible-outcome rule."
+
+  - id: CRUD-07
+    ref: [BP-106]
+    journey: Assets CRUD
+    lens: Consistency
+    title: Empty states offer a clear next step
+    check: An empty list shows an inline create action, like the Documents empty state does.
+    default_severity: S3
+    visual_fix: true
+    fluent_hint: "No EmptyState in v9. Compose icon, Text (subtitle) and a primary Button, matching the Documents empty state."
+    shadcn_hint: "Empty with EmptyMedia (icon), EmptyTitle, EmptyDescription and a Button inside EmptyContent, same as the Documents empty state."
+    verify: [script, ai]
+    known_issue: Assets home empty state has no inline CTA (Findings Log #3).
+    confidence: confirmed
+
+  - id: CRUD-08
+    ref: [C2, BP-60]
+    journey: Assets CRUD
+    lens: Consistency
+    title: Components match the design system
+    check: Buttons and inputs match the Storybook components (Button variants, BulkActionBar). Flag unexplained one-off styling.
+    default_severity: O          # design suggestion when the UI works
+    verify: [ai, human]
+    known_issue: Edit button styled differently from other buttons, may be intentional (Findings Log #4).
+    confidence: unconfirmed
+
+  - id: CRUD-09
+    ref: [A1, E5]
+    journey: Assets CRUD
+    lens: Flows and speed
+    title: "Bulk selection behaves predictably"
+    check: "Select one row, several rows and select-all; deselect one after select-all; clear the selection. The count always matches, and the bulk bar (Access, Tags, Actions) shows only while something is selected."
+    default_severity: S2
+    verify: [script]
+    note: "Use bulk actions only on records you created in this run."
+    qa_refs: ["assets-crud_spec.ts:L359-L415"]
+    qa_note: "QA reports select-all as flaky in an existing test (TC-A08 in assets-list.spec.ts). Test select-all and deselect carefully; if the count is wrong, that is a real finding."
+    confidence: unconfirmed
+
+  - id: CRUD-10
+    ref: [A7, B3]
+    journey: Assets CRUD
+    lens: Clarity
+    title: "Staged edits are clear"
+    check: "Editing a field on a record shows per-field Edit or Add buttons, a change counter, and Save changes / Discard / Cancel. After saving, the bar disappears and the new value shows. Discard really restores the old value."
+    default_severity: S3
+    verify: [script, ai]
+    qa_refs: ["TC-DOC-002", "TC-DOC-011", "TC-DOC-012", "assets-crud_spec.ts:L162-L214"]
+    confidence: unconfirmed
+
+  - id: CRUD-11
+    ref: [A8, B2]
+    journey: Assets CRUD
+    lens: Clarity
+    title: "Duplicate and Apply tags dialogs are clear"
+    check: "More actions > Duplicate and the bulk Tags > Apply tags dialogs state what will happen, name the affected records, and end with a visible result."
+    default_severity: S3
+    verify: [script, ai]
+    note: "Run only on records you created in this run."
+    qa_refs: ["assets-crud_spec.ts:L215-L273"]
+    confidence: unconfirmed
+
+  - id: CRUD-12
+    ref: [E1, E3]
+    journey: Assets CRUD
+    lens: Navigation
+    title: "Record tabs, Copy link and Expand all work"
+    check: "Each tab (Overview, Details, Relationships, Attachments, Access, History, Sources, System info) opens and shows content or a clear empty state. Copy link and Expand record work. Reloading the page with the drawer open (?drawer= in the URL) reopens the same record."
+    default_severity: S3
+    verify: [script]
+    qa_refs: ["assets-crud_spec.ts:L301", "assets-crud_spec.ts:L328", "assets-crud_spec.ts:L490", "assets-crud_spec.ts:L495"]
+    qa_note: "QA checks that the 8 tabs exist for Servers but not what the Relationships, Attachments, History, Sources and System info tabs show."
+    confidence: unconfirmed
+
+  # ---------------- DOCUMENT EDITING ----------------
+  - id: DOC-01
+    ref: [BP-104]
+    journey: Document editing
+    lens: Flows and speed
+    title: Saving does not change formatting
+    check: Nested lists and indentation are identical before and after save and reload.
+    default_severity: S2          # S1 if the meaning of the content changes
+    verify: [script]
+    automation_hint: Type nested list content, save, reload, compare the document HTML structure before and after.
+    known_issue: Sept 29 - indentation shifted on save, shown live by Sherwin.
+    confidence: confirmed
+    qa_refs: ["TC-DOC-003", "TC-DOC-004"]
+    qa_note: "A document created in the Markdown editor stores Markdown (bold is saved as **), and the read view renders it through streamdown. Compare structure before and after save, in both modes if available."
+
+  - id: DOC-02
+    ref: [A2]
+    journey: Document editing
+    lens: Flows and speed
+    title: Formatting toolbar works by keyboard
+    check: Bold, italic and list controls can be reached and used without the mouse.
+    default_severity: S2
+    verify: [script]
+    confidence: unconfirmed
+    qa_refs: []
+    qa_note: "QA notes the formatting toolbar is a plain group labelled 'Document formatting', not a toolbar role (see A11Y-06)."
+
+  - id: DOC-03
+    ref: [B5]
+    journey: Document editing
+    lens: Clarity
+    title: AI edits need explicit approval
+    check: Any AI-proposed change shows approve and reject, and is never applied silently.
+    default_severity: S1
+    verify: [script, human]
+    confidence: unconfirmed
+
+  - id: DOC-04
+    ref: [BP-109]
+    journey: Document editing
+    lens: Clarity
+    title: Formatting syntax renders, it does not leak
+    check: Syntax such as ==highlight== renders as styled text, not literal characters.
+    default_severity: S3
+    verify: [script]
+    known_issue: Oct 1 - literal ==text== seen, may have been test content (Findings Log #5).
+    confidence: unconfirmed
+    qa_refs: ["TC-DOC-007"]
+    qa_note: "Underline and Highlight exist only in HTML mode; Markdown mode does not offer them and the toolbar says so (TC-DOC-007). Typing ==text== in a Markdown document showing raw text may be expected. Test both modes before reporting. If the editor shows highlight styling that the saved view does not, rate S3 for the mismatch."
+
+  - id: DOC-05
+    ref: [A7]
+    journey: Document editing
+    lens: Flows and speed
+    title: Save state is always visible
+    check: The user can tell whether the document is saved, saving or unsaved.
+    default_severity: S2
+    visual_fix: true
+    fluent_hint: "Small caption Text with Spinner (tiny) while saving, then 'Saved'."
+    shadcn_hint: "text-xs status text with Spinner while saving, then 'Saved'."
+    verify: [ai]
+    confidence: unconfirmed
+    qa_refs: ["TC-DOC-002", "TC-DOC-011"]
+    qa_note: "A change counter (No changes yet / N change) and Save / Discard / Cancel show unsaved state (TC-DOC-002, 011). Judge whether it is easy to notice, not whether it exists."
+
+  - id: DOC-06
+    ref: [B1, B2]
+    journey: Document editing
+    lens: Clarity
+    title: "Markdown and HTML mode switch is understandable"
+    check: "Switching between Markdown and HTML does not lose formatting in either direction. Formats a mode cannot do are labelled as unsupported (for example Underline in Markdown) instead of silently missing."
+    default_severity: S3
+    verify: [script, ai]
+    qa_refs: ["TC-DOC-007"]
+    qa_note: "QA says the round trip is not symmetric: the buttons only change how the next save is stored."
+    confidence: unconfirmed
+
+  - id: DOC-07
+    ref: [A7, A8]
+    journey: Document editing
+    lens: Flows and speed
+    title: "Back-out paths leave the record unchanged"
+    check: "Discard on a staged rename, Cancel in the body editor, and Clear on an expiry date each change only what their label says, and nothing is saved to the server."
+    default_severity: S3
+    verify: [script]
+    qa_refs: ["TC-DOC-011", "TC-DOC-012", "TC-DOC-013"]
+    confidence: unconfirmed
+
+  - id: DOC-08
+    ref: [B1, A6]
+    journey: Document editing
+    lens: Clarity
+    title: "Expiry date is clear and time-zone safe"
+    check: "The expiry button reads Set expiry or Expires <date>. The day shown after save is the day the user picked, and the same day appears in the list's Expires On column. Check the displayed day would not shift for someone in another time zone."
+    default_severity: S2
+    verify: [script, human]
+    qa_refs: ["TC-DOC-005", "TC-DOC-013"]
+    qa_note: "QA's expected value is local midnight converted to UTC (for example 2026-10-30T18:30:00Z). A user in a different time zone may see a different day. Verify, do not assume."
+    confidence: unconfirmed
+
+  - id: DOC-09
+    ref: [A8, B2]
+    journey: Document editing
+    lens: Flows and speed
+    title: "More actions menu items work and are clear"
+    check: "More actions > Duplicate, Print, Restore revision and Download document each open a clear step and end with a visible result. Restore revision names the revision being restored."
+    default_severity: S3
+    verify: [script, ai]
+    note: "Duplicate and Restore only on records you created in this run."
+    qa_refs: []
+    qa_note: "QA's own matrix lists these as not covered (rows 16, 17, 18, 21)."
+    confidence: unconfirmed
+
+  - id: DOC-10
+    ref: [A1, A2]
+    journey: Document editing
+    lens: Flows and speed
+    title: "Editor inserts survive save"
+    check: "Insert an image, a link, an embed and a table, then save and reload. Each appears as inserted, and images become attachments."
+    default_severity: S2
+    verify: [script]
+    qa_refs: []
+    qa_note: "QA's own matrix lists these as not covered (rows 22, 23)."
+    confidence: unconfirmed
+
+  # ---------------- ACCESSIBILITY AND CONSISTENCY (all journeys) ----------------
+  - id: A11Y-01
+    ref: [D1]
+    journey: All
+    lens: Accessibility
+    title: Text contrast, WCAG 2.1 AA
+    check: Composed pages meet contrast minimums. Components already pass in Storybook, so check them in real pages.
+    default_severity: S3
+    verify: [script]
+    automation_hint: Run axe-core on each journey step. Rule color-contrast.
+    confidence: confirmed
+
+  - id: A11Y-02
+    ref: [D2, D5]
+    journey: All
+    lens: Accessibility
+    title: Visible focus and focus return
+    check: A visible focus indicator shows when tabbing. Closing a modal or drawer returns focus sensibly.
+    default_severity: S2
+    visual_fix: true
+    fluent_hint: "useRestoreFocusSource and useRestoreFocusTarget on Drawer and Dialog triggers; Escape closes unless modalType is 'alert'."
+    shadcn_hint: "Radix Dialog behavior (Sheet, AlertDialog): confirm focus returns to the trigger and Escape closes; for custom panels add the same behavior."
+    verify: [script]
+    note: Applies to side drawers and panels, not only modals.
+    confidence: unconfirmed
+
+  - id: A11Y-03
+    ref: [D3]
+    journey: All
+    lens: Accessibility
+    title: Icon-only buttons have accessible names
+    check: Every button that shows only an icon (more, expand, close, delete) has a name a screen reader can announce.
+    default_severity: S3
+    visual_fix: true
+    fluent_hint: "Icon-only Button needs aria-label or Tooltip with relationship 'label'."
+    shadcn_hint: "Button variant ghost with an icon size plus aria-label, or wrap in Tooltip."
+    verify: [script]
+    automation_hint: Run axe-core. Rule button-name.
+    confidence: unconfirmed
+
+  - id: A11Y-04
+    ref: [BP-110]
+    journey: All
+    lens: Consistency
+    title: Drawer header action hierarchy
+    check: In the asset detail drawer, primary, secondary and utility actions are visually distinguishable, not equal weight.
+    default_severity: O          # design suggestion when the UI works
+    visual_fix: true
+    fluent_hint: "Drawer (Inline for non-blocking detail): DrawerHeader with DrawerHeaderTitle and an action slot holding a subtle close Button; group secondary actions in a MenuButton; at most one primary Button; TabList for the tabs."
+    shadcn_hint: "Title row with Button ghost icons (aria-label) for expand and close; secondary actions in one Dropdown Menu 'More'; at most one default Button; Tabs below the header."
+    verify: [ai, human]
+    note: DRAFT pattern. Compare with the Button variants in Storybook before treating as a defect.
+    confidence: unconfirmed
+
+  - id: A11Y-05
+    ref: [D3]
+    journey: All
+    lens: Accessibility
+    title: "Form controls and the editor have accessible names"
+    check: "Every create-form field, the organization picker, and the rich text editor surface has an accessible name (not a placeholder alone), and the editor exposes a text-box role."
+    default_severity: S3
+    verify: [script]
+    note: "Run axe rules label and aria-input-field-name, and read the accessibility tree."
+    qa_refs: ["create-asset-pom.ts", "FEATURE-doc-edit.md"]
+    qa_note: "QA's POM comments say most create fields use placeholders only, the organization picker has no accessible name, and the editor has no role or aria-label. Unverified by us. Rate S2 only if a screen-reader user could not complete creating a record."
+    confidence: unconfirmed
+
+  - id: A11Y-06
+    ref: [D3, A2]
+    journey: All
+    lens: Accessibility
+    title: "Toolbar and grid semantics"
+    check: "The formatting toolbar exposes a toolbar role with arrow-key movement, and grid column headers have names a screen reader can announce."
+    default_severity: S3
+    verify: [script]
+    qa_refs: ["FEATURE-doc-edit.md", "servers-listing-pom.ts"]
+    qa_note: "QA says the toolbar is a plain group labelled Document formatting and grid column headers have no aria-label. Unverified by us."
+    confidence: unconfirmed
+
+# Intentionally NOT checks (confirmed good behavior or intended design, do not flag):
+#   - Archive is a soft delete, data still exists. Check the archive filter before reporting data loss.
+#   - Read-only organizations blocking create and edit is expected.
+#   - Core asset types (Document, Password, Contact, Location) have locked system fields by design.
+#   - Search close behavior, case-insensitivity and permission filtering are already well tested by QA.
+#   - Create disabled until required fields are set (Name, Organization, Role for Servers): expected per QA (TC-DOC-009, assets-crud_spec.ts). Only the missing marking or explanation can be a finding.
+#   - Empty required name blocked by native browser validation: expected per QA (TC-DOC-010).
+#   - Underline and Highlight missing in Markdown mode: expected per QA (TC-DOC-007). Test HTML mode before reporting.
+#   - Search shorthand AD becomes Active Directory: intentional (SPEC-TC-04). Search widget labels and roles are verified by QA (SPEC-TC-12).
+#   - Staged edits with a change counter and Save / Discard / Cancel: the intended edit model.

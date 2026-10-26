@@ -39,7 +39,7 @@ From this directory, after the container is up:
 docker compose exec harness npm run ticket -- LEX-2293
 ```
 
-That starts the run and streams the log. Preflight signs in, the coordinator explores live UAT, the author writes specs, and Playwright runs them. `docker compose down` stops the server and keeps the run volume.
+That starts the run and streams the log. Preflight signs in, the explorer explores live UAT, the author writes specs, Playwright runs them (with automated healing if locators drifted), and the UI/UX auditor audits the ticket's screens against Lexful's UX rulebook, 5 lenses, and Fluent/shadcn design standards. `docker compose down` stops the server and keeps the run volume.
 
 ## Phase 1 — checked-in suite
 
@@ -81,11 +81,17 @@ runs/phase-1/2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision/
   opencode/             agent session and healer transcript
 
 runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/
+  report.md             unified report (QA results + UX audit scorecard)
   FEATURE.md            what was observed on UAT
   specs/                spec files written for that ticket
   explore/              browser snapshots
   context-pack.json
   planned-specs.json
+  qa-result.json        functional pass/fail counts and verdict
+  ux-findings.json      structured UI/UX findings
+  ux-scorecard.json     UX scores and advisory verdict
+  ux-report.md          detailed 5-lens UI/UX audit report
+  before-after/         (optional) Before UAT vs After concept mocks
 ```
 
 Phase 1 does not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Ticket specs stay in that attempt's `specs/` folder.

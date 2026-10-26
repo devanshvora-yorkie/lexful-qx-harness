@@ -231,6 +231,44 @@
         { "action": "edit", "resource": "runs/**", "effect": "allow" },
         { "action": "edit", "resource": "**/FEATURE.md", "effect": "deny" }
       ]
+    },
+    "ux-auditor": {
+      "mode": "subagent",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
+      "description": "Performs 5-lens UI/UX audit, pattern checks, drift review, and generates UX findings and Before/After mocks.",
+      "system": "Read .agents/prompts/qa-ux-auditor.md, .agents/skills/lexful-ux-audit-gate/SKILL.md, .agents/skills/fluent-ui-design-system/SKILL.md, and .agents/ux/QA_TRACEABILITY.md. Use playwright-cli state-load runs/cache/stytch/session.json. Evaluate the ticket journey against .agents/ux/lexful-ux-checks.yaml. Write ux-findings.json, ux-scorecard.json, and ux-report.md in the run directory.",
+      "steps": 40,
+      "permissions": [
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": ".agents/**", "effect": "allow" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "edit", "resource": "server/**", "effect": "deny" },
+        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
+        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
+        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
+        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
+        { "action": "edit", "resource": "e2e test cases/**", "effect": "deny" },
+        { "action": "edit", "resource": "runs/**", "effect": "allow" }
+      ]
     }
   }
 }

@@ -224,6 +224,38 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         "verdict",
         f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}",
     )
+
+    if settings.run_ux_audit and ticket:
+        book.phase("ui-ux audit")
+        ux_prompt = _ux_audit_prompt(
+            folder,
+            ticket,
+            preflight,
+            with_visuals=settings.ux_before_after,
+            mode=settings.ux_mode,
+        )
+        (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
+        ux_code, ux_session_id = runners.run_opencode(
+            folder,
+            session_id=session_id or None,
+            prompt=ux_prompt,
+            title=f"{ticket} ux-audit",
+            log_name="ux-audit.jsonl",
+            resume=bool(session_id),
+            agent="ux-auditor",
+        )
+        if ux_session_id:
+            store.update_run(run_id, opencodeSession=ux_session_id)
+            runners.export_session(folder, ux_session_id)
+        ux_card = _read_json(folder / "ux-scorecard.json")
+        ux_findings = _read_findings(folder / "ux-findings.json")
+        ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "ADVISORY-FAIL"))
+        book.row(
+            "server",
+            "ux-audit",
+            f"verdict {ux_verdict}  score {ux_card.get('score', 100)}  {len(ux_findings)} finding(s)",
+        )
+
     store.update_run(run_id, status=status, error=None)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
@@ -459,6 +491,33 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
         f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
         "Do not run preflight, do not call /auth/password, and do not run the Playwright suite.",
+    ])
+
+
+def _ux_audit_prompt(
+    folder: Path,
+    ticket: str,
+    preflight: dict[str, Any],
+    *,
+    with_visuals: bool = False,
+    mode: str = "simple",
+) -> str:
+    relative = _display(folder)
+    return "\n".join([
+        f"UI/UX Audit for ticket: {ticket}",
+        f"Run directory: {relative}",
+        f"Context pack: {relative}/context-pack.json",
+        f"Feature map and explored routes: {relative}/FEATURE.md",
+        f"Exploration snapshots: {relative}/explore/",
+        f"Triage notes and healed locators: {relative}/triage.json",
+        "Follow .agents/skills/lexful-ux-audit-gate/SKILL.md, .agents/skills/fluent-ui-design-system/SKILL.md, and .agents/ux/QA_TRACEABILITY.md.",
+        "Evaluate the ticket journey against .agents/ux/lexful-ux-checks.yaml and .agents/ux/Lexful_Bad_UX_Pattern_Library_v0.6.md.",
+        "Remember calibration rules: working UI passes; QA-expected behavior is at most an Observation (O).",
+        "Review any locator heals in triage.json per rules H1-H6.",
+        f"Output mode: {mode} (simple = suggested solution focus; advanced = full background, reasoning, and technical breakdown).",
+        f"Before/After concept mocks enabled: {'true' if with_visuals else 'false'}.",
+        f"Write ux-findings.json, ux-scorecard.json, and ux-report.md into {relative}/.",
+        "Do not write test specs and do not edit product code.",
     ])
 
 
@@ -768,9 +827,63 @@ def _write_qa_result(
         "models": {"main": settings.main_model, "subagents": settings.sub_model},
         "open_issues": issues or drafted.get("open_issues") or [],
     }
+    ux_card = _read_json(folder / "ux-scorecard.json")
+    if ux_card:
+        payload["ux"] = {
+            "verdict": ux_card.get("verdict"),
+            "score": ux_card.get("score"),
+            "findings_count": len(_read_findings(folder / "ux-findings.json")),
+            "report_file": "ux-report.md" if (folder / "ux-report.md").is_file() else None,
+        }
     if extra:
         payload.update(extra)
     (folder / "qa-result.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _read_findings(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and isinstance(data.get("failures"), list):
+        return data["failures"]
+    if isinstance(data, dict) and isinstance(data.get("findings"), list):
+        return data["findings"]
+    return []
+
+
+def _ux_report_section(folder: Path) -> list[str]:
+    card = _read_json(folder / "ux-scorecard.json")
+    if not card and not (folder / "ux-report.md").is_file():
+        return []
+    findings = _read_findings(folder / "ux-findings.json")
+    lines = [
+        "## UI/UX Audit Summary",
+        "",
+        f"- UX Verdict: **{card.get('verdict', 'PASS')}**",
+        f"- Score: {card.get('score', 100)} / 100",
+        f"- Findings: S0={card.get('S0', 0)}, S1={card.get('S1', 0)}, S2={card.get('S2', 0)}, S3={card.get('S3', 0)}, Observations={card.get('O', 0)}",
+        "- Detailed Report: `ux-report.md`",
+        "- Structured Findings: `ux-findings.json`",
+    ]
+    if (folder / "before-after").is_dir():
+        lines.append("- Visual Concept Mocks: `before-after/`")
+    if findings:
+        lines.append("")
+        lines.append("### Key UX Findings")
+        lines.append("")
+        for f in findings[:10]:
+            if isinstance(f, dict):
+                sev = f.get("severity") or "O"
+                cid = f.get("checkId") or f.get("id") or "UX"
+                title = f.get("title") or f.get("issue") or ""
+                lines.append(f"- **[{sev}] {cid}**: {title}")
+    lines.append("")
+    return lines
 
 
 def _write_report(
@@ -803,5 +916,8 @@ def _write_report(
         lines.append("## Open issues")
         lines.extend(f"- {issue}" for issue in issues)
         lines.append("")
+    ux_section = _ux_report_section(folder)
+    if ux_section:
+        lines.extend(ux_section)
     lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. The Stytch session is `runs/cache/stytch/session.json`.")
     (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

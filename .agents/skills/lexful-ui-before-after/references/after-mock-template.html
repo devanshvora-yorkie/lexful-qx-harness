@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1440">
+<title>After mock (concept)</title>
+<style>
+/* ---------- HOW TO USE ----------
+   1. Replace the <section class="stage"> content with the region you are recreating.
+   2. Keep real text from the Before screenshot. Do not invent content.
+   3. Override the COLOR placeholders below with colors measured from Lexful's screenshot (keep Lexful brand, not Microsoft blue).
+   4. Keep the viewport at 1440 x 900 and screenshot the same crop as the Before.
+   Direction: shadcn/ui components with Fluent-aligned design. The mock only imitates how the shadcn component looks; name the real shadcn component in the report.
+   Values marked VERIFIED come from the official Fluent UI React v9 theme docs (2026-10-13). They map to Tailwind: spacing 4/8/12/16/20/24/32px = classes 1/2/3/4/5/6/8; text 12/14/20/24px = text-xs/sm/xl/2xl.
+   Keep Lexful's own font and brand colors; do not switch to Segoe UI.
+   Values marked APPROX or PLACEHOLDER must be replaced or re-checked. */
+:root{
+  /* Spacing, VERIFIED (px) */
+  --spacingXXS:2px; --spacingXS:4px; --spacingSNudge:6px; --spacingS:8px; --spacingMNudge:10px;
+  --spacingM:12px; --spacingL:16px; --spacingXL:20px; --spacingXXL:24px; --spacingXXXL:32px;
+  /* Border radius, VERIFIED */
+  --radiusSmall:2px; --radiusMedium:4px; --radiusLarge:6px; --radiusXLarge:8px; --radius2XLarge:12px;
+  /* Font, VERIFIED */
+  --fontBase:'Segoe UI','Segoe UI Web (West European)',-apple-system,BlinkMacSystemFont,Roboto,'Helvetica Neue',sans-serif;
+  /* COLOR placeholders: replace from the Before screenshot */
+  --brand:#4f46e5;            /* PLACEHOLDER: Lexful brand indigo, measure it */
+  --brandHover:#4338ca;       /* PLACEHOLDER */
+  --bg1:#ffffff;              /* surface */
+  --bg2:#f7f7f8;              /* page */
+  --fg1:#1a1a1a;              /* primary text */
+  --fg2:#616161;              /* secondary text */
+  --stroke:#e0e0e0;           /* borders */
+  --danger:#b10e1c;           /* PLACEHOLDER */
+  --success:#107c10;          /* PLACEHOLDER */
+}
+*{box-sizing:border-box}
+body{margin:0;width:1440px;min-height:900px;background:var(--bg2);color:var(--fg1);font-family:var(--fontBase);font-size:14px;line-height:20px}
+/* Type ramp, VERIFIED sizes/line heights */
+.caption1{font-size:12px;line-height:16px}
+.body1{font-size:14px;line-height:20px}
+.body1-strong{font-size:14px;line-height:20px;font-weight:600}
+.subtitle2{font-size:16px;line-height:22px;font-weight:600}
+.subtitle1{font-size:20px;line-height:28px;font-weight:600}
+.secondary{color:var(--fg2)}
+.stage{position:relative;width:1440px;height:900px;overflow:hidden}
+.concept-tag{position:absolute;right:12px;bottom:12px;font-size:11px;line-height:14px;background:#fff8c5;border:1px solid #e3d04f;color:#5c4b00;padding:2px 8px;border-radius:var(--radiusMedium);z-index:99}
+
+/* Button, appearances per official doc. Heights are APPROX (verify). */
+.btn{font:inherit;display:inline-flex;align-items:center;gap:var(--spacingSNudge);min-height:32px;padding:0 var(--spacingM);border-radius:var(--radiusMedium);border:1px solid var(--stroke);background:var(--bg1);color:var(--fg1);cursor:pointer}
+.btn.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+.btn.subtle{background:transparent;border-color:transparent}
+.btn.outline{background:transparent}
+.btn.icon-only{padding:0;width:32px;justify-content:center}
+
+/* Field with validation message */
+.field{display:flex;flex-direction:column;gap:var(--spacingXXS);margin-bottom:var(--spacingL)}
+.field label{font-weight:600}
+.field input{font:inherit;height:32px;padding:0 var(--spacingM);border:1px solid var(--stroke);border-radius:var(--radiusMedium)}
+.field.error input{border-color:var(--danger)}
+.field .msg{color:var(--danger);font-size:12px;line-height:16px}
+
+/* MessageBar and Toast (APPROX) */
+.messagebar{display:flex;gap:var(--spacingS);align-items:center;padding:var(--spacingS) var(--spacingM);border:1px solid var(--stroke);border-radius:var(--radiusMedium);background:var(--bg1)}
+.toast{position:absolute;right:24px;top:24px;width:320px;padding:var(--spacingM) var(--spacingL);background:var(--bg1);border:1px solid var(--stroke);border-radius:var(--radiusMedium);box-shadow:0 8px 16px rgba(0,0,0,.14)}
+
+/* Drawer anatomy: header (title + action slot), tabs, body, footer. Size small=320, medium=592, large=940 (VERIFIED) */
+.drawer{position:absolute;right:0;top:0;bottom:0;width:592px;background:var(--bg1);border-left:1px solid var(--stroke);display:flex;flex-direction:column}
+.drawer-header{padding:var(--spacingL) var(--spacingXL) var(--spacingS)}
+.drawer-title-row{display:flex;align-items:center;justify-content:space-between;gap:var(--spacingM)}
+.drawer-actions{display:flex;align-items:center;gap:var(--spacingXS)}
+.drawer-crumb{display:flex;gap:var(--spacingS);align-items:center;margin-top:var(--spacingXS)}
+.tabs{display:flex;gap:var(--spacingXL);padding:0 var(--spacingXL);border-bottom:1px solid var(--stroke)}
+.tab{padding:var(--spacingS) 0;border-bottom:2px solid transparent;color:var(--fg2)}
+.tab.active{color:var(--brand);border-color:var(--brand);font-weight:600}
+.drawer-body{flex:1;padding:var(--spacingXL);overflow:auto}
+.drawer-footer{display:flex;gap:var(--spacingS);padding:var(--spacingL) var(--spacingXL);border-top:1px solid var(--stroke)}
+
+/* Empty state: shadcn Empty = EmptyMedia + EmptyTitle + EmptyDescription + a Button in EmptyContent. */
+.empty{display:flex;flex-direction:column;align-items:center;gap:var(--spacingS);padding:var(--spacingXXXL)}
+</style>
+</head>
+<body>
+<section class="stage">
+
+  <!-- SAMPLE ONLY: drawer header hierarchy (finding A11Y-04). Replace with the real region and real text.
+       shadcn implementation: title row + Button variant=ghost size=icon (aria-label) + Dropdown Menu 'More' + Tabs + one default Button. -->
+  <aside class="drawer" aria-label="Asset details">
+    <header class="drawer-header">
+      <div class="drawer-title-row">
+        <h2 class="subtitle1" style="margin:0">Example record name</h2>
+        <div class="drawer-actions">
+          <button class="btn outline">Download</button>             <!-- secondary action, visible -->
+          <button class="btn subtle">More ▾</button>                <!-- grouped secondary actions (MenuButton) -->
+          <button class="btn subtle icon-only" aria-label="Expand">⤢</button>
+          <button class="btn subtle icon-only" aria-label="Close">✕</button>
+        </div>
+      </div>
+      <div class="drawer-crumb caption1 secondary">Organization name · Documents</div>
+    </header>
+    <nav class="tabs" role="tablist">
+      <span class="tab active" role="tab">Document</span>
+      <span class="tab" role="tab">Relationships</span>
+      <span class="tab" role="tab">Attachments</span>
+      <span class="tab" role="tab">Access</span>
+      <span class="tab" role="tab">History</span>
+    </nav>
+    <div class="drawer-body body1">Body content goes here.</div>
+    <footer class="drawer-footer">
+      <button class="btn primary">Edit</button>                     <!-- one primary, left-most -->
+      <button class="btn">Cancel</button>
+    </footer>
+  </aside>
+
+  <div class="concept-tag">Concept mock, not the live product</div>
+</section>
+</body>
+</html>

@@ -147,6 +147,7 @@ def run_opencode(
     title: str,
     log_name: str,
     resume: bool = False,
+    agent: str = "qa",
 ) -> tuple[int, str]:
     """Run OpenCode on a terminal so each JSON line is flushed into run.log immediately.
 
@@ -164,7 +165,7 @@ def run_opencode(
         command.extend(["--session", active_session])
     command.extend([
         "--agent",
-        "qa",
+        agent,
         "--model",
         settings.main_model,
         "--title",
@@ -172,7 +173,7 @@ def run_opencode(
         "--auto",
         prompt,
     ])
-    book.row("qa", "launch", f"continue {active_session}" if active_session else f"new session  {settings.main_model}")
+    book.row(agent, "launch", f"continue {active_session}" if active_session else f"new session  {settings.main_model}")
     started_ms = int(time.time() * 1000)
 
     def remember(text: str) -> None:
@@ -185,7 +186,7 @@ def run_opencode(
             return
         active_session = found
         tail.parent_id = found
-        book.row("qa", "session", found)
+        book.row(agent, "session", found)
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 200, 400, 0, 0))
     process = subprocess.Popen(

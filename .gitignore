@@ -16,3 +16,4 @@ __pycache__/
 .playwright-cli/
 .DS_Store
 *.log
+*.zip
