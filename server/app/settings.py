@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MAIN_MODEL_DEFAULT = "openrouter/anthropic/claude-haiku-5.5"
-SUB_MODEL_DEFAULT = "openrouter/anthropic/claude-haiku-5.5"
+MAIN_MODEL_DEFAULT = "amazon-bedrock/us.anthropic.claude-haiku-5-5"
+SUB_MODEL_DEFAULT = "amazon-bedrock/us.anthropic.claude-haiku-5-5"
 SECRET_ENV = (
     "STYTCH_ADMIN_PASSWORD",
     "STYTCH_SUPPORT_PASSWORD",

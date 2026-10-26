@@ -153,7 +153,7 @@ Access Points(40), Applications(58), Backups(30), Cameras(29), Computers(95), Co
 
 ## 5. Where the suites live now
 
-Checked-in suites are under `e2e test cases/`. Each folder has its own spec and page objects. A ticket run writes new specs under `runs/<ticket>/<run-id>/specs/`. There is no `tests/` directory.
+Checked-in suites are under `e2e test cases/`. Each folder has its own spec and page objects. A locator heal from phase 1 is written into that folder. A ticket run writes new specs under `runs/tickets/<ticket>/<attempt>/specs/`. There is no `tests/` directory.
 
 ---
 
@@ -203,7 +203,7 @@ node scripts/specs.mjs --headed "e2e test cases/document editing"
 A ticket run is `docker compose exec harness npm run ticket -- LEX-1234`.
 
 ### Auth state refresh
-No manual step — `auth-helper.ts` checks `auth-state.json` expiry on first test and refreshes via API when stale.
+No manual step. `STYTCH_PERSONA` selects the account. The only cookie file is `runs/cache/stytch/session.json`. The container refreshes it on start, and a run that loses the session signs in again as that same persona.
 
 ---
 

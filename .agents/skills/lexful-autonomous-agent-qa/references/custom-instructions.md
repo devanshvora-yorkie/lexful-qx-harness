@@ -1,7 +1,7 @@
 # Custom Instructions — lexful-test
 
 Caveats only. Structural conventions (folder layout, POM organization, runner) live in `SKILL.md`.
-Auth, Linear, and GitHub already ran in the server preflight. Reuse the run directory's `auth-state.json`. Do not call `/auth/password` per test.
+Auth, Linear, and GitHub already ran in the server preflight. Load `runs/cache/stytch/session.json`. Do not call `/auth/password` per test.
 Stay inside this repo. Linear is the named ticket and its connected issues. GitHub is the pull request diff only. Do not open Downloads or any other folder.
 Everything here was verified against the live UAT DOM (2026-10) — do not treat as theory.
 
@@ -15,8 +15,9 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
 - **"Ask Lex" appears 3×** in the DOM — scope with `header` or `.first()`.
 - **Drawer state leaks across tests** — reset with `page.goto('about:blank')` before navigating,
   or an open drawer blocks treegrid re-render.
-- **Auth cookie expiry is silent**: `auth-state.json` sessions last ~12h. `auth-helper.ts` refreshes
-  via `/auth/password` only when expired — the API rate-limits, so never call it per-test.
+- **Auth cookie expiry is silent**: the session in `runs/cache/stytch/session.json` lasts ~12h.
+  The server refreshes that one file for the persona in `STYTCH_PERSONA` and reruns the suite if it
+  expires. Do not call `/auth/password` per test. The API rate-limits.
 - **CloudFront 403 on shared UAT**: ~1-3% of navigations; escalates if the suite runs several times an
   hour. `retries: 2` absorbs it, but space out runs.
 - **`waitUntil: 'networkidle'` is banned** — it caused multi-minute hangs. `domcontentloaded` + an

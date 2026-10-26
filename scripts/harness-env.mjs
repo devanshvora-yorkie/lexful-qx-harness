@@ -16,13 +16,20 @@ export function env(name, fallback = '') {
   return value == null || value.trim() === '' ? fallback : value.trim();
 }
 
+export const PERSONAS = {
+  admin: ['STYTCH_ADMIN_EMAIL', 'STYTCH_ADMIN_PASSWORD'],
+  support: ['STYTCH_SUPPORT_EMAIL', 'STYTCH_SUPPORT_PASSWORD'],
+  viewer: ['STYTCH_VIEWER_EMAIL', 'STYTCH_VIEWER_PASSWORD'],
+};
+
+/** A suite must not start on a session that will die while Playwright is still running. */
+export const SESSION_REUSE_SLACK_SECONDS = 60 * 60;
+
 export const CFG = {
   qaUrl: env('QA_ENV_URL', env('LEXFUL_APP_URL', 'https://e2e-test.uat.lexful.net')),
   apiUrl: env('STYTCH_API_URL', 'https://api.uat.lexful.net').replace(/\/$/, ''),
   slug: env('SLUG', 'e2e-test'),
   org: env('STYTCH_ORGANIZATION_ID'),
-  email: env('STYTCH_ADMIN_EMAIL'),
-  password: env('STYTCH_ADMIN_PASSWORD'),
   linearKey: env('LINEAR_API_KEY'),
   linearUrl: env('LINEAR_API_URL', 'https://api.linear.app/graphql'),
   githubToken: env('GITHUB_TOKEN', env('GH_TOKEN')),
@@ -131,12 +138,23 @@ function parseSetCookie(raw) {
   };
 }
 
-function personaSlug() {
-  return (CFG.email || 'admin').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'admin';
+export function personaName() {
+  const name = env('STYTCH_PERSONA', 'admin').toLowerCase();
+  if (!PERSONAS[name]) {
+    throw new Error(`STYTCH_PERSONA must be admin, support, or viewer. Got ${name}`);
+  }
+  return name;
 }
 
-export function sessionCacheFile() {
-  return path.join(ROOT, 'runs', 'cache', 'stytch', `${personaSlug()}.json`);
+export function personaCredentials() {
+  const name = personaName();
+  const [emailKey, passwordKey] = PERSONAS[name];
+  return { name, emailKey, passwordKey, email: env(emailKey), password: env(passwordKey) };
+}
+
+/** The only Stytch cookie file. Playwright and playwright-cli both read this path. */
+export function sessionFile() {
+  return path.join(ROOT, 'runs', 'cache', 'stytch', 'session.json');
 }
 
 function writeSecretJson(file, value) {
@@ -178,24 +196,30 @@ async function probeApp(cookies) {
   };
 }
 
-function publishSession(record, destDir) {
-  const state = { cookies: record.cookies };
-  writeSecretJson(path.join(ROOT, 'auth-state.json'), state);
-  writeSecretJson(sessionCacheFile(), record);
-  if (destDir) writeSecretJson(path.join(destDir, 'auth-state.json'), state);
+function publishSession(record) {
+  writeSecretJson(sessionFile(), record);
+}
+
+export function sessionReusable(cached, creds, now = Math.floor(Date.now() / 1000)) {
+  if (!cached || cached.persona !== creds.name) return false;
+  if (creds.email && cached.email && cached.email !== creds.email) return false;
+  const expiresAt = sessionExpiry(cached.cookies);
+  if (!(expiresAt > now + SESSION_REUSE_SLACK_SECONDS)) return false;
+  return Array.isArray(cached.cookies) && cached.cookies.length > 0;
 }
 
 async function loginStytch() {
-  if (!CFG.org || !CFG.email || !CFG.password) {
-    throw new Error('Set STYTCH_ORGANIZATION_ID, STYTCH_ADMIN_EMAIL, and STYTCH_ADMIN_PASSWORD');
+  const creds = personaCredentials();
+  if (!CFG.org || !creds.email || !creds.password) {
+    throw new Error(`Set STYTCH_ORGANIZATION_ID, ${creds.emailKey}, and ${creds.passwordKey}`);
   }
   const res = await fetch(`${CFG.apiUrl}/auth/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       account_external_id: CFG.org,
-      email: CFG.email,
-      password: CFG.password,
+      email: creds.email,
+      password: creds.password,
     }),
   });
   if (!res.ok) {
@@ -220,43 +244,60 @@ function sessionUsable(probe) {
   return probe.pageStatus === 200 || probe.pageStatus === 403;
 }
 
-/** Reuse the cached Stytch session when it is still inside its expiry and the app accepts it. */
-export async function ensureStytchSession(destDir) {
-  const file = sessionCacheFile();
+/**
+ * One session file for the persona in STYTCH_PERSONA.
+ * Reuse it only when the persona matches and more than an hour remains.
+ * `force` signs in again. Callers do not pass a second destination.
+ */
+export async function ensureStytchSession({ force = false } = {}) {
+  const creds = personaCredentials();
+  const file = sessionFile();
   const now = Math.floor(Date.now() / 1000);
-  if (existsSync(file)) {
+  if (!force && existsSync(file)) {
     try {
       const cached = JSON.parse(readFileSync(file, 'utf8'));
-      const expiresAt = sessionExpiry(cached.cookies);
-      if (expiresAt > now + 300 && Array.isArray(cached.cookies) && cached.cookies.length) {
+      if (sessionReusable(cached, creds, now)) {
         const probe = await probeApp(cached.cookies);
         if (sessionUsable(probe)) {
-          const record = { ...cached, expiresAt, probe, reusedAt: new Date().toISOString() };
-          publishSession(record, destDir);
+          const record = {
+            ...cached,
+            persona: creds.name,
+            email: creds.email,
+            origins: [],
+            expiresAt: sessionExpiry(cached.cookies),
+            probe,
+            reusedAt: new Date().toISOString(),
+          };
+          publishSession(record);
           return {
             reused: true,
+            persona: creds.name,
             status: cached.status,
             cookieCount: cached.cookies.length,
             ...probe,
           };
         }
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('STYTCH_PERSONA')) throw err;
       /* unreadable cache falls through to a fresh login */
     }
   }
   const fresh = await loginStytch();
   const record = {
-    persona: CFG.email,
+    persona: creds.name,
+    email: creds.email,
     capturedAt: new Date().toISOString(),
     expiresAt: sessionExpiry(fresh.cookies),
     status: fresh.status,
     cookies: fresh.cookies,
+    origins: [],
     probe: { landed: fresh.landed, onLogin: fresh.onLogin, pageStatus: fresh.pageStatus },
   };
-  publishSession(record, destDir);
+  publishSession(record);
   return {
     reused: false,
+    persona: creds.name,
     status: fresh.status,
     cookieCount: fresh.cookies.length,
     landed: fresh.landed,

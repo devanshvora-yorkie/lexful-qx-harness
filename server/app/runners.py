@@ -21,31 +21,66 @@ from app.logbook import Logbook, SubagentTail, plain, row, session_id_from_text
 from app.settings import SECRET_ENV, get_settings
 
 
+def session_state_path() -> Path:
+    """The only Stytch cookie file. A run folder does not get its own copy."""
+    return get_settings().root / "runs" / "cache" / "stytch" / "session.json"
+
+
+def _session_expired(log_text: str) -> bool:
+    lowered = log_text.lower()
+    return "stytch session expired" in lowered or "landed on login" in lowered
+
+
+def _bedrock_token() -> str:
+    return (os.environ.get("AWS_BEARER_TOKEN_BEDROCK") or os.environ.get("BEDROCK_API_KEY") or "").strip()
+
+
 def _opencode_env(run_dir: Path) -> dict[str, str]:
     settings = get_settings()
     env = os.environ.copy()
-    for key in SECRET_ENV:
+    for key in (*SECRET_ENV, "OPENROUTER_API_KEY", "BEDROCK_API_KEY"):
         env.pop(key, None)
+    token = _bedrock_token()
+    if token:
+        env["AWS_BEARER_TOKEN_BEDROCK"] = token
+    env["AWS_REGION"] = (os.environ.get("AWS_REGION") or "us-east-1").strip() or "us-east-1"
     env["OPENCODE_MAIN_MODEL"] = settings.main_model
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     env["QA_RUN_DIR"] = str(run_dir)
-    env["AUTH_STATE"] = str(run_dir / "auth-state.json")
+    env["AUTH_STATE"] = str(session_state_path())
     return env
 
 
 def _playwright_env(run_dir: Path) -> dict[str, str]:
     """Playwright runs model-written specs, so it does not inherit API keys or passwords.
 
-    The session is already in auth-state.json. A spec that prints process.env cannot see the secrets.
+    Cookies are read from runs/cache/stytch/session.json. A spec that prints process.env cannot see the secrets.
     """
     settings = get_settings()
     env = os.environ.copy()
-    for key in (*SECRET_ENV, "OPENROUTER_API_KEY"):
+    for key in (*SECRET_ENV, "OPENROUTER_API_KEY", "BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
         env.pop(key, None)
     env["QA_RUN_DIR"] = str(run_dir)
-    env["AUTH_STATE"] = str(run_dir / "auth-state.json")
+    env["AUTH_STATE"] = str(session_state_path())
     env["QA_ENV_URL"] = settings.qa_url
     return env
+
+
+def ensure_session(*, fresh: bool = False) -> tuple[int, str]:
+    """Sign in as STYTCH_PERSONA. The server process still has the password."""
+    settings = get_settings()
+    command = ["node", "scripts/session.mjs"]
+    if fresh:
+        command.append("--fresh")
+    process = subprocess.run(
+        command,
+        cwd=settings.root,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+    )
+    detail = (process.stderr or process.stdout or "").strip().splitlines()
+    return process.returncode, (detail[-1] if detail else "")[:220]
 
 
 def last_opencode_error(run_dir: Path, log_name: str) -> str:
@@ -427,6 +462,36 @@ def _stream_playwright(process: subprocess.Popen[bytes], master: int, handle: An
 
 
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
+    book = Logbook(run_dir)
+    ready, detail = ensure_session()
+    if ready != 0:
+        book.row("server", "session", f"failed  {detail or 'could not sign in'}")
+        return {
+            "exitCode": ready or 1,
+            "summary": {"passed": 0, "failed": 1, "skipped": 0, "flaky": 0},
+            "setupError": detail or "could not sign in",
+        }
+    result = _run_playwright_once(run_dir, specs)
+    log_text = _playwright_log(run_dir)
+    if result["exitCode"] == 0 or not _session_expired(log_text):
+        return result
+    book.row("server", "session", "session expired during the run. signing in again as the same persona")
+    refreshed, detail = ensure_session(fresh=True)
+    if refreshed != 0:
+        book.row("server", "session", f"refresh failed  {detail or 'could not sign in'}")
+        return result
+    book.row("server", "session", "refreshed. resuming the same specs")
+    return _run_playwright_once(run_dir, specs)
+
+
+def _playwright_log(run_dir: Path) -> str:
+    log_path = run_dir / "playwright" / "output.log"
+    if not log_path.is_file():
+        return ""
+    return log_path.read_text(encoding="utf-8", errors="replace")
+
+
+def _run_playwright_once(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     settings = get_settings()
     book = Logbook(run_dir)
     log_path = run_dir / "playwright" / "output.log"
@@ -465,7 +530,7 @@ def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
         code = 124
     summary = read_playwright_summary(run_dir)
     setup_error = ""
-    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
+    log_text = _playwright_log(run_dir)
     if "No tests found" in log_text:
         setup_error = "No tests found. The spec paths were outside the Playwright testDir."
     elif code != 0 and summary["failed"] == 0 and summary["passed"] == 0:

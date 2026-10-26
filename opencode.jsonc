@@ -1,7 +1,20 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openrouter/anthropic/claude-haiku-5.5",
-  "small_model": "openrouter/anthropic/claude-haiku-5.5",
+  "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
+  "small_model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
+  "provider": {
+    "amazon-bedrock": {
+      "options": {
+        "region": "us-east-1"
+      },
+      "models": {
+        "us.anthropic.claude-haiku-5-5": {
+          "name": "Claude Haiku 5.5",
+          "id": "us.anthropic.claude-haiku-5-5"
+        }
+      }
+    }
+  },
   "default_agent": "qa",
   "instructions": [
     ".agents/skills/lexful-autonomous-agent-qa/references/custom-instructions.md"
@@ -17,6 +30,7 @@
     { "action": "read", "resource": "**/.env", "effect": "deny" },
     { "action": "read", "resource": "**/.env.*", "effect": "deny" },
     { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+    { "action": "read", "resource": "**/session.json", "effect": "deny" },
     { "action": "edit", "resource": ".env", "effect": "deny" },
     { "action": "edit", "resource": "*.env", "effect": "deny" },
     { "action": "edit", "resource": ".env.*", "effect": "deny" },
@@ -53,6 +67,12 @@
     { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
     { "action": "bash", "resource": "*head*auth-state.json*", "effect": "deny" },
     { "action": "bash", "resource": "*tail*auth-state.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*cat*session.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*head*session.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*tail*session.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*cat*session.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*head*session.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*tail*session.json*", "effect": "deny" },
     { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
     { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
     { "action": "shell", "resource": "*printenv*", "effect": "deny" },
@@ -85,7 +105,7 @@
     },
     "qa": {
       "mode": "primary",
-      "model": "openrouter/anthropic/claude-haiku-5.5",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Coordinates one LEX ticket and delegates exploration, authoring, and healing",
       "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You coordinate. Delegate Phase 1 to qa-explorer, Phase 2 to qa-author, and fixes to qa-healer. Stay inside this repository. Do not read .env. Do not clone a product repo.",
       "steps": 24,
@@ -115,9 +135,9 @@
     },
     "qa-explorer": {
       "mode": "subagent",
-      "model": "openrouter/anthropic/claude-haiku-5.5",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Explore the live UAT app with playwright-cli and write FEATURE.md. No specs, no login, no Linear or GitHub.",
-      "system": "Read .agents/prompts/qa-explorer.md and Phase 1 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Use playwright-cli only. Do not write specs. Reuse the run directory auth-state.json. Do not read .env.",
+      "system": "Read .agents/prompts/qa-explorer.md and Phase 1 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Use playwright-cli only. Do not write specs. Load runs/cache/stytch/session.json with playwright-cli state-load. Do not read that file or .env.",
       "steps": 40,
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
@@ -145,7 +165,7 @@
     },
     "qa-author": {
       "mode": "subagent",
-      "model": "openrouter/anthropic/claude-haiku-5.5",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Write POM and Playwright specs from FEATURE.md and the context pack. No browser exploration.",
       "system": "Read .agents/prompts/qa-author.md and Phase 2 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Write specs from FEATURE.md and the context pack. Do not explore. Do not read .env. Do not clone a product repo.",
       "steps": 40,
@@ -175,7 +195,7 @@
     },
     "qa-healer": {
       "mode": "subagent",
-      "model": "openrouter/anthropic/claude-haiku-5.5",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Heal spec drift in the checked-in suite. Report a product bug. Do not add tests or call Linear.",
       "system": "Read .agents/prompts/qa-healer.md and the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch renamed locators, strict-mode locators, and an existing wait that expired while the control was already visible. Write triage.json. Do not add a test. Do not edit a spec to hide a product bug. Do not read .env.",
       "steps": 30,
@@ -207,6 +227,7 @@
         { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
         { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
         { "action": "edit", "resource": "e2e test cases/**", "effect": "allow" },
+        { "action": "edit", "resource": "e2e test cases/changes.log", "effect": "deny" },
         { "action": "edit", "resource": "runs/**", "effect": "allow" },
         { "action": "edit", "resource": "**/FEATURE.md", "effect": "deny" }
       ]

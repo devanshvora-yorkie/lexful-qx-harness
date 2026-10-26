@@ -12,6 +12,9 @@ services:
       OPENCODE_DISABLE_AUTOUPDATE: "1"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       CI: "1"
+      AWS_REGION: us-east-1
+      # OpenCode reads the bearer token. .env stores it as BEDROCK_API_KEY.
+      AWS_BEARER_TOKEN_BEDROCK: ${BEDROCK_API_KEY:-}
       # Checked-in suite runs first. Set QA_PHASE1_ON_START=false in .env to skip it.
       QA_PHASE1_ON_START: ${QA_PHASE1_ON_START:-true}
     volumes:

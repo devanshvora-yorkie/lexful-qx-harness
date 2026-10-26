@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +141,7 @@ def execute_run(run_id: str) -> None:
         log.exception("run failed")
         store.update_run(run_id, status="failed", error=str(exc)[:500])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[str(exc)[:500]])
+        _seal(run_id, None, "HALTED")
 
 
 def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
@@ -158,8 +161,10 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         detail = plain(_failed_check(preflight) or "preflight failed")
         book.row("server", "preflight", f"failed  {detail}")
         store.update_run(run_id, status="halted", error=detail)
-        _write_qa_result(folder, ticket or None, "HALTED", {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}, [detail])
+        summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        _write_qa_result(folder, ticket or None, "HALTED", summary, [detail])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
+        _seal(run_id, summary, "HALTED")
         return
 
     checks = [item for item in (preflight.get("checks") or []) if isinstance(item, dict)]
@@ -190,8 +195,10 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         book.row("qa", "failed", reason)
         log.error("%s", reason)
         store.update_run(run_id, status="failed", error=reason)
-        _write_qa_result(folder, ticket, "HALTED", {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}, [reason])
+        summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        _write_qa_result(folder, ticket, "HALTED", summary, [reason])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[reason])
+        _seal(run_id, summary, "HALTED")
         return
 
     book.row("qa", "finished", "coordinator returned")
@@ -201,8 +208,10 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         detail = "the agent did not write a spec file"
         book.row("server", "halted", detail)
         store.update_run(run_id, status="halted", error=detail)
-        _write_qa_result(folder, ticket, "HALTED", {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}, [detail])
+        summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        _write_qa_result(folder, ticket, "HALTED", summary, [detail])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
+        _seal(run_id, summary, "HALTED")
         return
 
     book.row("server", "specs", f"{len(specs)} files  {', '.join(specs)}"[:240])
@@ -218,6 +227,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     store.update_run(run_id, status=status, error=None)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
+    _seal(run_id, summary, verdict)
 
 
 def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
@@ -249,6 +259,7 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
             issues=[detail],
             extra=_phase1_report_lines(),
         )
+        _seal(run_id, summary, "HALTED")
         return
 
     book.row("server", "session", f"ok  {preflight.get('appUrl') or settings.qa_url}")
@@ -267,6 +278,7 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
             issues=[detail],
             extra=_phase1_report_lines(),
         )
+        _seal(run_id, summary, "HALTED")
         return
 
     book.row("server", "specs", f'{len(specs)} files in "e2e test cases"')
@@ -301,6 +313,15 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
         issues=issues,
         extra=_phase1_report_lines() + _triage_section(folder),
     )
+    _seal(run_id, summary, verdict)
+
+
+def _seal(run_id: str, summary: dict[str, Any] | None, verdict: str | None) -> None:
+    """Put the final counts in the folder name after every file for this attempt is written."""
+    try:
+        store.publish_folder(run_id, summary=summary, verdict=verdict)
+    except Exception:
+        log.exception("run folder was not renamed")
 
 
 def _phase1_meta() -> dict[str, Any]:
@@ -354,6 +375,7 @@ def _execute_and_heal(
         )
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
         before = _suite_revision()
+        before_text = _suite_texts() if classify else {}
         heal_code, session_id = runners.run_opencode(
             folder,
             session_id=session_id or None,
@@ -365,10 +387,12 @@ def _execute_and_heal(
         if session_id:
             store.update_run(run_id, opencodeSession=session_id)
         runners.export_session(folder, session_id)
+        triage = _take_triage(folder, attempt) if classify and heal_code == 0 else {}
+        if classify:
+            record_suite_edits(run_id, attempt, before_text, _suite_texts(), triage)
         if heal_code != 0:
             book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
             continue
-        triage = _take_triage(folder, attempt) if classify else {}
         changed = suite_files_changed(before, _suite_revision())
         if classify and not changed:
             book.row("server", "heal", _unchanged_heal_message(triage))
@@ -427,7 +451,7 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         "A test that passes by skipping the assertion does not count.",
         f"Preflight is already ok: {relative}/preflight.json",
         f"Context pack: {relative}/context-pack.json",
-        f"Auth cookies: {relative}/auth-state.json",
+        "Auth cookies: runs/cache/stytch/session.json",
         f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
         f"Delegate Phase 1 to qa-explorer. It writes {relative}/FEATURE.md, with the URL, API calls, and action matrix. It does not write specs.",
         f"Read that file. Then delegate Phase 2 to qa-author. It writes the POM and specs only in {relative}/specs/.",
@@ -469,8 +493,11 @@ def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]
         f"Run directory: {relative}",
         f"Playwright results: {relative}/playwright/results.json",
         f"Playwright log: {relative}/playwright/output.log",
-        f"Auth cookies: {relative}/auth-state.json",
+        "Auth cookies: runs/cache/stytch/session.json",
         "The suite is \"e2e test cases\". Edit only a failing spec and the page object or fixture it imports.",
+        "Read e2e test cases/changes.log before you edit. It lists locator updates already saved in the suite.",
+        "Do not edit a locator that the log already records. Leave that file as it is.",
+        "Do not edit e2e test cases/changes.log. The server appends to it after you return.",
         "Do not edit FEATURE.md, playwright.config.ts, or auth-helper.ts.",
         'Write {"failures":[...]} to triage.json in the run directory. class is "spec" or "bug". action is "patched" or "reported".',
         "spec: a renamed locator, a locator that matches several elements, or an existing wait that expired while the snapshot already shows that control. Narrow the locator or raise that timeout. Do not add waitForTimeout. Leave the expected outcome.",
@@ -513,16 +540,98 @@ def _unchanged_heal_message(triage: dict[str, Any]) -> str:
     return ". ".join(parts) + "."
 
 
-def _suite_revision() -> tuple[tuple[str, int], ...]:
-    root = get_settings().root / "e2e test cases"
+def _suite_root() -> Path:
+    return get_settings().root / "e2e test cases"
+
+
+def _suite_sources() -> list[Path]:
+    root = _suite_root()
     if not root.is_dir():
-        return tuple()
-    rows: list[tuple[str, int]] = []
-    for path in sorted(root.rglob("*")):
-        if path.suffix not in {".ts", ".js"} or not path.is_file():
+        return []
+    return [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.is_file() and path.suffix in {".ts", ".js"} and path.name != "changes.log"
+    ]
+
+
+def _suite_revision() -> tuple[tuple[str, int], ...]:
+    root = _suite_root()
+    return tuple((path.relative_to(root).as_posix(), path.stat().st_mtime_ns) for path in _suite_sources())
+
+
+def _suite_texts() -> dict[str, str]:
+    root = _suite_root()
+    return {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8") for path in _suite_sources()}
+
+
+def record_suite_edits(
+    run_id: str,
+    attempt: int,
+    before: dict[str, str],
+    after: dict[str, str],
+    triage: dict[str, Any],
+    *,
+    log_path: Path | None = None,
+) -> None:
+    """Append one heal to e2e test cases/changes.log. The same locator is not rewritten from this file."""
+    target = log_path or (_suite_root() / "changes.log")
+    names = sorted(set(before) | set(after))
+    changed: list[str] = []
+    diffs: list[str] = []
+    for name in names:
+        old = before.get(name, "")
+        new = after.get(name, "")
+        if old == new:
             continue
-        rows.append((path.relative_to(root).as_posix(), path.stat().st_mtime_ns))
-    return tuple(rows)
+        changed.append(name)
+        diff = "".join(
+            difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                fromfile=f"e2e test cases/{name}",
+                tofile=f"e2e test cases/{name}",
+                n=2,
+            )
+        )
+        if len(diff) > 6000:
+            diff = diff[:6000] + "\n... diff truncated\n"
+        if diff:
+            diffs.append(diff.rstrip())
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [f"{stamp}  {run_id}  heal {attempt}"]
+    if changed:
+        lines.append("  files: " + ", ".join(f"e2e test cases/{name}" for name in changed))
+    else:
+        lines.append("  no file changes")
+    lines.extend(f"  - {note}" for note in _triage_notes(triage))
+    body = "\n".join(lines)
+    if diffs:
+        body += "\n\n" + "\n\n".join(diffs)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(body.rstrip() + "\n\n")
+
+
+def _triage_notes(triage: dict[str, Any]) -> list[str]:
+    failures = triage.get("failures")
+    if not isinstance(failures, list):
+        return []
+    notes: list[str] = []
+    for item in failures:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("test") or "failure")
+        kind = str(item.get("class") or "note")
+        action = str(item.get("action") or "")
+        reason = " ".join(str(item.get("reason") or "").split())
+        if len(reason) > 240:
+            reason = reason[:240] + "..."
+        note = f"{kind} / {action}: {title}" if action else f"{kind}: {title}"
+        if reason:
+            note = f"{note} — {reason}"
+        notes.append(note)
+    return notes
 
 
 def _read_triage(path: Path) -> dict[str, Any]:
@@ -694,5 +803,5 @@ def _write_report(
         lines.append("## Open issues")
         lines.extend(f"- {issue}" for issue in issues)
         lines.append("")
-    lines.append("Artifacts in this folder include `preflight.json`, `auth-state.json`, `opencode/`, `playwright/`, and `qa-result.json`.")
+    lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. The Stytch session is `runs/cache/stytch/session.json`.")
     (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

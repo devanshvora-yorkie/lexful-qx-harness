@@ -8,18 +8,29 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from app.logbook import Logbook, SubagentTail, child_message_lines, format_event, plain_error, session_id_from_text
-from app.runners import _preflight_row
+from app.runners import _preflight_row, _session_expired
 from app.main import health, run_phase1, run_ticket
 from app.pipeline import (
     failed_tests,
     spec_was_patched,
     startup_order,
+    record_suite_edits,
     suite_files_changed,
     suspicious_patches,
     verdict_for,
 )
 from app.runners import checked_in_specs, common_test_dir, planned_specs
-from app.store import create_run, find_active_phase1, find_active_sha, get_run, list_runs, recover_runs, update_run
+from app.store import (
+    create_run,
+    find_active_phase1,
+    find_active_sha,
+    get_run,
+    list_runs,
+    publish_folder,
+    recover_runs,
+    relocate_legacy_runs,
+    update_run,
+)
 
 
 class LogbookTest(unittest.TestCase):
@@ -152,6 +163,9 @@ class LogbookTest(unittest.TestCase):
         self.assertIn("pass", check)
         self.assertIn("npm packages", check)
         self.assertIn("installed", check)
+        self.assertTrue(_session_expired("Error: Stytch session expired for persona admin"))
+        self.assertTrue(_session_expired("Cookies saved, but the app landed on login"))
+        self.assertFalse(_session_expired("locator timeout waiting for heading"))
 
     def test_appends_a_readable_line(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,6 +235,36 @@ class Phase1Test(unittest.TestCase):
         ])
         self.assertTrue(str(directory).endswith("e2e test cases"))
 
+    def test_suite_edit_log_records_a_locator_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "changes.log"
+            record_suite_edits(
+                "regression-1",
+                1,
+                {"asset crud/servers-listing-pom.ts": "getByText(/0 selected/)\n"},
+                {"asset crud/servers-listing-pom.ts": "selectionCountText()\n"},
+                {"failures": [{"class": "spec", "action": "patched", "title": "clear selection", "reason": "0selected"}]},
+                log_path=path,
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("e2e test cases/asset crud/servers-listing-pom.ts", text)
+            self.assertIn("spec / patched: clear selection — 0selected", text)
+            self.assertIn("-getByText(/0 selected/)", text)
+            self.assertIn("+selectionCountText()", text)
+            record_suite_edits(
+                "regression-2",
+                1,
+                {"asset crud/servers-listing-pom.ts": "selectionCountText()\n"},
+                {"asset crud/servers-listing-pom.ts": "selectionCountText()\n"},
+                {"failures": [{"class": "bug", "action": "reported", "title": "archive count"}]},
+                log_path=path,
+            )
+            again = path.read_text(encoding="utf-8")
+            self.assertEqual(again.count("+selectionCountText()"), 1)
+            self.assertIn("regression-2", again)
+            self.assertIn("no file changes", again)
+            self.assertIn("bug / reported: archive count", again)
+
 
 class StoreTest(unittest.TestCase):
     def setUp(self):
@@ -236,8 +280,10 @@ class StoreTest(unittest.TestCase):
         created = create_run(ticket="LEX-3371", pr=1418, sha="abc123", spec_count=15)
         self.assertEqual(created["status"], "accepted")
         self.assertIsNone(created["opencodeSession"])
-        folder = Path(self.tmp.name) / "LEX-3371" / created["id"]
+        self.assertTrue(created["folder"].startswith("tickets/LEX-3371/"))
+        folder = Path(self.tmp.name) / created["folder"]
         self.assertTrue((folder / "manifest.json").is_file())
+        self.assertTrue((folder / "contents.txt").is_file())
         update_run(created["id"], status="preflight")
         again = get_run(created["id"])
         self.assertIsNotNone(again)
@@ -251,9 +297,10 @@ class StoreTest(unittest.TestCase):
 
     def test_recovery_and_spec_discovery(self):
         created = create_run(ticket="LEX-3400", pr=None, sha=None, spec_count=None)
-        spec = Path(self.tmp.name) / "LEX-3400" / created["id"] / "specs" / "added.spec.ts"
+        run = Path(self.tmp.name) / created["folder"]
+        spec = run / "specs" / "added.spec.ts"
         spec.write_text("import { test } from '@playwright/test'\n")
-        found = planned_specs(spec.parents[1], 0)
+        found = planned_specs(run, 0)
         self.assertTrue(any(item.endswith("added.spec.ts") for item in found))
         update_run(created["id"], status="agent")
         waiting = create_run(ticket="LEX-3401", pr=None, sha=None, spec_count=None)
@@ -266,15 +313,57 @@ class StoreTest(unittest.TestCase):
     def test_phase1_folder(self):
         created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
         self.assertTrue(created["id"].startswith("regression-"))
+        self.assertTrue(created["folder"].startswith("phase-1/"))
+        self.assertNotIn("passed", created["folder"])
         self.assertEqual(created["kind"], "phase1")
         self.assertIsNone(created["ticket"])
-        folder = Path(self.tmp.name) / "regression" / created["id"]
+        folder = Path(self.tmp.name) / created["folder"]
         self.assertTrue((folder / "manifest.json").is_file())
+        self.assertTrue((folder / "contents.txt").read_text(encoding="utf-8").startswith("This folder is one phase 1"))
         self.assertFalse((folder / "specs").exists())
+        published = publish_folder(
+            created["id"],
+            summary={"passed": 57, "failed": 2, "skipped": 0, "flaky": 0},
+            verdict="NEEDS_REVISION",
+        )
+        self.assertIn("57-passed_2-failed_needs-revision", published)
+        self.assertTrue((Path(self.tmp.name) / published / "report.md").exists() or (Path(self.tmp.name) / published / "manifest.json").is_file())
+        self.assertFalse(folder.exists())
+        self.assertEqual(get_run(created["id"])["folder"], published)
         update_run(created["id"], status="queued")
         self.assertEqual(find_active_phase1()["id"], created["id"])
         update_run(created["id"], status="completed")
         self.assertIsNone(find_active_phase1())
+
+    def test_legacy_folder_moves_and_keeps_a_link(self):
+        root = Path(self.tmp.name)
+        run_id = "regression-20261023T114747Z-f35a"
+        legacy = root / "regression" / run_id
+        legacy.mkdir(parents=True)
+        (legacy / "report.md").write_text("# hi\n", encoding="utf-8")
+        (legacy / "qa-result.json").write_text(
+            '{"verdict":"NEEDS_REVISION","test_results":{"passed":57,"failed":2,"skipped":0,"flaky":0}}\n',
+            encoding="utf-8",
+        )
+        (root / "index.json").write_text(
+            '{"runs":[{"id":"regression-20261023T114747Z-f35a","kind":"phase1","ticket":null,'
+            '"status":"needs_revision","createdAt":"2026-10-23T11:47:47.285Z",'
+            '"updatedAt":"2026-10-23T12:54:45.001Z"}]}\n',
+            encoding="utf-8",
+        )
+        moved = relocate_legacy_runs()
+        self.assertEqual(moved, [run_id])
+        folder = get_run(run_id)["folder"]
+        self.assertEqual(
+            folder,
+            "phase-1/2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision",
+        )
+        target = root / folder
+        self.assertEqual((target / "report.md").read_text(encoding="utf-8"), "# hi\n")
+        self.assertTrue((target / "contents.txt").is_file())
+        self.assertTrue(legacy.is_symlink())
+        self.assertEqual((legacy / "report.md").read_text(encoding="utf-8"), "# hi\n")
+        self.assertEqual(relocate_legacy_runs(), [])
 
 
 class ApiTest(unittest.TestCase):

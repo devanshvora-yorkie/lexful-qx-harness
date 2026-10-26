@@ -19,7 +19,7 @@ Fill these in `.env`. Leave the other values as they are unless the tenant chang
 - `STYTCH_ADMIN_PASSWORD`
 - `LINEAR_API_KEY`
 - `GITHUB_TOKEN`
-- `OPENROUTER_API_KEY`
+- `BEDROCK_API_KEY`
 
 Then:
 
@@ -45,7 +45,7 @@ That starts the run and streams the log. Preflight signs in, the coordinator exp
 
 Docker queues this before any ticket. It runs the specs already in `e2e test cases` against UAT. No explorer, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
 
-On startup the container signs in, runs that suite, and writes the log under `runs/regression/<run-id>/`. Follow it with:
+On startup the container signs in, runs that suite, and writes the log under `runs/phase-1/`. The folder name is the UTC start time and, when the run finishes, the pass and fail counts. Follow it with:
 
 ```bash
 make phase1
@@ -57,7 +57,7 @@ That is `docker compose exec harness npm run phase1`. If a phase 1 run is alread
 
 A failure is classified by `qa-healer` only. The explorer and the author are not called, and no new test is written.
 
-- Spec drift is patched in the existing spec or page object: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. The edit is written back into `e2e test cases/` on this machine. The server re-runs the suite only when a file changed, up to 3 heals.
+- Spec drift is patched in the existing spec or page object: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. The edit is written into `e2e test cases/` on this machine, which is the suite Playwright runs. The same locator is not patched again once it is listed in `e2e test cases/changes.log`. The server appends each heal to that log and re-runs the suite only when a file changed, up to 3 heals.
 - A product bug is left in the spec and recorded in `report.md` and `triage-1.json` in the run folder. It is not sent to Linear.
 
 Set `QA_PHASE1_ON_START=false` in `.env` before `docker compose up` to skip the automatic run. `npm run phase1` still starts one.
@@ -66,26 +66,33 @@ A ticket run still uses Linear for the context pack. Phase 1 does not.
 
 ## Where a run is stored
 
-Everything for one attempt lives in one folder:
+`runs/START-HERE.txt` is the short map. One attempt is one folder:
 
 ```text
-runs/<ticket>/<run-id>/
-  FEATURE.md            what was observed on UAT
-  specs/                spec files, POM, and the plan copy
-  explore/              browser snapshots
+runs/phase-1/2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision/
+  contents.txt          what each file in this folder is
+  report.md             final counts and healer notes
+  run.log               full log
+  qa-result.json        passed, failed, skipped, flaky
+  manifest.json         status, model, heal count
+  triage-N.json         healer classification for heal N
+  heal-N.md             healer note for heal N
   playwright/           results.json, html report, output.log
-  planned-specs.json
-  qa-result.json
-  report.md
-  preflight.json
+  opencode/             agent session and healer transcript
+
+runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/
+  FEATURE.md            what was observed on UAT
+  specs/                spec files written for that ticket
+  explore/              browser snapshots
   context-pack.json
-  auth-state.json
-  opencode/
+  planned-specs.json
 ```
 
-Example: `runs/LEX-2293/LEX-2293-20261021T102159Z-1722/`. That directory is on your machine and mounted into the container, so a ticket run and a later spec run see the same files. Specs are not written into `tests/`. That directory is the older checked-in suite, not a place for run output.
+Phase 1 does not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Ticket specs stay in that attempt's `specs/` folder.
 
-`runs/` is gitignored. Do not commit `.env` or `auth-state.json`.
+`runs/regression/` and `runs/LEX-*/` are links to those folders for attempts that already existed. `runs/index.json` is the list the server uses. The Stytch session is `runs/cache/stytch/session.json`, for the account named by `STYTCH_PERSONA`. Do not commit `.env` or that file.
+
+`runs/` is gitignored.
 
 ## Run specs again
 

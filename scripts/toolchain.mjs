@@ -5,8 +5,8 @@ import { ROOT, check, playwrightCliBin } from './harness-env.mjs';
 
 const VENV_PYTHON = path.join(ROOT, 'server', '.venv', 'bin', 'python');
 const REQUIREMENTS = path.join(ROOT, 'server', 'requirements.txt');
-const MAIN_MODEL = 'openrouter/anthropic/claude-haiku-5.5';
-const SUB_MODEL = 'openrouter/anthropic/claude-haiku-5.5';
+const MAIN_MODEL = 'amazon-bedrock/us.anthropic.claude-haiku-5-5';
+const SUB_MODEL = 'amazon-bedrock/us.anthropic.claude-haiku-5-5';
 
 function log(line) {
   const text = `${line}\n`;
@@ -180,20 +180,15 @@ function ensureOpenCodeSetup() {
     if (result.status !== 0) throw new Error((result.stderr || result.stdout || 'opencode failed').trim().slice(0, 300));
     return result.stdout || '';
   };
-  const openrouterKey = configuredValue('OPENROUTER_API_KEY');
-  if (!openrouterKey) {
-    const auth = quiet(['auth', 'list']);
-    const openrouter = auth.split('\n').find((line) => /openrouter/i.test(line));
-    if (!openrouter || !/(stored|api-key|api key)/i.test(openrouter)) {
-      problems.push('OpenRouter is not logged in. Set OPENROUTER_API_KEY or run opencode auth login');
-    }
+  const bedrockKey = configuredValue('BEDROCK_API_KEY') || configuredValue('AWS_BEARER_TOKEN_BEDROCK');
+  if (!bedrockKey) {
+    problems.push('Bedrock key is missing. Set BEDROCK_API_KEY');
   }
-  const models = new Set(quiet(['models']).split('\n').map((line) => line.trim()));
+  const models = new Set(quiet(['models', '--standalone']).split('\n').map((line) => line.trim()));
   if (!models.has(MAIN_MODEL)) problems.push(`${MAIN_MODEL} is not available`);
   if (!models.has(SUB_MODEL)) problems.push(`${SUB_MODEL} is not available`);
   if (problems.length) throw new Error(problems.join('; '));
-  const authDetail = openrouterKey ? 'OpenRouter key set' : 'OpenRouter stored';
-  return check('OpenCode setup', 'pass', `${authDetail}; ${MAIN_MODEL}; ${SUB_MODEL}`);
+  return check('OpenCode setup', 'pass', `Bedrock key set; us-east-1; ${MAIN_MODEL}`);
 }
 
 export function ensureToolchain() {

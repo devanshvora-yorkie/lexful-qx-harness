@@ -49,10 +49,10 @@ The script writes `runs/<run-id>/preflight.json` and `context-pack.json`. It ins
 | Playwright CLI | `playwright-cli` runs |
 | FastAPI | `server/.venv` imports fastapi, uvicorn, and pydantic |
 | OpenCode | `opencode` is on PATH, OpenRouter is logged in, and every agent is Haiku 5.5 |
-| Env file | `LINEAR_API_KEY`, `GITHUB_TOKEN`, `STYTCH_ORGANIZATION_ID`, `STYTCH_ADMIN_EMAIL`, and `STYTCH_ADMIN_PASSWORD` are set |
+| Env file | `LINEAR_API_KEY`, `GITHUB_TOKEN`, `STYTCH_ORGANIZATION_ID`, and the email and password for `STYTCH_PERSONA` are set |
 | Linear | Viewer query succeeds. With a ticket, that issue is fetched |
 | GitHub | The token is accepted. Files are loaded only from the pull request diff |
-| Stytch | Cached session is reused when it still probes, otherwise one `POST /auth/password`. Cookies land in `runs/cache/stytch/` and in the run directory |
+| Stytch | The `STYTCH_PERSONA` session is reused when more than an hour remains and the app accepts it. Otherwise one `POST /auth/password`. The only cookie file is `runs/cache/stytch/session.json` |
 | Playwright | `playwright` and `playwright-cli` report versions |
 | Ticket context | Pack written for that ticket, its connected issues, and its PR files |
 

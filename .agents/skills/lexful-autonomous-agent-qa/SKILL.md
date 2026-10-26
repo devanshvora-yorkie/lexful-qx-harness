@@ -173,7 +173,7 @@ This common POM is imported by all module POMs to avoid duplication.
 The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 
 1. Read `playwright/results.json` and `playwright/output.log`.
-2. Replay the failing step with `playwright-cli` and the run directory `auth-state.json`. Do not log in.
+2. Replay the failing step with `playwright-cli`. Load `runs/cache/stytch/session.json` with `playwright-cli state-load`. Do not read that file and do not log in.
 3. Classify every failure and write `triage.json` in the run directory as `{"failures":[...]}`.
    - `spec`: the test is wrong and the product behavior is unchanged. Patch every spec failure in this one return. This includes a renamed role, name, or test id; a locator that matches several elements, which you narrow without changing the expected outcome; and an existing `waitForResponse` or `expect` timeout that expired while the snapshot already shows that control, which you raise without adding `waitForTimeout` and without editing `playwright.config.ts`. `action` is `patched`.
    - `bug`: the product did the wrong thing. A loaded value is wrong, a request was sent that must be blocked, or the page is an error response and the control is absent because of it. Do not edit the spec. `action` is `reported`. The server keeps this in the run folder and does not call Linear.

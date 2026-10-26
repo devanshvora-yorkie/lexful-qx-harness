@@ -22,6 +22,7 @@ from app.store import (
     get_run,
     list_runs,
     recover_runs,
+    relocate_legacy_runs,
     run_dir,
     update_run,
 )
@@ -35,6 +36,7 @@ _queue: asyncio.Queue[str] = asyncio.Queue()
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     waiting_ids = recover_runs()
+    relocate_legacy_runs()
     waiting = [row for row in (get_run(run_id) for run_id in waiting_ids) if row]
     fresh = None
     if get_settings().phase1_on_start and not any(row.get("kind") == "phase1" for row in waiting):

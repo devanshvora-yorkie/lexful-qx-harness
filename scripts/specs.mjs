@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { CFG, ROOT, ensureStytchSession } from './harness-env.mjs';
+import { CFG, ROOT, ensureStytchSession, sessionFile } from './harness-env.mjs';
 import { RUNS, newRunId } from './run-store.mjs';
 
 function usage() {
@@ -120,6 +120,8 @@ const HIDDEN_FROM_PLAYWRIGHT = [
   'GH_TOKEN',
   'HARNESS_DEPLOY_SECRET',
   'OPENROUTER_API_KEY',
+  'BEDROCK_API_KEY',
+  'AWS_BEARER_TOKEN_BEDROCK',
 ];
 
 function summary(runDir, exitCode) {
@@ -140,7 +142,7 @@ function summary(runDir, exitCode) {
 }
 
 function runPlaywright(runDir, specs, headed) {
-  const authState = path.join(runDir, 'auth-state.json');
+  const authState = sessionFile();
   const args = ['playwright', 'test', '--workers=1', '--project=e2e'];
   if (headed) args.push('--headed');
   args.push(...specs);
@@ -192,7 +194,7 @@ async function main() {
       : newRunFolder();
   mkdirSync(path.join(runDir, 'playwright'), { recursive: true });
 
-  const session = await ensureStytchSession(runDir);
+  const session = await ensureStytchSession();
   if (session.onLogin) {
     throw new Error(`Session cookies were rejected. ${CFG.qaUrl} landed on login`);
   }

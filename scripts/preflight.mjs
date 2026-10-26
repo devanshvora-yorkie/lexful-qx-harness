@@ -6,6 +6,7 @@ import {
   ROOT,
   check,
   ensureStytchSession,
+  personaCredentials,
   github,
   linear,
   parseArgs,
@@ -16,15 +17,26 @@ import {
 import { createCliRun, updateIndex } from './run-store.mjs';
 import { ensureToolchain } from './toolchain.mjs';
 
+function missingPersonaEnv() {
+  const missing = [];
+  if (!CFG.org) missing.push('STYTCH_ORGANIZATION_ID');
+  try {
+    const creds = personaCredentials();
+    if (!creds.email) missing.push(creds.emailKey);
+    if (!creds.password) missing.push(creds.passwordKey);
+  } catch (err) {
+    missing.push(err.message);
+  }
+  return missing;
+}
+
 function envCheck() {
   const missing = [];
   if (!CFG.linearKey) missing.push('LINEAR_API_KEY');
   if (!CFG.githubToken) missing.push('GITHUB_TOKEN');
-  if (!CFG.org) missing.push('STYTCH_ORGANIZATION_ID');
-  if (!CFG.email) missing.push('STYTCH_ADMIN_EMAIL');
-  if (!CFG.password) missing.push('STYTCH_ADMIN_PASSWORD');
+  missing.push(...missingPersonaEnv());
   if (missing.length) return check('Env file', 'fail', `Missing ${missing.join(', ')}`);
-  return check('Env file', 'pass', 'Linear, GitHub, and Stytch credentials are set');
+  return check('Env file', 'pass', `Linear, GitHub, and the ${personaCredentials().name} Stytch persona are set`);
 }
 
 async function linearCheck() {
@@ -37,14 +49,15 @@ async function githubCheck() {
   return check('GitHub', 'pass', `Token accepted for ${user.login}; repo files are read only through a pull request`);
 }
 
-async function stytchCheck(destDir) {
-  const session = await ensureStytchSession(destDir);
+async function stytchCheck() {
+  const session = await ensureStytchSession();
   const reused = session.reused ? 'Reused cached session' : `HTTP ${session.status}`;
-  if (session.onLogin) return check('Stytch', 'fail', `Cookies saved, but ${CFG.qaUrl} landed on login`);
+  const who = `persona ${session.persona}`;
+  if (session.onLogin) return check('Stytch', 'fail', `${who}: cookies saved, but ${CFG.qaUrl} landed on login`);
   if (session.pageStatus === 403) {
-    return check('Stytch', 'pass', `${reused}, cookies saved; app returned 403 (CloudFront)`);
+    return check('Stytch', 'pass', `${who}: ${reused}, cookies saved; app returned 403 (CloudFront)`);
   }
-  return check('Stytch', 'pass', `${reused}, ${session.cookieCount} cookies, app HTTP ${session.pageStatus}`);
+  return check('Stytch', 'pass', `${who}: ${reused}, ${session.cookieCount} cookies, app HTTP ${session.pageStatus}`);
 }
 
 function versionCheck() {
@@ -81,14 +94,11 @@ async function main() {
       console.error('--session-only needs --out');
       process.exit(1);
     }
-    const missing = [];
-    if (!CFG.org) missing.push('STYTCH_ORGANIZATION_ID');
-    if (!CFG.email) missing.push('STYTCH_ADMIN_EMAIL');
-    if (!CFG.password) missing.push('STYTCH_ADMIN_PASSWORD');
+    const missing = missingPersonaEnv();
     if (missing.length) checks.push(check('Env file', 'fail', `Missing ${missing.join(', ')}`));
     else {
-      checks.push(check('Env file', 'pass', 'Stytch credentials are set. Linear and GitHub are not called'));
-      await run('Stytch', () => stytchCheck(args.out));
+      checks.push(check('Env file', 'pass', `${personaCredentials().name} credentials are set. Linear and GitHub are not called`));
+      await run('Stytch', () => stytchCheck());
     }
     await run('Playwright', versionCheck);
     const report = {
@@ -118,7 +128,7 @@ async function main() {
   if (checks.some((row) => row.name === 'Env file' && row.status === 'pass')) {
     await run('Linear', linearCheck);
     await run('GitHub', githubCheck);
-    await run('Stytch', () => stytchCheck(args.out));
+    await run('Stytch', () => stytchCheck());
   }
   await run('Playwright', versionCheck);
 

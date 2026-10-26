@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,98 +21,47 @@ export interface AuthCookies {
 // .env sits beside this file; missing it is fine — only the API-refresh path needs the password
 try { process.loadEnvFile(path.join(__dirname, '.env')); } catch { /* env comes from shell instead */ }
 
-const CFG = {
-  api: process.env.STYTCH_API_URL || 'https://api.uat.lexful.net',
-  org: process.env.STYTCH_ORGANIZATION_ID ?? '',
-  email: process.env.STYTCH_ADMIN_EMAIL ?? '',
-  password: process.env.STYTCH_ADMIN_PASSWORD ?? '',
-};
+const PERSONA_ENV = {
+  admin: ['STYTCH_ADMIN_EMAIL', 'STYTCH_ADMIN_PASSWORD'],
+  support: ['STYTCH_SUPPORT_EMAIL', 'STYTCH_SUPPORT_PASSWORD'],
+  viewer: ['STYTCH_VIEWER_EMAIL', 'STYTCH_VIEWER_PASSWORD'],
+} as const;
 
-const AUTH_STATE_PATH = process.env.AUTH_STATE
-  ? path.resolve(process.env.AUTH_STATE)
-  : path.join(__dirname, 'auth-state.json');
+const SESSION_FILE = path.join(__dirname, 'runs', 'cache', 'stytch', 'session.json');
 
-/**
- * Parse a Set-Cookie header value into Playwright-ready cookie objects.
- */
-function parseSetCookie(raw: string): AuthCookies | null {
-  const parts = raw.split(';').map(p => p.trim());
-  const nv = parts[0];
-  const eqIdx = nv.indexOf('=');
-  if (eqIdx < 0) return null;
-
-  const name = nv.slice(0, eqIdx).trim();
-  const value = nv.slice(eqIdx + 1).trim();
-
-  let expires: number | undefined;
-  const maxAgePart = parts.find(p => p.toLowerCase().startsWith('max-age='));
-  if (maxAgePart) {
-    const maxAgeSec = parseInt(maxAgePart.split('=')[1], 10);
-    if (!isNaN(maxAgeSec)) {
-      expires = Math.floor(Date.now() / 1000) + maxAgeSec;
-    }
+function personaName(): keyof typeof PERSONA_ENV {
+  const name = (process.env.STYTCH_PERSONA || 'admin').trim().toLowerCase();
+  if (!(name in PERSONA_ENV)) {
+    throw new Error(`STYTCH_PERSONA must be admin, support, or viewer. Got ${name}`);
   }
-
-  return {
-    name,
-    value,
-    domain: '.lexful.net',
-    path: '/',
-    httpOnly: true,
-    secure: true,
-    sameSite: 'Lax' as const,
-    expires,
-  };
+  return name as keyof typeof PERSONA_ENV;
 }
 
-/**
- * Call the auth endpoint and return parsed cookies ready for context.addCookies().
- */
-async function fetchFreshCookies(): Promise<AuthCookies[]> {
-  const res = await fetch(CFG.api + '/auth/password', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      account_external_id: CFG.org,
-      email: CFG.email,
-      password: CFG.password,
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Auth failed HTTP ${res.status}: ${text}`);
-  }
-
-  const raw = res.headers.getSetCookie();
-  const cookies: AuthCookies[] = [];
-  for (const cookie of raw) {
-    const parsed = parseSetCookie(cookie);
-    if (parsed) cookies.push(parsed);
-  }
-
-  // Save to file for future test runs
-  try {
-    fs.writeFileSync(AUTH_STATE_PATH, JSON.stringify({ cookies }, null, 2));
-  } catch { /* ignore save errors */ }
-
-  return cookies;
+function sessionPath(): string {
+  return process.env.AUTH_STATE ? path.resolve(process.env.AUTH_STATE) : SESSION_FILE;
 }
 
-/**
- * Load cookies from saved auth-state.json file.
- * Returns null if the file doesn't exist or has no cookies.
- */
-function loadSavedCookies(): AuthCookies[] | null {
+interface SessionFile {
+  persona?: string;
+  email?: string;
+  cookies?: AuthCookies[];
+}
+
+function loadSession(): SessionFile | null {
   try {
-    if (!fs.existsSync(AUTH_STATE_PATH)) return null;
-    const raw = fs.readFileSync(AUTH_STATE_PATH, 'utf-8');
-    const data = JSON.parse(raw);
-    if (data.cookies && Array.isArray(data.cookies) && data.cookies.length > 0) {
-      return data.cookies;
-    }
-  } catch { /* ignore parse errors */ }
-  return null;
+    const file = sessionPath();
+    if (!fs.existsSync(file)) return null;
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (!data || !Array.isArray(data.cookies) || data.cookies.length === 0) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function passwordAvailable(): boolean {
+  const [, passwordKey] = PERSONA_ENV[personaName()];
+  return Boolean(process.env[passwordKey]);
 }
 
 /** Stytch session end from the JWT. Cookie Max-Age is not the session lifetime. */
@@ -131,18 +81,36 @@ function sessionExpiry(cookies: AuthCookies[]): number {
 }
 
 /**
- * Get auth cookies — uses a still-valid saved session first (avoids rate limits),
- * otherwise signs in again.
+ * Cookies for the persona in STYTCH_PERSONA, from the one session file.
+ * A still-valid file is reused. A refresh signs in through scripts/session.mjs,
+ * which is the only login. Playwright inside Docker has no password, so an
+ * expired file throws and the server signs in again, then reruns the suite.
  */
 export async function getLexfulCookies(): Promise<AuthCookies[]> {
-  const saved = loadSavedCookies();
-  if (saved) {
-    // Sessions last ~12h. One minute of slack; a run that crosses the end refreshes.
-    const now = Math.floor(Date.now() / 1000);
-    if (sessionExpiry(saved) > now + 60) return saved;
-    console.warn('auth-state.json session expired — refreshing via API');
+  const persona = personaName();
+  const saved = loadSession();
+  const now = Math.floor(Date.now() / 1000);
+  const samePersona = saved?.persona === persona;
+  if (saved?.cookies && samePersona && sessionExpiry(saved.cookies) > now + 60) {
+    return saved.cookies;
   }
-  return fetchFreshCookies();
+  if (!passwordAvailable()) {
+    throw new Error(`Stytch session expired for persona ${persona}`);
+  }
+  const result = spawnSync(process.execPath, [path.join(__dirname, 'scripts', 'session.mjs'), '--fresh'], {
+    cwd: __dirname,
+    env: process.env,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim().slice(0, 180);
+    throw new Error(`Stytch session expired for persona ${persona}${detail ? `: ${detail}` : ''}`);
+  }
+  const fresh = loadSession();
+  if (!fresh?.cookies) {
+    throw new Error(`Stytch session expired for persona ${persona}`);
+  }
+  return fresh.cookies;
 }
 
 /**
