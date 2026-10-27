@@ -8,7 +8,19 @@ tags: [qa, testing, e2e, playwright, test-generation, test-debugging, automation
 
 # lexful-autonomous-agent-qa
 
-Two-phase QA workflow: (1) explore UI and create a structured test plan, (2) generate, run, and debug POM-based Playwright tests. Extended via `references/custom-instructions.md` for project-specific conventions and pitfalls.
+This skill is **Feature Specific TCs**: tests written for one ticket. It is not **E2E User Journey TCs**, the checked-in suite in `e2e test cases`. The server runs that suite on its own and only calls `qa-healer`.
+
+Feature Specific TCs has three steps: Explore, Author, and Heal.
+
+| Step | Agent | Result |
+|------|--------|--------|
+| Explore | `qa-explorer` | `FEATURE.md` in the run directory. No specs |
+| Author | `qa-author` | POM and specs in the run's `specs/` directory |
+| Heal | `qa-healer` | `triage.json` and locator patches. The server re-runs |
+
+UI/UX audit is not a step in this skill. The server runs it after functional QA only when `QA_RUN_UX_AUDIT` is true. Set that to false to run QA only.
+
+Project conventions live in `references/custom-instructions.md`.
 
 ## Prerequisites
 
@@ -20,11 +32,11 @@ Two-phase QA workflow: (1) explore UI and create a structured test plan, (2) gen
 
 ## How to Run
 
-The server is the orchestrator. It runs preflight, starts the `qa` agent, then runs Playwright. `qa` reads this skill and delegates. `qa-explorer` does Phase 1. `qa-author` does Phase 2. `qa-healer` does the debug loop. The files in `.agents/prompts/` are the role limits. They are not a second procedure.
+The server is the orchestrator. It runs preflight, starts the `qa` agent, then runs Playwright. `qa` reads this skill and delegates. `qa-explorer` does Explore. `qa-author` does Author. `qa-healer` does Heal. The files in `.agents/prompts/` are the role limits. They are not a second procedure.
 
-A ticket run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
+A Feature Specific TCs run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
 
-A checked-in suite run is not a ticket. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Delegate to `qa-healer`. Patch spec drift: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. Do not add `waitForTimeout`. Report a product bug in `triage.json` and leave that spec alone. The result stays in the run folder.
+An E2E User Journey TCs run is not a ticket. The server message says `E2E User Journey TCs`. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Delegate to `qa-healer`. Patch spec drift: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. Do not add `waitForTimeout`. Report a product bug in `triage.json` and leave that spec alone. The result stays in the run folder.
 
 ## Quick Reference
 
@@ -32,12 +44,12 @@ A checked-in suite run is not a ticket. The server already executed `e2e test ca
 |------|--------|
 | Step 0 | Read `runs/<run-id>/preflight.json` (`ok: true`) and `context-pack.json`. Do not call Linear, GitHub, or `/auth/password` yourself |
 | Step 0b | Use `appUrl` from the context pack. Do not start a dev server. A 403 does not change the target |
-| Phase 1 | Explore the running app → write `FEATURE.md` in the run directory. Do not write specs |
-| Phase 2 | Generate common POM → generate module POMs → generate specs → write `planned-specs.json` |
-| Debug cap | 3 heals of the whole suite. Each heal patches once and stops. The server re-runs |
+| Explore | Walk the live app → write `FEATURE.md` in the run directory. Do not write specs |
+| Author | Generate common POM → generate module POMs → generate specs → write `planned-specs.json` |
+| Heal | 3 heals of the whole suite. Each heal patches once and stops. The server re-runs |
 | Handoff | The server writes `runs/<run-id>/qa-result.json` from the Playwright reporter |
 
-**Phase 1 is not optional.** Skipping it and inferring the flow from source code is the single most common failure mode this skill exists to prevent.
+**Explore is not optional.** Skipping it and inferring the flow from source code is the single most common failure mode this skill exists to prevent.
 
 ## Procedure
 
@@ -59,21 +71,21 @@ The live target is `appUrl` in the context pack. Do not start a local dev server
 
 Use that URL even when a probe returns 403. CloudFront 403 on UAT is a known response and is not a reason to change targets.
 
-Record that URL at the top of `FEATURE.md` in the run directory. Every snapshot and API observation in Phase 1 must come from it.
+Record that URL at the top of `FEATURE.md` in the run directory. Every snapshot and API observation in Explore must come from it.
 
 **Never derive the flow from source code alone.** Reading route files, components, or specs tells you what the code *claims*; it does not tell you what renders, what is gated, what the API actually returns, or what a user actually sees. Code reading is an input to exploration, never a substitute for it.
 
-### 0c. Phase 1 gate — exploration cannot be skipped
+### 0c. Explore gate — exploration cannot be skipped
 
-Phase 1 runs on every ticket. Do not reuse a `FEATURE.md` from a previous run or from another agent.
+Explore runs on every ticket. Do not reuse a `FEATURE.md` from a previous run or from another agent.
 
 You may not write `FEATURE.md` until you have navigated the app in this run and saved a snapshot. Every route, control, and endpoint in it must trace back to something you observed.
 
-### 1. Phase 1: UI Exploration & Test Planning
+### 1. Explore: UI Exploration & Test Planning
 
-**1a. Explore the Application** — With the live target from 0b, navigate it using the Playwright CLI (`playwright-cli --help`). Do not write spec files. Record each interaction, navigation path, interactive element, form field, and data dependency for `FEATURE.md`.
+**1a. Explore the Application** — Preflight already installed the tools. Call `node_modules/.bin/playwright-cli`. Chromium is already at `PLAYWRIGHT_BROWSERS_PATH` (`/ms-playwright` in the container). Do not run `--help` or `--version`. Do not run `playwright install`, `install-browser`, or look for `/opt/google/chrome`. Load `runs/cache/stytch/session.json` with `state-load`, then open `appUrl`. Do not write spec files. Record each interaction, navigation path, interactive element, form field, and data dependency for `FEATURE.md`.
 
-Track console errors, info messages, and network API calls. When an interaction triggers an API call, record the method, URL pattern, and the action in the API Endpoints section of `FEATURE.md`. Phase 2 uses that list for `page.waitForResponse`. Track API calls with `playwright-cli requests`. The `--static` flag is boolean, so `--static=false` crashes the CLI; the default already excludes static assets.
+Track console errors, info messages, and network API calls. When an interaction triggers an API call, record the method, URL pattern, and the action in the API Endpoints section of `FEATURE.md`. Author uses that list for `page.waitForResponse`. Track API calls with `playwright-cli requests`. The `--static` flag is boolean, so `--static=false` crashes the CLI; the default already excludes static assets.
 
 **playwright-cli mechanics that cost time (verified):**
 - Element refs (`e15`) go stale after ANY re-render — never carry a ref across two actions; re-snapshot or use locators (`getByRole(...)`).
@@ -83,7 +95,7 @@ Track console errors, info messages, and network API calls. When an interaction 
 - A `div[role=presentation]` fixed overlay means a modal is open and is intercepting ALL pointer events; "element intercepts pointer events" errors are almost always an unclosed modal.
 - `--raw snapshot` of a large SPA is cheap; save it to a file and grep it instead of dumping it into context.
 
-This is the reliable source of truth for `page.waitForResponse()` patterns in Phase 2.
+This is the reliable source of truth for `page.waitForResponse()` patterns in Author.
 
 
 **CRITICAL: Store snapshots for later reference.** When `browser_snapshot` output is large, save it to a file in the workspace (e.g., `snapshot-{module}.txt`) so elements and structure can be referenced during test generation. If the snapshot exceeds context limits, use targeted extraction via `browser_evaluate` with JS selectors to capture only the relevant DOM.
@@ -99,9 +111,9 @@ for example, if its a listing page, check
 5. combination + complex edge cases(like on search, if i am on page 5, page should revert to page 1.)
 6. cover negative flow path, toast message capture, console, network capture and assert in testcases.
 
-Analyze the API request and response and expand the scenarios from that. Write every scenario, selector, and API call into `FEATURE.md`. Do not write a spec file in Phase 1.
+Analyze the API request and response and expand the scenarios from that. Write every scenario, selector, and API call into `FEATURE.md`. Do not write a spec file in Explore.
 
-**MANDATORY: Example: Every listing page must be tested at 100% action coverage.** Phase 1 must identify and plan tests for EVERY action on every listing/table page. Do not skip any action. The following checklist is exhaustive — verify each one during exploration and mark `[x]` or `[ ]` in the FEATURE.md:
+**MANDATORY: Example: Every listing page must be tested at 100% action coverage.** Explore must identify and plan tests for EVERY action on every listing/table page. Do not skip any action. The following checklist is exhaustive — verify each one during exploration and mark `[x]` or `[ ]` in the FEATURE.md:
 
 - **Row selection** — Single row checkbox/select
 - **Select all** — Header checkbox selects all visible rows
@@ -122,7 +134,7 @@ Analyze the API request and response and expand the scenarios from that. Write e
 
 **1e. Write the FEATURE.md** — Save `FEATURE.md` in the run directory (`runs/<ticket>/<run-id>/FEATURE.md`). Do not put it under `specs/` or `tests/`. The coordinator reads that file. It documents:
 - URL, role-based access, data models
-- **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Phase 2 can wait on it
+- **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Author can wait on it
 - **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
 - Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
 - Detailed selectors from a fresh snapshot
@@ -132,9 +144,9 @@ This is the single source of truth for what each module tests and its current st
 
 **1f. Approval Gate** — When a person is driving the session, present the FEATURE.md plan and wait for approval. When the server started the run, skip the gate and hand the plan to `qa-author`. The server runs the suite after the specs exist.
 
-### 2. Phase 2: Test Generation
+### 2. Author: Test Generation
 
-**CRITICAL: Phase 2 builds on Phase 1's plan.** Phase 1 produces the FEATURE.md with API Endpoints, Action Coverage Matrix, and test scenarios. Phase 2 MUST use these as its source of truth — never generate tests from scratch or skip planned scenarios.
+**CRITICAL: Author builds on Explore's plan.** Explore produces the FEATURE.md with API Endpoints, Action Coverage Matrix, and test scenarios. Author MUST use these as its source of truth — never generate tests from scratch or skip planned scenarios.
 
 **2a. Create Common POM Class** — **Mandatory.** Always create a shared POM class (e.g., `common-pom.ts`) with reusable component locators and methods:
 - Dropdowns: `selectOption(label, value)`, `isOpen()`
@@ -162,13 +174,13 @@ This common POM is imported by all module POMs to avoid duplication.
 - Use typed interfaces for test data (not inline objects)
 - Cover all relevant roles per the module's access model
 - Each file covers one scenario group
-- **Every listing page action must have a test** — reference the Action Coverage Matrix from Phase 1 FEATURE.md. No action is optional.
-- **Every data-loading action must use `page.waitForResponse`** — reference the API Endpoints section from Phase 1. Never use `waitForTimeout` for data loading.
-- **Test every checkbox from Phase 1** — if Phase 1 marked `[ ]` for an action, Phase 2 MUST write a test for it.
+- **Every listing page action must have a test** — reference the Action Coverage Matrix from Explore FEATURE.md. No action is optional.
+- **Every data-loading action must use `page.waitForResponse`** — reference the API Endpoints section from Explore. Never use `waitForTimeout` for data loading.
+- **Test every checkbox from Explore** — if Explore marked `[ ]` for an action, Author MUST write a test for it.
 
 **2e. Hand off** — Write `planned-specs.json` in the run directory. `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run the suite yourself.
 
-### 3. Debug Loop
+### 3. Heal
 
 The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 

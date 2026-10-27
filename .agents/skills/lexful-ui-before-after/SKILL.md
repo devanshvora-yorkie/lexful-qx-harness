@@ -26,7 +26,7 @@ Provide output based on the requested mode to give the user full control:
 
 **Purpose.** Show Lexful's team, in one glance, what a finding looks like today (Before = real UAT screenshot) and what a better layout could look like (After = concept mock built from shadcn/ui components, following Fluent-aligned design rules), with the reason and the effort.
 
-**Positioning (include in every report):** After images are **concept mocks for discussion, not the live product and not a commitment**. Phase 1 scope is to find and classify issues; fixing is Lexful's call. These mocks show one possible fix, and are the starting point for the later "Development & Design" phase.
+**Positioning (include in every report):** After images are **concept mocks for discussion, not the live product and not a commitment**. The audit finds and classifies issues; fixing is Lexful's call. These mocks show one possible fix, and are the starting point for the later development and design work.
 
 **Read first:** `fluent-ui-design-system/SKILL.md` (stack decision, authority order, Tailwind equivalents, quick-pick), its `references/lexful-mapping.md` and `references/shadcn-components.md`, and `references/after-mock-template.html` in this skill.
 

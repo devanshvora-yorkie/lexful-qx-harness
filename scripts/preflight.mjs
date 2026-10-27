@@ -105,7 +105,7 @@ async function main() {
       ok: !checks.some((row) => row.status === 'fail'),
       checkedAt: new Date().toISOString(),
       appUrl: CFG.qaUrl,
-      phase: 'checked-in-suite',
+      suite: 'E2E User Journey TCs',
       linear: false,
       runDir: path.relative(ROOT, path.resolve(args.out)),
       checks,

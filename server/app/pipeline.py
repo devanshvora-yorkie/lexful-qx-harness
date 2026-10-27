@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app import runners, store
-from app.logbook import Logbook, plain
+from app.logbook import Logbook, echo_run, plain
 from app.settings import get_settings
 
 log = logging.getLogger("qa.pipeline")
@@ -47,7 +47,7 @@ def _open_issue(summary: dict[str, int]) -> str:
 
 
 def startup_order(waiting: list[dict[str, Any]], fresh_phase1: str | None = None) -> list[str]:
-    """Checked-in suite runs go first. Ticket runs wait behind them."""
+    """E2E User Journey TCs go first. Feature Specific TCs wait behind them."""
     phase1: list[str] = []
     tickets: list[str] = []
     for row in waiting:
@@ -146,7 +146,8 @@ def execute_run(run_id: str) -> None:
 
 def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
     settings = get_settings()
-    book.phase(str(row.get("ticket") or run_id))
+    echo_run(folder)
+    book.phase(f"Feature Specific TCs  {row.get('ticket') or run_id}")
     book.row("server", "queued", str(row.get("ticket") or run_id))
     store.update_run(run_id, status="preflight")
     book.phase("preflight")
@@ -255,6 +256,8 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
             "ux-audit",
             f"verdict {ux_verdict}  score {ux_card.get('score', 100)}  {len(ux_findings)} finding(s)",
         )
+    elif ticket:
+        book.row("server", "ux-audit", "off  QA_RUN_UX_AUDIT=false  functional QA only")
 
     store.update_run(run_id, status=status, error=None)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
@@ -263,15 +266,16 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
 
 
 def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
-    """Run the checked-in suite against UAT. Heal locators. Keep bugs in this folder."""
+    """Run E2E User Journey TCs against UAT. Heal locators. Keep bugs in this folder."""
     settings = get_settings()
-    book.phase("phase 1  checked-in e2e")
+    echo_run(folder)
+    book.phase("E2E User Journey TCs")
     book.row(
         "server",
         "queued",
         'suite "e2e test cases"  UAT  qa-healer only, no new tests  each test is logged below',
     )
-    log.info("phase 1 %s started", run_id)
+    log.info("E2E User Journey TCs %s started", run_id)
     store.update_run(run_id, status="preflight")
     book.phase("session")
     book.row("server", "session", "signing in. Linear is not called")
@@ -357,13 +361,13 @@ def _seal(run_id: str, summary: dict[str, Any] | None, verdict: str | None) -> N
 
 
 def _phase1_meta() -> dict[str, Any]:
-    return {"phase": "checked-in-suite", "linear": False, "suite": "e2e test cases"}
+    return {"name": "E2E User Journey TCs", "linear": False, "suite": "e2e test cases"}
 
 
 def _phase1_report_lines() -> list[str]:
     return [
-        "Phase 1 ran the checked-in Playwright specs in `e2e test cases` against UAT.",
-        "Logged in this folder. Not sent to Linear.",
+        "E2E User Journey TCs ran the checked-in Playwright specs in `e2e test cases` against UAT.",
+        "Logged in this folder and on the harness terminal. Not sent to Linear.",
         "",
     ]
 
@@ -478,15 +482,15 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         f"Ticket: {ticket}",
         f"Pull requests: {prs}",
         f"Connected Linear issues: {connected}",
-        "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You coordinate. Do not browse and do not write specs.",
+        "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md. This is Feature Specific TCs. You coordinate. Do not browse and do not write specs.",
         f"Cover every acceptance criterion in the context pack. Write at least {count} tests.",
         "A test that passes by skipping the assertion does not count.",
         f"Preflight is already ok: {relative}/preflight.json",
         f"Context pack: {relative}/context-pack.json",
         "Auth cookies: runs/cache/stytch/session.json",
         f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
-        f"Delegate Phase 1 to qa-explorer. It writes {relative}/FEATURE.md, with the URL, API calls, and action matrix. It does not write specs.",
-        f"Read that file. Then delegate Phase 2 to qa-author. It writes the POM and specs only in {relative}/specs/.",
+        f"Delegate Explore to qa-explorer. It writes {relative}/FEATURE.md, with the URL, API calls, and action matrix. It does not write specs.",
+        f"Read that file. Then delegate Author to qa-author. It writes the POM and specs only in {relative}/specs/.",
         f"Leave FEATURE.md at {relative}/FEATURE.md. Do not copy it into specs/ or tests/.",
         f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
         f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
@@ -529,7 +533,7 @@ def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: lis
         f"Playwright results: {relative}/playwright/results.json",
         f"Playwright log: {relative}/playwright/output.log",
         f"Specs: {listed}",
-        "Follow the debug loop in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
+        "Follow the Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
         "Delegate only to qa-healer for one patch. This is one heal of the whole suite, not three attempts per test.",
         "Do not re-explore and do not add scenarios.",
         "Do not run the suite. The server will run it after you return.",
@@ -545,7 +549,7 @@ def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]
         for item in failures[:40]
     ) or "- the Playwright report has failures, but no test title was parsed"
     return "\n".join([
-        "This is a checked-in suite heal. It is not a ticket.",
+        "This is an E2E User Journey TCs heal. It is not Feature Specific TCs.",
         "Do not call qa-explorer or qa-author. Do not write a new test. Do not call Linear, GitHub, or /auth/password.",
         "Delegate only to qa-healer. In this one return, patch every spec-drift failure, then stop.",
         f"Heal attempt {attempt} of {total}.",
@@ -896,9 +900,11 @@ def _write_report(
     extra: list[str] | None = None,
 ) -> None:
     counts = summary or {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+    suite = "E2E User Journey TCs" if row.get("kind") == "phase1" else "Feature Specific TCs"
     lines = [
         f"# {row.get('ticket') or row.get('id')}",
         "",
+        f"- Suite: {suite}",
         f"- Run: `{row.get('id')}`",
         f"- Status: {row.get('status')}",
         f"- Verdict: {verdict}",

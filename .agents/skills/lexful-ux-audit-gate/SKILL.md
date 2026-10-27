@@ -25,7 +25,7 @@ Provide output based on the requested mode to give the user full control:
 
 **Purpose.** Decide whether a Lexful release candidate is safe from a UX standpoint, and produce findings the AI harness can file to Linear with no manual re-entry.
 
-**Where this fits.** This skill is the UX half of Phase 1's testing harness. The functional half (Playwright scripts, bug-logger, severity→Linear mapping) already exists in the Merged POC. This skill supplies the UX judgment layer that plugs in beside it. It runs on Lexful's live UAT app, logged in — not on static screen mockups.
+**Where this fits.** This is the UI/UX audit. It is its own toggle, `QA_RUN_UX_AUDIT`. Set that to false to run functional QA only. It is not part of E2E User Journey TCs and it is not a step inside Feature Specific TCs. It runs on Lexful's live UAT app, logged in — not on static screen mockups.
 
 **Full rule detail lives in:** `Lexful_UX_Rulebook_v0.5.md` (five lenses, journey checklists, confirmed personas, **the current severity scale**), `Lexful_Bad_UX_Pattern_Library_v0.6.md` (general bad-UX patterns mapped to Lexful, for the AI exploratory pass), `lexful-ux-checks.yaml` (the same checks as a machine-readable file, the input for the automated audit), and `Lexful_Live_Findings_Log.md` (real hands-on observations as they're gathered, pre-Linear). This SKILL.md is the short, operational version for day-to-day audit runs; those documents are the long version with reasoning, examples, and the running record.
 

@@ -15,7 +15,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : 1,
   reporter: runDir
     ? [
-      ['list'],
+      ['./scripts/progress-reporter.mjs'],
       ['json', { outputFile: path.join(runDir, 'playwright', 'results.json') }],
       ['html', { outputFolder: path.join(runDir, 'playwright', 'html'), open: 'never' }],
       ]

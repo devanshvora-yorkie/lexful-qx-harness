@@ -13,6 +13,16 @@ from typing import Any
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _SESSION_ID = re.compile(r"\bses_[A-Za-z0-9]{10,}\b")
+_ECHO: set[str] = set()
+
+
+def echo_run(folder: Path) -> None:
+    """Copy this run's log lines to the process terminal.
+
+    E2E User Journey TCs start inside the server when QA_PHASE1_ON_START is on.
+    Nothing tails run.log in that case, so the lines are printed here.
+    """
+    _ECHO.add(str(folder.resolve()))
 
 
 def plain(text: str) -> str:
@@ -254,9 +264,12 @@ class Logbook:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def line(self, message: str, *, moment: datetime | None = None) -> None:
+        text = f"{_stamp(moment)}  {message}"
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{_stamp(moment)}  {message}\n")
+            handle.write(f"{text}\n")
             handle.flush()
+        if str(self.path.parent.resolve()) in _ECHO:
+            print(text, flush=True)
 
     def row(self, role: str, verb: str, detail: str = "", *, moment: datetime | None = None) -> None:
         self.line(row(role, verb, detail), moment=moment)

@@ -8,8 +8,8 @@ const active = new Set(['accepted', 'queued', 'preflight', 'agent', 'execute', '
 const done = new Set(['completed', 'needs_revision', 'halted', 'failed']);
 
 if (!phase1 && !ticket) {
-  console.error('Usage: npm run ticket -- LEX-3500');
-  console.error('       npm run phase1');
+  console.error('Usage: npm run ticket -- LEX-3500    Feature Specific TCs');
+  console.error('       npm run e2e                  E2E User Journey TCs');
   process.exit(1);
 }
 
@@ -53,39 +53,57 @@ try {
     runId = started.runId;
     console.log(`${started.skipped ? 'following' : 'started'} ${runId} (${started.status})`);
   }
-  console.log('');
-  console.log(`${phase1 ? 'phase 1' : ticket}  ${runId}`);
-  console.log('');
 } catch (error) {
   console.error(`Cannot reach ${base}. Start it with: npm run serve`);
   console.error(error.message);
   process.exit(1);
 }
 
-let seen = '';
-for (;;) {
-  let row;
-  try {
-    row = await readJson(`/runs/${runId}`);
-  } catch (error) {
-    console.error(error.message);
-    process.exit(1);
-  }
-  const log = await fetch(`${base}/runs/${runId}/log`, { headers: requestHeaders() });
-  if (log.ok) {
-    const text = await log.text();
-    if (text.startsWith(seen)) {
-      const extra = text.slice(seen.length);
-      if (extra) process.stdout.write(extra.endsWith('\n') ? extra : `${extra}\n`);
-    } else if (text) {
-      process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+async function follow(id, label) {
+  let seen = '';
+  console.log('');
+  console.log(`${label}  ${id}`);
+  console.log('');
+  for (;;) {
+    let row;
+    try {
+      row = await readJson(`/runs/${id}`);
+    } catch (error) {
+      console.error(error.message);
+      process.exit(1);
     }
-    seen = text;
+    const log = await fetch(`${base}/runs/${id}/log`, { headers: requestHeaders() });
+    if (log.ok) {
+      const text = await log.text();
+      if (text.startsWith(seen)) {
+        const extra = text.slice(seen.length);
+        if (extra) process.stdout.write(extra.endsWith('\n') ? extra : `${extra}\n`);
+      } else if (text) {
+        process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+      }
+      seen = text;
+    }
+    if (done.has(row.status)) {
+      console.log('');
+      console.log(row.error ? `${row.status}  ${row.error}` : row.status);
+      return row.status === 'completed' ? 0 : 1;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  if (done.has(row.status)) {
-    console.log('');
-    console.log(row.error ? `${row.status}  ${row.error}` : row.status);
-    process.exit(row.status === 'completed' ? 0 : 1);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 1000));
 }
+
+if (!phase1) {
+  const listed = await readJson('/runs');
+  const e2e = (listed.runs || []).find((row) => row.kind === 'phase1' && active.has(row.status));
+  if (e2e) {
+    await follow(e2e.id, 'E2E User Journey TCs');
+    console.log('');
+    console.log('E2E User Journey TCs finished. Feature Specific TCs continues.');
+  }
+}
+
+const code = await follow(
+  runId,
+  phase1 ? 'E2E User Journey TCs' : `Feature Specific TCs  ${ticket}`,
+);
+process.exit(code);

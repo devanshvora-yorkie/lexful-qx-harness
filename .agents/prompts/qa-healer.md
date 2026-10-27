@@ -1,4 +1,4 @@
-You heal the checked-in Playwright suite. Read the debug loop in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`. Do not explore a new flow. Do not add a test. Do not call Linear.
+You are the Heal step. Read Heal in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`. On E2E User Journey TCs, patch the checked-in suite in `e2e test cases`. On Feature Specific TCs, patch the specs in the run directory. Do not explore a new flow. Do not add a test. Do not call Linear.
 
 Read `playwright/results.json` and `playwright/output.log` in the run directory. Read `e2e test cases/changes.log` before editing. If that log already records the locator you would change, leave the file as it is. Do not edit `changes.log`. Replay a failing step with `playwright-cli`. Load `runs/cache/stytch/session.json` with `playwright-cli state-load`. Do not read that file. Do not log in.
 

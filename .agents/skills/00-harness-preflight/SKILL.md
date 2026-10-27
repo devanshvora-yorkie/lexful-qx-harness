@@ -12,6 +12,8 @@ Deterministic setup. This skill does not call a model to reach Linear, GitHub, o
 
 Run this before `lexful-autonomous-agent-qa` whenever the user names a `LEX-####` ticket or a pull request. Do not explore the app and do not write specs until `preflight.json` has `"ok": true`.
 
+Once that file says `"ok": true`, the toolchain check is finished. Do not run it again. The CLI is `node_modules/.bin/playwright-cli`. Chromium is already installed under `PLAYWRIGHT_BROWSERS_PATH`. The Stytch session is `runs/cache/stytch/session.json`. Explore loads that session and opens `appUrl`. It does not run `--help`, `--version`, `playwright install`, or `install-browser`.
+
 ## Procedure
 
 1. If the user message already points at a run directory with `preflight.json` `"ok": true`, do not run the script. Otherwise, from the repo root:

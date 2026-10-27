@@ -31,7 +31,7 @@ docker compose up --build -d
 
 With `LOCAL_MODE=true` the API does not require `HARNESS_DEPLOY_SECRET`. Set `LOCAL_MODE=false` and a secret before exposing the port.
 
-## Start a ticket
+## Feature Specific TCs
 
 From this directory, after the container is up:
 
@@ -39,30 +39,32 @@ From this directory, after the container is up:
 docker compose exec harness npm run ticket -- LEX-2293
 ```
 
-That starts the run and streams the log. Preflight signs in, the explorer explores live UAT, the author writes specs, Playwright runs them (with automated healing if locators drifted), and the UI/UX auditor audits the ticket's screens against Lexful's UX rulebook, 5 lenses, and Fluent/shadcn design standards. `docker compose down` stops the server and keeps the run volume.
+That starts the run and streams the log. If E2E User Journey TCs is still running, those lines print first, then this ticket. The same lines are on the harness process (`make logs`). Preflight signs in, Explore walks live UAT, Author writes specs, and Playwright runs them. Heal patches a drifted locator. UI/UX audit runs after that only when `QA_RUN_UX_AUDIT=true`. Set `QA_RUN_UX_AUDIT=false` to stop after functional QA. `docker compose down` stops the server and keeps the run volume.
 
-## Phase 1 — checked-in suite
+Inside this suite the steps are Explore, Author, and Heal. Those names are in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`.
 
-Docker queues this before any ticket. It runs the specs already in `e2e test cases` against UAT. No explorer, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
+## E2E User Journey TCs
 
-On startup the container signs in, runs that suite, and writes the log under `runs/phase-1/`. The folder name is the UTC start time and, when the run finishes, the pass and fail counts. Follow it with:
+Docker queues this before any ticket when `QA_PHASE1_ON_START=true`. It runs the specs already in `e2e test cases` against UAT. No Explore, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
+
+On startup the container signs in, runs that suite, and writes the log under `runs/phase-1/`. The same lines are printed on the harness process, so `make logs` shows each finished test. The folder name is the UTC start time and, when the run finishes, the pass and fail counts. Follow it with:
 
 ```bash
-make phase1
+make e2e
 ```
 
-That is `docker compose exec harness npm run phase1`. If a phase 1 run is already queued, the command follows it instead of starting a second one.
+`make phase1` is the same command. If an E2E User Journey run is already queued, the command follows it instead of starting a second one.
 
 `run.log` prints each finished test. A line that says `still in the browser` means a test is running, not that the run has stopped.
 
-A failure is classified by `qa-healer` only. The explorer and the author are not called, and no new test is written.
+A failure is classified by Heal only. Explore and Author are not called, and no new test is written.
 
 - Spec drift is patched in the existing spec or page object: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. The edit is written into `e2e test cases/` on this machine, which is the suite Playwright runs. The same locator is not patched again once it is listed in `e2e test cases/changes.log`. The server appends each heal to that log and re-runs the suite only when a file changed, up to 3 heals.
 - A product bug is left in the spec and recorded in `report.md` and `triage-1.json` in the run folder. It is not sent to Linear.
 
-Set `QA_PHASE1_ON_START=false` in `.env` before `docker compose up` to skip the automatic run. `npm run phase1` still starts one.
+Set `QA_PHASE1_ON_START=false` in `.env` before `docker compose up` to skip the automatic run. `npm run e2e` still starts one.
 
-A ticket run still uses Linear for the context pack. Phase 1 does not.
+Feature Specific TCs still use Linear for the context pack. E2E User Journey TCs do not.
 
 ## Where a run is stored
 
@@ -94,7 +96,7 @@ runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/
   before-after/         (optional) Before UAT vs After concept mocks
 ```
 
-Phase 1 does not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Ticket specs stay in that attempt's `specs/` folder.
+E2E User Journey TCs do not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Feature Specific TCs stay in that attempt's `specs/` folder.
 
 `runs/regression/` and `runs/LEX-*/` are links to those folders for attempts that already existed. `runs/index.json` is the list the server uses. The Stytch session is `runs/cache/stytch/session.json`, for the account named by `STYTCH_PERSONA`. Do not commit `.env` or that file.
 

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -7,7 +9,15 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.logbook import Logbook, SubagentTail, child_message_lines, format_event, plain_error, session_id_from_text
+from app.logbook import (
+    Logbook,
+    SubagentTail,
+    child_message_lines,
+    echo_run,
+    format_event,
+    plain_error,
+    session_id_from_text,
+)
 from app.runners import _preflight_row, _session_expired
 from app.main import health, run_phase1, run_ticket
 from app.pipeline import (
@@ -177,6 +187,20 @@ class LogbookTest(unittest.TestCase):
             self.assertIn("$0.0200", text)
             self.assertIn("in 4 out 10", text)
 
+    def test_e2e_lines_are_printed_on_the_terminal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            echo_run(folder)
+            book = Logbook(folder)
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                book.phase("E2E User Journey TCs")
+                book.row("playwright", "test", "1 passed")
+            text = printed.getvalue()
+            self.assertIn("E2E User Journey TCs", text)
+            self.assertIn("1 passed", text)
+            self.assertIn("E2E User Journey TCs", (folder / "run.log").read_text(encoding="utf-8"))
+
 
 class VerdictTest(unittest.TestCase):
     def test_matrix(self):
@@ -319,7 +343,7 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(created["ticket"])
         folder = Path(self.tmp.name) / created["folder"]
         self.assertTrue((folder / "manifest.json").is_file())
-        self.assertTrue((folder / "contents.txt").read_text(encoding="utf-8").startswith("This folder is one phase 1"))
+        self.assertTrue((folder / "contents.txt").read_text(encoding="utf-8").startswith("This folder is one E2E User Journey"))
         self.assertFalse((folder / "specs").exists())
         published = publish_folder(
             created["id"],

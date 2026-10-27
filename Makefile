@@ -1,4 +1,4 @@
-.PHONY: up down logs ps phase1
+.PHONY: up down logs ps e2e phase1
 
 up:
 	@test -f .env || (echo "Create .env from .env.example and fill in the keys." && exit 1)
@@ -10,8 +10,8 @@ down:
 logs:
 	docker compose logs -f harness
 
-phase1:
-	docker compose exec harness npm run phase1
+e2e phase1:
+	docker compose exec harness npm run e2e
 
 ps:
 	docker compose ps

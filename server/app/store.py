@@ -1,6 +1,6 @@
 """One index for every run.
 
-Phase 1 lives in runs/phase-1/. A ticket lives in runs/tickets/<ticket>/.
+E2E User Journey TCs live in runs/phase-1/. Feature Specific TCs live in runs/tickets/<ticket>/.
 The folder name is the UTC start time plus the final counts once the run finishes.
 The id stays stable for the API. Older paths under runs/regression/ and runs/LEX-*/
 remain as links so a run that is already open still resolves.
@@ -336,7 +336,7 @@ def _saved_outcome(folder: Path) -> tuple[dict[str, Any] | None, str | None]:
 
 
 _PHASE1_CONTENTS = """\
-This folder is one phase 1 attempt. Phase 1 runs the checked-in specs in "e2e test cases" against UAT.
+This folder is one E2E User Journey TCs attempt. It runs the checked-in specs in "e2e test cases" against UAT.
 
 The specs are not copied here. When a locator is healed, the edit is written into "e2e test cases/" in the repo. This folder only records what happened on this attempt.
 
@@ -356,7 +356,7 @@ opencode/          the agent session and the healer transcript
 """
 
 _TICKET_CONTENTS = """\
-This folder is one ticket attempt.
+This folder is one Feature Specific TCs attempt.
 
 The specs written for this attempt stay in specs/. They are not copied into "e2e test cases/" by this run.
 
@@ -380,12 +380,13 @@ _GUIDE = """\
 Where a run is stored
 
 phase-1/
-  One folder per checked-in suite run. The name is the UTC start time, then the result.
+  E2E User Journey TCs. One folder per run of the checked-in suite in "e2e test cases".
+  The name is the UTC start time, then the result.
   Example: 2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision
   Open report.md in that folder for the healer notes.
 
 tickets/
-  One folder per Linear ticket, then one folder per attempt.
+  Feature Specific TCs. One folder per Linear ticket, then one folder per attempt.
   Example: tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect
 
 pull-requests/

@@ -153,7 +153,7 @@ Access Points(40), Applications(58), Backups(30), Cameras(29), Computers(95), Co
 
 ## 5. Where the suites live now
 
-Checked-in suites are under `e2e test cases/`. Each folder has its own spec and page objects. A locator heal from phase 1 is written into that folder. A ticket run writes new specs under `runs/tickets/<ticket>/<attempt>/specs/`. There is no `tests/` directory.
+E2E User Journey TCs live under `e2e test cases/`. Each folder has its own spec and page objects. A locator heal from that suite is written into that folder. Feature Specific TCs write new specs under `runs/tickets/<ticket>/<attempt>/specs/`. There is no `tests/` directory.
 
 ---
 

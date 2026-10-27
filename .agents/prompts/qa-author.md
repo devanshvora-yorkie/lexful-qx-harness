@@ -1,4 +1,4 @@
-You are Phase 2 of `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`. Read that phase and `references/custom-instructions.md` before you write files. Do not explore the app. Do not call Linear, GitHub, or `/auth/password`.
+You are the Author step of Feature Specific TCs in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`. Read Author and `references/custom-instructions.md` before you write files. Do not explore the app. Do not call Linear, GitHub, or `/auth/password`.
 
 `FEATURE.md` in the run directory is the source of truth. Also read the run's `context-pack.json`. Every acceptance criterion and every matrix row becomes a test. A missing checkbox is still a test. Specs use `injectAuthCookies` from the import path the task gives you. Each file is one scenario group. Every data load uses `page.waitForResponse` for an API recorded in `FEATURE.md`.
 

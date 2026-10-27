@@ -43,7 +43,8 @@ async def _lifespan(_app: FastAPI):
         created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
         update_run(created["id"], status="queued")
         fresh = created["id"]
-        log.info("phase 1 queued %s", fresh)
+        log.info("E2E User Journey TCs queued %s", fresh)
+        print(f"E2E User Journey TCs queued  {fresh}", flush=True)
     for run_id in startup_order(waiting, fresh):
         _queue.put_nowait(run_id)
     worker = asyncio.create_task(_worker())
@@ -146,19 +147,20 @@ def run_log(run_id: str) -> PlainTextResponse:
 
 @app.post("/run/phase1", status_code=202, dependencies=[Depends(require_secret)])
 def run_phase1() -> dict[str, Any]:
-    """Queue the checked-in suite. An in-flight phase 1 run is returned instead of a second one."""
+    """Queue E2E User Journey TCs. An in-flight run is returned instead of a second one."""
     existing = find_active_phase1()
     if existing:
         return {
             "success": True,
             "skipped": True,
-            "reason": "phase 1 already queued",
+            "reason": "E2E User Journey TCs already queued",
             "runId": existing["id"],
             "status": existing["status"],
         }
     row = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
     queued = _enqueue(row)
-    log.info("phase 1 queued %s", row["id"])
+    log.info("E2E User Journey TCs queued %s", row["id"])
+    print(f"E2E User Journey TCs queued  {row['id']}", flush=True)
     return queued
 
 

@@ -1,10 +1,10 @@
-# Pending: one ticket run, two phases
+# Pending: one ticket run, two suites
 
 Status: not started. Discussion only. No code changes yet.
 
-A ticket trigger becomes one run. The checked-in suite runs first. New tests are written only for what that suite does not already cover, then a few of them are promoted back into `e2e test cases`.
+A ticket trigger becomes one run. E2E User Journey TCs run first. Feature Specific TCs are written only for what that suite does not already cover, then a few of them are promoted back into `e2e test cases`.
 
-## Phase 1 — checked-in suite
+## E2E User Journey TCs
 
 1. Preflight signs in against live UAT.
 2. Run every spec in `e2e test cases` (about 60 today).
@@ -13,11 +13,11 @@ A ticket trigger becomes one run. The checked-in suite runs first. New tests are
    - **healed** — renamed locator, strict-mode match, or a wait that expired while the control was already on the page.
    - **bug** — product did the wrong thing, with evidence from the last attempt.
    - **flake** — empty page, `goto` timeout, or a failure that passed on retry. Do not call this a bug.
-5. A remaining bug does not stop Phase 2. Today’s regression (`regression-20261023T114747Z-f35a`) finished 57 passed and 2 failed, and several “bugs” were flakes.
+5. A remaining bug does not stop Feature Specific TCs. Today’s regression (`regression-20261023T114747Z-f35a`) finished 57 passed and 2 failed, and several “bugs” were flakes.
 
-This phase does not write new tests and does not call Linear for the suite itself.
+This suite does not write new tests and does not call Linear for the suite itself.
 
-## Phase 2 — ticket
+## Feature Specific TCs
 
 1. Full preflight for the ticket: Linear, GitHub, context pack.
 2. Read every spec already in `e2e test cases`, including ones that failed as bugs. A failing test is still coverage. Skipping only the last green run would rewrite the same cases.

@@ -503,7 +503,7 @@ def _run_playwright_once(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     book.row(
         "playwright",
         "running",
-        f"{len(specs)} files, one at a time. Each finished test is logged. A quiet gap is a test still in the browser.",
+        f"{len(specs)} files, one at a time. Each finished case is logged as done/total. A retry stays on that case.",
     )
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 80, 200, 0, 0))
