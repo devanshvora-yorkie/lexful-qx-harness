@@ -7,8 +7,8 @@ OpenCode QA harness for a Lexful ticket. Preflight signs in, writes a context pa
 Docker Desktop (or another engine with Compose v2) is the only install.
 
 ```bash
-git clone https://github.com/devanshvora-yorkie/lexful-qx-harness.git
-cd lexful-qx-harness
+git clone https://github.com/Lexful-ai/qa-harness.git
+cd qa-harness
 cp .env.example .env
 ```
 
