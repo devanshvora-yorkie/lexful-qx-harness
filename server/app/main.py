@@ -8,12 +8,13 @@ import re
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.logbook import Logbook
 from app.pipeline import execute_run, startup_order
+from app.runners import ensure_session
 from app.settings import get_settings
 from app.store import (
     create_run,
@@ -197,3 +198,27 @@ def uat_deploy(body: DeployBody) -> dict[str, Any]:
     queued = _enqueue(row)
     queued["sha"] = body.sha
     return queued
+
+
+class PersonaBody(BaseModel):
+    persona: str
+    fresh: bool = False
+
+
+def persona_client_allowed(host: str | None) -> bool:
+    return host in {"127.0.0.1", "::1"}
+
+
+@app.post("/internal/persona")
+def internal_persona(body: PersonaBody, request: Request) -> dict[str, Any]:
+    """Sign in as admin, support, or viewer. Localhost only. The response has no cookies."""
+    host = request.client.host if request.client else ""
+    if not persona_client_allowed(host):
+        raise HTTPException(status_code=403, detail="persona login is only available inside the harness")
+    name = body.persona.strip().lower()
+    if name not in {"admin", "support", "viewer"}:
+        raise HTTPException(status_code=400, detail="Persona must be admin, support, or viewer")
+    code, detail = ensure_session(fresh=body.fresh, persona=name)
+    if code != 0:
+        raise HTTPException(status_code=502, detail=detail or "could not sign in")
+    return {"success": True, "persona": name, "line": detail}

@@ -33,8 +33,8 @@ Cap promotions at 1–3 per ticket. A failed, skipped, or weakened test stays in
 
 ## Access
 
-`e2e test cases` is already mounted into the container and `qa-author` can read it. The gap is the instruction: a ticket run is not told to compare new specs with that folder. Reading happens while planning. Writing back into the folder is the promotion step, after the new test has passed.
+`e2e test cases` is already mounted into the container. A ticket run now gets `e2e-coverage.md` before Explore, and Author is told not to rewrite a listed case. Writing a passed new test back into that folder is still the promotion step, and it is not automatic.
 
 ## Conflicts with the current skill
 
-The author skill still says at least 15 tests and every listing action. That has to change or the three-journey cap will lose. Ticket specs are written under `runs/<ticket>/<run-id>/specs/` today and are not copied into `e2e test cases`. The checked-in suite and the ticket are still two queue items; this plan makes them one run.
+The floor of 15 tests is removed. There is no maximum either. A ticket run writes as many new cases as the uncovered behavior needs, tagged by type and suite, and skips baselines already listed for search, asset crud, and document editing. Ticket specs stay under `runs/<ticket>/<run-id>/specs/`. They are not copied into `e2e test cases`. The checked-in suite and the ticket are still two queue items.

@@ -1,4 +1,4 @@
-"""Ticket run: preflight, Haiku coordinator, Playwright, then at most three Haiku heals."""
+"""Ticket run: preflight, coordinator, Playwright, then at most three heals."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from app import runners, store
+from app.bugs import latest_triage, publish_bugs
+from app.coverage import write_coverage_index
 from app.logbook import Logbook, echo_run, plain
 from app.settings import get_settings
+from app.ux_report import write_ux_report
 
 log = logging.getLogger("qa.pipeline")
 
@@ -178,7 +181,9 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     )
     store.update_run(run_id, status="agent", ticket=ticket, pr=preflight.get("primaryPr"))
     book.phase("coordinator")
-    prompt = _lead_prompt(folder, ticket, row.get("specCount"), preflight)
+    covered = write_coverage_index(settings.root / "e2e test cases", folder / "e2e-coverage.md")
+    book.row("server", "coverage", f"{covered} checked-in cases")
+    prompt = _lead_prompt(folder, ticket, preflight)
     (folder / "prompt.md").write_text(prompt + "\n", encoding="utf-8")
     started = time.time()
     agent_code, session_id = runners.run_opencode(
@@ -228,13 +233,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
 
     if settings.run_ux_audit and ticket:
         book.phase("ui-ux audit")
-        ux_prompt = _ux_audit_prompt(
-            folder,
-            ticket,
-            preflight,
-            with_visuals=settings.ux_before_after,
-            mode=settings.ux_mode,
-        )
+        ux_prompt = _ux_audit_prompt(folder, ticket, preflight)
         (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
         ux_code, ux_session_id = runners.run_opencode(
             folder,
@@ -248,6 +247,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         if ux_session_id:
             store.update_run(run_id, opencodeSession=ux_session_id)
             runners.export_session(folder, ux_session_id)
+        write_ux_report(folder, ticket)
         ux_card = _read_json(folder / "ux-scorecard.json")
         ux_findings = _read_findings(folder / "ux-findings.json")
         ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "ADVISORY-FAIL"))
@@ -260,6 +260,8 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         book.row("server", "ux-audit", "off  QA_RUN_UX_AUDIT=false  functional QA only")
 
     store.update_run(run_id, status=status, error=None)
+    if _record_bugs(folder, store.get_run(run_id) or row, summary):
+        book.row("server", "bugs", "bugs.md")
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
     _seal(run_id, summary, verdict)
@@ -340,6 +342,8 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
         f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}  not sent to Linear",
     )
     store.update_run(run_id, status=status, error=None)
+    if _record_bugs(folder, store.get_run(run_id) or row, summary):
+        book.row("server", "bugs", "bugs.md")
     _write_qa_result(folder, None, verdict, summary, issues, specs, extra=_phase1_meta())
     _write_report(
         folder,
@@ -423,8 +427,8 @@ def _execute_and_heal(
         if session_id:
             store.update_run(run_id, opencodeSession=session_id)
         runners.export_session(folder, session_id)
-        triage = _take_triage(folder, attempt) if classify and heal_code == 0 else {}
-        if classify:
+        triage = _take_triage(folder, attempt)
+        if classify and heal_code == 0:
             record_suite_edits(run_id, attempt, before_text, _suite_texts(), triage)
         if heal_code != 0:
             book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
@@ -472,8 +476,7 @@ def _display(folder: Path) -> str:
         return str(folder)
 
 
-def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: dict[str, Any]) -> str:
-    count = spec_count or 15
+def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
     relative = _display(folder)
     connected = ", ".join(preflight.get("connectedTickets") or []) or "none"
     prs = ", ".join(str(number) for number in (preflight.get("pullRequests") or [])) or "none"
@@ -483,14 +486,22 @@ def _lead_prompt(folder: Path, ticket: str, spec_count: int | None, preflight: d
         f"Pull requests: {prs}",
         f"Connected Linear issues: {connected}",
         "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md. This is Feature Specific TCs. You coordinate. Do not browse and do not write specs.",
-        f"Cover every acceptance criterion in the context pack. Write at least {count} tests.",
-        "A test that passes by skipping the assertion does not count.",
+        f"Checked-in coverage: {relative}/e2e-coverage.md",
+        "Those cases already run in E2E User Journey TCs for search, asset crud, and document editing.",
+        "Do not write a case that file already lists. Cite its id.",
+        "Write a new case for each acceptance criterion and each observed behavior that the coverage file does not already assert.",
+        "There is no minimum and no maximum. The number of tests is the uncovered behavior of this ticket.",
+        "Each new test has one type tag (@positive, @negative, or @edge) and one suite tag (@bvt, @smoke, @sanity, or @regression).",
+        "A test that passes by skipping the assertion does not count. Do not write a skipped or deprecated test.",
         f"Preflight is already ok: {relative}/preflight.json",
         f"Context pack: {relative}/context-pack.json",
-        "Auth cookies: runs/cache/stytch/session.json",
+        "Auth cookies: runs/cache/stytch/session.json for the default persona, admin.",
+        "When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer` before browsing as that user.",
+        "That writes runs/cache/stytch/<persona>.json. Do not read the file. Load it with playwright-cli state-load.",
+        "A spec for that persona calls injectAuthCookies(page.context(), 'support') or 'viewer'. Other specs keep the default call.",
         f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
-        f"Delegate Explore to qa-explorer. It writes {relative}/FEATURE.md, with the URL, API calls, and action matrix. It does not write specs.",
-        f"Read that file. Then delegate Author to qa-author. It writes the POM and specs only in {relative}/specs/.",
+        f"Delegate Explore to qa-explorer. Give it {relative}/e2e-coverage.md. It writes {relative}/FEATURE.md, with the URL, API calls, the action matrix, and a planned-cases table. A covered row cites an id from e2e-coverage.md. A new row is the only one Author may write. Explore does not write specs.",
+        f"Read that file. Then delegate Author to qa-author. Give it {relative}/FEATURE.md, {relative}/e2e-coverage.md, the context pack, and {relative}/specs/.",
         f"Leave FEATURE.md at {relative}/FEATURE.md. Do not copy it into specs/ or tests/.",
         f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
         f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
@@ -502,25 +513,23 @@ def _ux_audit_prompt(
     folder: Path,
     ticket: str,
     preflight: dict[str, Any],
-    *,
-    with_visuals: bool = False,
-    mode: str = "simple",
 ) -> str:
     relative = _display(folder)
     return "\n".join([
-        f"UI/UX Audit for ticket: {ticket}",
+        f"UI/UX audit for ticket: {ticket}",
         f"Run directory: {relative}",
+        f"App URL: {preflight.get('appUrl') or 'the appUrl in the context pack'}",
         f"Context pack: {relative}/context-pack.json",
         f"Feature map and explored routes: {relative}/FEATURE.md",
         f"Exploration snapshots: {relative}/explore/",
         f"Triage notes and healed locators: {relative}/triage.json",
-        "Follow .agents/skills/lexful-ux-audit-gate/SKILL.md, .agents/skills/fluent-ui-design-system/SKILL.md, and .agents/ux/QA_TRACEABILITY.md.",
-        "Evaluate the ticket journey against .agents/ux/lexful-ux-checks.yaml and .agents/ux/Lexful_Bad_UX_Pattern_Library_v0.6.md.",
-        "Remember calibration rules: working UI passes; QA-expected behavior is at most an Observation (O).",
-        "Review any locator heals in triage.json per rules H1-H6.",
-        f"Output mode: {mode} (simple = suggested solution focus; advanced = full background, reasoning, and technical breakdown).",
-        f"Before/After concept mocks enabled: {'true' if with_visuals else 'false'}.",
-        f"Write ux-findings.json, ux-scorecard.json, and ux-report.md into {relative}/.",
+        "Follow .agents/skills/ux-audit/SKILL.md, .agents/skills/design-system/SKILL.md, and .agents/ux/traceability.md.",
+        "Evaluate the ticket journey against .agents/ux/checks.yaml and .agents/ux/pattern-library.md.",
+        "Working UI passes. QA-expected behavior is at most an Observation (O).",
+        "Review locator heals in triage.json per rules H1-H6.",
+        "Write the remediation in the finding. Do not create mock screens or a before-after folder.",
+        f"Write ux-findings.json and ux-scorecard.json into {relative}/.",
+        "The harness fills .agents/skills/lexful-ux-audit-gate/audit-preview.html and writes ux-report.html. Do not write HTML, do not fill that template, and do not write ux-report.md.",
         "Do not write test specs and do not edit product code.",
     ])
 
@@ -538,6 +547,10 @@ def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: lis
         "Do not re-explore and do not add scenarios.",
         "Do not run the suite. The server will run it after you return.",
         "If the control is on the page and the product did the wrong thing, do not edit the spec.",
+        "Add a bugs array to triage.json, one object per product defect. The server writes bugs.md from it.",
+        "Do not put a skipped or deprecated test in failures or in bugs.",
+        "Each bug needs area, failure, context, severity (Critical, High, Medium, or Low), severityReason, description, affectedTests, steps, expected, actual, rootCause, and evidence.",
+        "Severity decides priority: Critical is P0, High is P1, Medium is P2, Low is P3.",
     ])
 
 
@@ -566,6 +579,10 @@ def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]
         "spec: a renamed locator, a locator that matches several elements, or an existing wait that expired while the snapshot already shows that control. Narrow the locator or raise that timeout. Do not add waitForTimeout. Leave the expected outcome.",
         "bug: a loaded value is wrong, a blocked request was sent, or the page is an error response. Do not edit the spec.",
         "If you are unsure, class it as bug and do not edit.",
+        "Add a bugs array for those product defects. One object can list several affectedTests when they are the same defect. The server writes bugs.md.",
+        "Do not put a skipped or deprecated test in failures or in bugs.",
+        "Each bug needs area, failure, context, severity (Critical, High, Medium, or Low), severityReason, description, affectedTests, steps, expected, actual, rootCause, and evidence.",
+        "Severity decides priority: Critical is P0, High is P1, Medium is P2, Low is P3.",
         "Failures:",
         listed,
         f"Specs: {', '.join(specs)}",
@@ -725,11 +742,29 @@ def _failure_reason(item: dict[str, Any]) -> str:
 
 
 def _take_triage(folder: Path, attempt: int) -> dict[str, Any]:
+    """Read triage.json and keep a copy at triage-<attempt>.json for the bug record."""
     path = folder / "triage.json"
     data = _read_triage(path)
     if path.is_file():
-        path.replace(folder / f"triage-{attempt}.json")
+        (folder / f"triage-{attempt}.json").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     return data
+
+
+def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> bool:
+    triage, cycle = latest_triage(folder)
+    pack = _read_json(folder / "context-pack.json")
+    url = str(pack.get("appUrl") or get_settings().qa_url)
+    return publish_bugs(
+        folder,
+        ticket=str(row.get("ticket") or ""),
+        run_id=str(row.get("id") or folder.name),
+        url=url,
+        build=str(row.get("sha") or "unknown"),
+        failed=int(summary.get("failed") or 0),
+        triage=triage,
+        still_failing=failed_tests(_read_json(folder / "playwright" / "results.json")),
+        cycle=cycle,
+    )
 
 
 def _healer_hid_a_bug(folder: Path) -> list[str]:
@@ -837,10 +872,12 @@ def _write_qa_result(
             "verdict": ux_card.get("verdict"),
             "score": ux_card.get("score"),
             "findings_count": len(_read_findings(folder / "ux-findings.json")),
-            "report_file": "ux-report.md" if (folder / "ux-report.md").is_file() else None,
+            "report_file": "ux-report.html" if (folder / "ux-report.html").is_file() else None,
         }
     if extra:
         payload.update(extra)
+    if (folder / "bugs.md").is_file():
+        payload["bugs_file"] = "bugs.md"
     (folder / "qa-result.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
@@ -862,20 +899,19 @@ def _read_findings(path: Path) -> list[dict[str, Any]]:
 
 def _ux_report_section(folder: Path) -> list[str]:
     card = _read_json(folder / "ux-scorecard.json")
-    if not card and not (folder / "ux-report.md").is_file():
+    if not card and not (folder / "ux-report.html").is_file():
         return []
     findings = _read_findings(folder / "ux-findings.json")
+    counts = card.get("counts") if isinstance(card.get("counts"), dict) else card
     lines = [
-        "## UI/UX Audit Summary",
+        "## UI/UX audit",
         "",
-        f"- UX Verdict: **{card.get('verdict', 'PASS')}**",
+        f"- UX verdict: **{card.get('verdict', 'PASS')}**",
         f"- Score: {card.get('score', 100)} / 100",
-        f"- Findings: S0={card.get('S0', 0)}, S1={card.get('S1', 0)}, S2={card.get('S2', 0)}, S3={card.get('S3', 0)}, Observations={card.get('O', 0)}",
-        "- Detailed Report: `ux-report.md`",
-        "- Structured Findings: `ux-findings.json`",
+        f"- Findings: S0={counts.get('S0', 0)}, S1={counts.get('S1', 0)}, S2={counts.get('S2', 0)}, S3={counts.get('S3', 0)}, Observations={counts.get('O', 0)}",
+        "- Report: `ux-report.html`",
+        "- Findings file: `ux-findings.json`",
     ]
-    if (folder / "before-after").is_dir():
-        lines.append("- Visual Concept Mocks: `before-after/`")
     if findings:
         lines.append("")
         lines.append("### Key UX Findings")
@@ -888,6 +924,13 @@ def _ux_report_section(folder: Path) -> list[str]:
                 lines.append(f"- **[{sev}] {cid}**: {title}")
     lines.append("")
     return lines
+
+
+def _model_line() -> str:
+    settings = get_settings()
+    if settings.sub_model == settings.main_model:
+        return settings.main_model
+    return f"{settings.main_model}  subagents {settings.sub_model}"
 
 
 def _write_report(
@@ -908,7 +951,7 @@ def _write_report(
         f"- Run: `{row.get('id')}`",
         f"- Status: {row.get('status')}",
         f"- Verdict: {verdict}",
-        f"- Model: {get_settings().main_model} for every step",
+        f"- Model: {_model_line()}",
         f"- Passed: {counts['passed']}",
         f"- Failed: {counts['failed']}",
         f"- Skipped: {counts['skipped']}",
@@ -922,8 +965,11 @@ def _write_report(
         lines.append("## Open issues")
         lines.extend(f"- {issue}" for issue in issues)
         lines.append("")
+    bugs = folder / "bugs.md"
+    if bugs.is_file():
+        lines.extend(["## Bugs", "", bugs.read_text(encoding="utf-8").rstrip(), ""])
     ux_section = _ux_report_section(folder)
     if ux_section:
         lines.extend(ux_section)
-    lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. The Stytch session is `runs/cache/stytch/session.json`.")
+    lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. Product bugs are in `bugs.md` when a failure remains. The Stytch session is `runs/cache/stytch/session.json`.")
     (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

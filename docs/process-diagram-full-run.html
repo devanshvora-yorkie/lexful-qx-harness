@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lexful QX Harness — Full run</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --surface: #131820;
+      --surface-2: #1a2230;
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --dim: #6b7a94;
+      --accent: #5b9cf5;
+      --accent-dim: rgba(91, 156, 245, 0.14);
+      --green: #3dd68c;
+      --green-dim: rgba(61, 214, 140, 0.12);
+      --amber: #f0b429;
+      --amber-dim: rgba(240, 180, 41, 0.12);
+      --purple: #a78bfa;
+      --purple-dim: rgba(167, 139, 250, 0.14);
+      --rose: #f472b6;
+      --rose-dim: rgba(244, 114, 182, 0.12);
+      --cyan: #22d3ee;
+      --cyan-dim: rgba(34, 211, 238, 0.1);
+      --shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(91, 156, 245, 0.12), transparent),
+        radial-gradient(ellipse 50% 40% at 100% 80%, rgba(61, 214, 140, 0.05), transparent);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 4rem;
+    }
+
+    header { margin-bottom: 1.75rem; }
+
+    .kicker {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.55rem;
+    }
+
+    header h1 {
+      font-size: clamp(1.7rem, 3vw, 2.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.55rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 1.02rem;
+      max-width: 46rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem 1.35rem;
+      margin-top: 1.1rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+    /* Glance stepper */
+    .glance {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 0.7rem;
+      margin: 1.5rem 0 2rem;
+    }
+
+    .glance .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 0.75rem 0.75rem;
+      min-height: 5.4rem;
+      position: relative;
+    }
+
+    .glance .step strong {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-top: 0.2rem;
+    }
+
+    .glance .step em {
+      display: block;
+      font-style: normal;
+      color: var(--muted);
+      font-size: 0.72rem;
+      margin-top: 0.15rem;
+    }
+
+    .glance .n {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      color: var(--dim);
+    }
+
+    .glance .step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -0.62rem;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #6b7a94;
+      font-size: 0.85rem;
+      z-index: 1;
+    }
+
+    .glance .step.gates { border-color: rgba(240, 180, 41, 0.45); }
+    .glance .step.pre { border-color: rgba(240, 180, 41, 0.35); }
+    .glance .step.p1 { border-color: rgba(61, 214, 140, 0.45); background: #101910; }
+    .glance .step.p2 { border-color: rgba(167, 139, 250, 0.5); background: #14121c; }
+    .glance .step.out { border-color: rgba(91, 156, 245, 0.4); }
+    .glance .step.store { border-color: rgba(34, 211, 238, 0.45); background: #0e171c; }
+
+    /* Sections */
+    section.block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem 1.35rem 1.35rem;
+      margin-bottom: 0.35rem;
+      box-shadow: var(--shadow);
+    }
+
+    section.block h2 {
+      font-size: 1.05rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .block-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: baseline;
+      margin-bottom: 0.85rem;
+    }
+
+    .block-head p, .note {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .tag {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.04em;
+      color: var(--cyan);
+      background: var(--surface-2);
+      border-radius: 4px;
+      padding: 0.15rem 0.4rem;
+      white-space: nowrap;
+    }
+
+    .join {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 28px;
+      color: var(--dim);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .join.labeled { height: 46px; }
+
+    .join .stem {
+      width: 2px;
+      flex: 1;
+      background: #3d4f66;
+      position: relative;
+    }
+
+    .join .stem::after {
+      content: "";
+      position: absolute;
+      left: -4px;
+      bottom: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 7px solid #6b7a94;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 0.85rem;
+    }
+
+    .grid-4, .grid-3, .checks {
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .checks { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 0.9rem;
+    }
+
+    .card h3 {
+      font-size: 0.92rem;
+      font-weight: 650;
+      margin-bottom: 0.25rem;
+    }
+
+    .card p, .card li { color: #b8c0d0; font-size: 0.82rem; }
+
+    .card ul { list-style: none; margin-top: 0.35rem; }
+
+    .card li {
+      padding: 0.18rem 0 0.18rem 0.85rem;
+      position: relative;
+    }
+
+    .card li::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      position: absolute;
+      left: 0;
+      top: 0.55rem;
+    }
+
+    code, .mono {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.78em;
+      background: rgba(0, 0, 0, 0.28);
+      padding: 0.08em 0.32em;
+      border-radius: 4px;
+      color: var(--cyan);
+    }
+
+    .gate { border-top: 2px solid var(--amber); }
+    .gate h3 { color: var(--amber); font-size: 0.8rem; letter-spacing: 0.02em; }
+
+    .halt {
+      border: 1px dashed rgba(244, 114, 182, 0.45);
+      background: var(--rose-dim);
+      border-radius: 12px;
+      padding: 0.85rem 0.95rem;
+    }
+
+    .halt h3 { color: var(--rose); font-size: 0.88rem; margin-bottom: 0.25rem; }
+    .halt p { color: #d7c2cc; font-size: 0.82rem; }
+
+    .preflight { border-color: rgba(240, 180, 41, 0.28); }
+
+    .check {
+      background: #121820;
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      border: 1px solid var(--border);
+    }
+
+    .check b { display: block; font-size: 0.78rem; font-weight: 600; }
+    .check span { color: var(--muted); font-size: 0.74rem; }
+
+    .phase-1 { border-color: rgba(61, 214, 140, 0.35); }
+    .phase-2 { border-color: rgba(167, 139, 250, 0.4); }
+
+    .phase-kicker {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 0.2rem;
+    }
+
+    .phase-1 .phase-kicker { color: var(--green); }
+    .phase-2 .phase-kicker { color: var(--purple); }
+
+    .suite h3 { color: var(--green); }
+    .suite .meta { color: var(--muted); font-size: 0.75rem; margin-bottom: 0.35rem; }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.85rem;
+    }
+
+    .pill {
+      font-size: 0.72rem;
+      border-radius: 999px;
+      padding: 0.2rem 0.55rem;
+      border: 1px solid var(--border);
+      color: #c5cedd;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .pill.ok { color: var(--green); border-color: rgba(61, 214, 140, 0.35); }
+    .pill.warn { color: var(--amber); border-color: rgba(240, 180, 41, 0.35); }
+    .pill.bad { color: var(--rose); border-color: rgba(244, 114, 182, 0.35); }
+
+    /* Agent orchestration */
+    .orch {
+      margin-top: 1rem;
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1rem 1rem 1.1rem;
+    }
+
+    .orch-title {
+      text-align: center;
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--purple);
+      margin-bottom: 0.85rem;
+    }
+
+    .phase-1 .orch-title { color: var(--green); }
+
+    .server-bar, .coord {
+      border-radius: 12px;
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+
+    .server-bar {
+      background: var(--accent-dim);
+      border: 1px solid rgba(91, 156, 245, 0.45);
+    }
+
+    .server-bar strong, .coord strong { display: block; font-size: 0.95rem; }
+
+    .server-bar span, .coord span, .agent span {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .coord {
+      background: var(--purple-dim);
+      border: 1px solid rgba(167, 139, 250, 0.5);
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .coord strong { color: #ddd6fe; }
+    .coord p { text-align: left; margin-top: 0.45rem; }
+
+    .v { display: flex; flex-direction: column; align-items: center; }
+    .v .line {
+      width: 2px;
+      height: 22px;
+      background: #4b5c78;
+    }
+    .v .label {
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 2px;
+    }
+
+    .fork {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.7rem;
+      position: relative;
+      margin-top: 0.15rem;
+    }
+
+    .fork::before {
+      content: "";
+      position: absolute;
+      top: -10px;
+      left: 16%;
+      right: 16%;
+      height: 2px;
+      background: #4b5c78;
+    }
+
+    .agent {
+      background: var(--surface-2);
+      border-radius: 12px;
+      padding: 0.8rem 0.85rem 0.9rem;
+      border: 1px solid var(--border);
+      position: relative;
+    }
+
+    .agent::before {
+      content: "";
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      width: 2px;
+      height: 10px;
+      background: #4b5c78;
+    }
+
+    .agent.explorer { border-top: 3px solid var(--cyan); }
+    .agent.author { border-top: 3px solid var(--green); }
+    .agent.healer { border-top: 3px solid var(--amber); border-style: dashed; border-top-style: solid; }
+
+    .agent .who {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      margin-bottom: 0.15rem;
+    }
+
+    .agent.explorer .who { color: var(--cyan); }
+    .agent.author .who { color: var(--green); }
+    .agent.healer .who { color: var(--amber); }
+
+    .agent h3 { font-size: 0.95rem; margin-bottom: 0.3rem; }
+
+    .agent ol {
+      margin: 0.45rem 0 0 1rem;
+      color: #b8c0d0;
+      font-size: 0.78rem;
+    }
+
+    .agent ol li { margin: 0.12rem 0; }
+
+    .order {
+      display: inline-block;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      color: var(--dim);
+      margin-bottom: 0.35rem;
+    }
+
+    .loop {
+      margin-top: 0.85rem;
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 0.7rem;
+    }
+
+    .loop .card h3 { font-size: 0.85rem; }
+
+    .verdicts { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.45rem; }
+
+    .files {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.75rem;
+    }
+
+    .files div {
+      background: #10151c;
+      border-radius: 8px;
+      padding: 0.5rem 0.6rem;
+      border: 1px solid var(--border);
+    }
+
+    .files b { display: block; font-size: 0.75rem; }
+    .files span { color: var(--muted); font-size: 0.72rem; }
+
+    footer.note {
+      margin-top: 1.25rem;
+      text-align: center;
+      font-size: 0.8rem;
+    }
+
+    /* Run column and the two stores */
+    .with-rail {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 292px;
+      gap: 1.15rem;
+      align-items: start;
+    }
+
+    .rail {
+      position: sticky;
+      top: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .store {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1rem 1rem 1.05rem;
+      box-shadow: var(--shadow);
+    }
+
+    .store.e2e { border-color: rgba(61, 214, 140, 0.45); }
+    .store.specific { border-color: rgba(167, 139, 250, 0.5); }
+
+    .store .phase-kicker { margin-bottom: 0.35rem; }
+    .store h2 { font-size: 1rem; font-weight: 650; letter-spacing: -0.02em; margin-bottom: 0.35rem; }
+    .store p { color: var(--muted); font-size: 0.8rem; }
+    .store ul { list-style: none; margin-top: 0.55rem; }
+    .store li {
+      color: #b8c0d0;
+      font-size: 0.78rem;
+      padding: 0.2rem 0 0.2rem 0.8rem;
+      position: relative;
+    }
+    .store li::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      position: absolute;
+      left: 0;
+      top: 0.55rem;
+    }
+    .store.e2e li::before { background: var(--green); }
+    .store.specific li::before { background: var(--purple); }
+
+    .promote {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0.35rem 0;
+    }
+
+    .promote .stem {
+      width: 2px;
+      height: 16px;
+      background: #3d4f66;
+    }
+
+    .promote .agent-card {
+      width: 100%;
+      background: var(--cyan-dim);
+      border: 1px dashed rgba(34, 211, 238, 0.55);
+      border-radius: 14px;
+      padding: 0.8rem 0.85rem 0.9rem;
+      text-align: left;
+    }
+
+    .promote .agent-card .who {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--cyan);
+      margin-bottom: 0.2rem;
+    }
+
+    .promote .agent-card h3 {
+      font-size: 0.9rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .promote .agent-card p { color: #b8c0d0; font-size: 0.78rem; }
+
+    .promote .arrow-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin: 0.15rem 0;
+    }
+
+    @media (max-width: 980px) {
+      .glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-2, .grid-4, .grid-3, .checks, .fork, .loop, .files {
+        grid-template-columns: 1fr 1fr;
+      }
+      .fork::before, .agent::before, .glance .step::after { display: none; }
+      .with-rail { grid-template-columns: 1fr; }
+      .rail { position: static; }
+    }
+
+    @media (max-width: 640px) {
+      .glance, .grid-2, .grid-4, .grid-3, .checks, .fork, .loop, .files {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body { background: #fff; color: #111; }
+      body::before { display: none; }
+      section.block, .card, .glance .step, .store { box-shadow: none; }
+      .with-rail { grid-template-columns: 1fr; }
+      .rail { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="kicker">lexful-qx-harness</div>
+      <h1>One full run</h1>
+      <p>
+        A trigger clears the gates. E2E User Journey TCs run first and may heal the checked-in suite.
+        Feature Specific TCs follow for the ticket. After that run, a curator can move the most relevant new cases into the E2E store.
+      </p>
+      <div class="legend">
+        <span><i class="dot" style="background: var(--amber)"></i> Gates and healer</span>
+        <span><i class="dot" style="background: var(--green)"></i> E2E User Journey TCs</span>
+        <span><i class="dot" style="background: var(--purple)"></i> Feature Specific TCs</span>
+        <span><i class="dot" style="background: var(--cyan)"></i> Stores and curator</span>
+        <span><i class="dot" style="background: var(--rose)"></i> Halt</span>
+      </div>
+    </header>
+
+    <div class="glance" aria-label="Process at a glance">
+      <div class="step">
+        <div class="n">01</div>
+        <strong>Trigger</strong>
+        <em>deploy or a ticket</em>
+      </div>
+      <div class="step gates">
+        <div class="n">02</div>
+        <strong>Gates</strong>
+        <em>then sign-in</em>
+      </div>
+      <div class="step p1">
+        <div class="n">03</div>
+        <strong>E2E User Journey</strong>
+        <em>suite, then healer</em>
+      </div>
+      <div class="step p2">
+        <div class="n">04</div>
+        <strong>Feature Specific</strong>
+        <em>explore, author, heal</em>
+      </div>
+      <div class="step store">
+        <div class="n">05</div>
+        <strong>Curate</strong>
+        <em>relevant cases → E2E store</em>
+      </div>
+      <div class="step out">
+        <div class="n">06</div>
+        <strong>Verdict</strong>
+        <em>report and artifacts</em>
+      </div>
+    </div>
+
+    <div class="with-rail">
+      <div class="flow">
+        <section class="block">
+          <div class="block-head">
+            <h2>1 · Trigger</h2>
+            <span class="tag">:8787</span>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <h3>Something starts the harness</h3>
+              <p>The worker takes one run at a time. When both are queued, E2E User Journey TCs go first and the ticket waits.</p>
+              <ul>
+                <li>A UAT deploy webhook, or a ticket or pull request</li>
+                <li>A sha that is already running is skipped</li>
+                <li>Each attempt gets its own folder under <code>runs/</code></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Two kinds of run</h3>
+              <ul>
+                <li><strong>E2E User Journey TCs</strong> — the checked-in store, no ticket</li>
+                <li><strong>Feature Specific TCs</strong> — one Linear ticket or its pull request</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <div class="join" aria-hidden="true"><div class="stem"></div></div>
+
+        <section class="block preflight">
+          <div class="block-head">
+            <h2>2 · Gates, then sign-in</h2>
+            <span class="tag">preflight</span>
+          </div>
+          <p class="note" style="margin-bottom: 0.85rem;">
+            A deploy must pass the gates before a run exists. Sign-in is deterministic. A failed check stops the run as <code>HALTED</code> and no agent starts.
+          </p>
+          <div class="grid-4">
+            <article class="card gate">
+              <h3>Secret</h3>
+              <p>The deploy call carries the harness secret, unless local mode is open.</p>
+            </article>
+            <article class="card gate">
+              <h3>Payload</h3>
+              <p>A pull request, a ticket, or a commit sha. An empty body is rejected.</p>
+            </article>
+            <article class="card gate">
+              <h3>Ticket</h3>
+              <p>When a ticket is present it is a <code>LEX-</code> key.</p>
+            </article>
+            <article class="card gate">
+              <h3>Session</h3>
+              <p>Stytch session for UAT. A ticket run also loads Linear and the pull request.</p>
+            </article>
+          </div>
+          <div class="grid-2" style="margin-top: 0.85rem;">
+            <div class="halt">
+              <h3>Halt</h3>
+              <p>Failed gate or failed sign-in. The run records <code>HALTED</code> and stops. OpenCode does not start.</p>
+            </div>
+            <div class="card">
+              <h3>What a ticket run is allowed to see</h3>
+              <ul>
+                <li>That ticket, plus parent, children, and related issues</li>
+                <li>Pull requests that mention the key, and the files in those diffs</li>
+                <li>Live UAT. No local app is started</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <div class="join labeled" aria-hidden="true"><span>first</span><div class="stem"></div></div>
+
+        <section class="block phase-1">
+          <div class="phase-kicker">E2E User Journey TCs</div>
+          <div class="block-head">
+            <h2>Checked-in journeys, then the healer</h2>
+            <span class="tag">runs/phase-1/</span>
+          </div>
+          <p class="note">
+            The server runs the E2E store on live UAT. There is no ticket, no explorer, and no new tests.
+            Only the healer is called, and only after a failure. A locator fix is written back into the store. A product bug is recorded on the run and the test is left as it is.
+          </p>
+
+          <div class="orch">
+            <div class="orch-title">Healer loop</div>
+            <div class="server-bar">
+              <strong>Server runs the E2E store</strong>
+              <span>Playwright, one worker, the checked-in specs</span>
+            </div>
+            <div class="v" aria-hidden="true">
+              <div class="line"></div>
+              <div class="label">pass ends the phase · fail enters the loop</div>
+              <div class="line"></div>
+            </div>
+            <div class="loop">
+              <div class="card">
+                <h3>qa-healer, only</h3>
+                <p>Spec drift — a renamed locator, a locator that matches too much, or a wait that expired while the control was already there — is patched in the E2E store. A wrong product outcome is reported. The healer does not add a test and does not hide a bug.</p>
+              </div>
+              <div class="card">
+                <h3>A few tries</h3>
+                <p>The server runs the same suite again after a patch. The loop stops when the suite is green or the heal cap is reached. Then a waiting ticket may start.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-row">
+            <span class="pill ok">Clean suite · phase ends</span>
+            <span class="pill warn">Drift patched in the E2E store</span>
+            <span class="pill bad">Product bug kept in bugs.md</span>
+            <span class="pill">Result stays in runs/phase-1/</span>
+          </div>
+        </section>
+
+        <div class="join labeled" aria-hidden="true"><span>then</span><div class="stem"></div></div>
+
+        <section class="block phase-2">
+          <div class="phase-kicker">Feature Specific TCs</div>
+          <div class="block-head">
+            <h2>One ticket · explore, author, heal</h2>
+            <span class="tag">runs/tickets/</span>
+          </div>
+          <p class="note">
+            The server coordinates. It does not let the agents run the suite.
+            New cases cover behavior the E2E store does not already assert. Those specs stay in the feature-specific store for this run.
+          </p>
+
+          <div class="orch">
+            <div class="orch-title">Agentic orchestration</div>
+
+            <div class="server-bar">
+              <strong>Server · pipeline worker</strong>
+              <span>preflight → agent → execute → heal → verdict</span>
+            </div>
+
+            <div class="v" aria-hidden="true">
+              <div class="line"></div>
+              <div class="label">one coordinator session</div>
+              <div class="line"></div>
+            </div>
+
+            <div class="coord">
+              <strong>qa · coordinator</strong>
+              <span>reads the ticket pack and the coverage already in the E2E store</span>
+              <p style="color: #c4b5fd; font-size: 0.82rem;">
+                Delegates exploration, then authoring. Returns when the plan exists. Playwright stays with the server.
+              </p>
+            </div>
+
+            <div class="v" aria-hidden="true">
+              <div class="line"></div>
+              <div class="label">in this order</div>
+              <div class="line"></div>
+            </div>
+
+            <div class="fork">
+              <article class="agent explorer">
+                <div class="order">1 · every ticket</div>
+                <div class="who">qa-explorer</div>
+                <h3>Explore</h3>
+                <p>Walks live UAT and writes what the ticket actually does.</p>
+                <ol>
+                  <li>Notes the page, the calls, and the actions</li>
+                  <li>Marks behavior the E2E store already covers</li>
+                  <li>Plans a case only for what is still uncovered</li>
+                </ol>
+              </article>
+              <article class="agent author">
+                <div class="order">2 · after the map</div>
+                <div class="who">qa-author</div>
+                <h3>Author</h3>
+                <p>Writes specs for the new rows. Stays off the browser.</p>
+                <ol>
+                  <li>Specs land in this run’s feature store</li>
+                  <li>Does not copy a case the E2E store already has</li>
+                  <li>Hands the file list back to the server</li>
+                </ol>
+              </article>
+              <article class="agent healer">
+                <div class="order">3 · only after a failure</div>
+                <div class="who">qa-healer</div>
+                <h3>Heal</h3>
+                <p>Same idea as the journey loop, on this run’s specs only.</p>
+                <ol>
+                  <li>Patches a drifted locator in the feature store</li>
+                  <li>Leaves a product bug unedited</li>
+                  <li>The server re-runs, a few times at most</li>
+                </ol>
+              </article>
+            </div>
+
+            <div class="loop">
+              <div class="card">
+                <h3>Between explore and author</h3>
+                <p>The coordinator checks that the map is usable. If it is still empty after one more look, the run halts and no suite starts.</p>
+              </div>
+              <div class="card">
+                <h3>After the functional result</h3>
+                <p>A UI review can follow when that switch is on. It does not write tests and it does not change either store.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-row">
+            <span class="pill ok">PERFECT · suite is green</span>
+            <span class="pill warn">NEEDS_REVISION · failures remain</span>
+            <span class="pill bad">HALTED · no specs, or the agent stopped</span>
+          </div>
+        </section>
+
+        <div class="join labeled" aria-hidden="true"><span>after the ticket</span><div class="stem"></div></div>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>5 · Curate into the E2E store</h2>
+            <span class="tag">after every feature run</span>
+          </div>
+          <p class="note" style="margin-bottom: 0.85rem;">
+            Feature Specific TCs stay in the run. They do not enter the E2E store by themselves.
+            A curator agent can do that pass once the ticket run has a verdict. The stores on the right are the two sides of that pass.
+          </p>
+          <div class="grid-3">
+            <article class="card">
+              <h3>Read the feature store</h3>
+              <p>Take the cases this ticket just added. Ignore anything the E2E store already runs.</p>
+            </article>
+            <article class="card">
+              <h3>Keep the relevant ones</h3>
+              <p>Keep a case that belongs in an ongoing user journey. Leave a one-off check for this ticket where it is.</p>
+            </article>
+            <article class="card">
+              <h3>Add them to the E2E store</h3>
+              <p>The next E2E User Journey run executes them. The healer keeps their locators current after that.</p>
+            </article>
+          </div>
+        </section>
+
+        <div class="join" aria-hidden="true"><div class="stem"></div></div>
+
+        <section class="block">
+          <div class="block-head">
+            <h2>6 · What the run leaves</h2>
+            <span class="tag">one folder per attempt</span>
+          </div>
+          <div class="files">
+            <div><b>runs/phase-1/</b><span>journey result, healer notes, bugs</span></div>
+            <div><b>E2E store</b><span>journeys, plus any locator heal</span></div>
+            <div><b>runs/tickets/…/specs/</b><span>cases written for that ticket</span></div>
+            <div><b>report</b><span>verdict, counts, and the session</span></div>
+          </div>
+          <p class="note" style="margin-top: 0.9rem;">
+            The journey run does not invent specs. The ticket run does not rewrite the E2E store.
+            Promotion is the later pass: relevant feature cases move across, and the following journey run is what executes them.
+          </p>
+        </section>
+      </div>
+
+      <aside class="rail" aria-label="Test stores">
+        <article class="store e2e">
+          <div class="phase-kicker" style="color: var(--green);">Right · E2E store</div>
+          <h2>User journeys</h2>
+          <p>The checked-in suite. E2E User Journey TCs read it. The healer writes a locator fix back into it.</p>
+          <ul>
+            <li><code>e2e test cases/</code></li>
+            <li>Search, asset CRUD, document editing, and anything later promoted</li>
+            <li>No ticket. No new scenario from the healer</li>
+            <li>A product bug is recorded on the run, not edited into a passing test</li>
+          </ul>
+        </article>
+
+        <div class="promote" aria-hidden="false">
+          <div class="stem"></div>
+          <div class="arrow-label">promote upward</div>
+          <div class="agent-card">
+            <div class="who">Curator agent · after each feature run</div>
+            <h3>Most relevant cases only</h3>
+            <p>
+              Reads the feature-specific store. Drops cases the E2E store already covers and cases that only matter for this ticket.
+              Adds the rest to the E2E store so the next journey run includes them.
+            </p>
+          </div>
+          <div class="arrow-label">reads</div>
+          <div class="stem"></div>
+        </div>
+
+        <article class="store specific">
+          <div class="phase-kicker" style="color: var(--purple);">Right · feature store</div>
+          <h2>Ticket cases</h2>
+          <p>Specs for one ticket, kept on that attempt. This is the pool the curator chooses from.</p>
+          <ul>
+            <li><code>runs/tickets/&lt;ticket&gt;/&lt;run&gt;/specs/</code></li>
+            <li>Only behavior the E2E store did not already assert</li>
+            <li>Heal on this run patches files here, not the E2E store</li>
+            <li>Stays as the record of that ticket even after a promotion</li>
+          </ul>
+        </article>
+      </aside>
+    </div>
+
+    <p class="note" style="margin-top: 1.1rem; text-align: center;">
+      Journey runs live in <code>runs/phase-1/</code>. Ticket runs live in <code>runs/tickets/</code>.
+      The E2E store is <code>e2e test cases/</code>. The curator is the pass that connects the two stores.
+    </p>
+  </div>
+</body>
+</html>

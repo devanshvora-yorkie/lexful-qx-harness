@@ -16,7 +16,7 @@ Feature Specific TCs has three steps: Explore, Author, and Heal.
 |------|--------|--------|
 | Explore | `qa-explorer` | `FEATURE.md` in the run directory. No specs |
 | Author | `qa-author` | POM and specs in the run's `specs/` directory |
-| Heal | `qa-healer` | `triage.json` and locator patches. The server re-runs |
+| Heal | `qa-healer` | `triage.json`, a `bugs` array for product defects, and locator patches. The server writes `bugs.md` and re-runs |
 
 UI/UX audit is not a step in this skill. The server runs it after functional QA only when `QA_RUN_UX_AUDIT` is true. Set that to false to run QA only.
 
@@ -34,9 +34,9 @@ Project conventions live in `references/custom-instructions.md`.
 
 The server is the orchestrator. It runs preflight, starts the `qa` agent, then runs Playwright. `qa` reads this skill and delegates. `qa-explorer` does Explore. `qa-author` does Author. `qa-healer` does Heal. The files in `.agents/prompts/` are the role limits. They are not a second procedure.
 
-A Feature Specific TCs run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Every step uses Haiku 5.5.
+A Feature Specific TCs run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Use the model.
 
-An E2E User Journey TCs run is not a ticket. The server message says `E2E User Journey TCs`. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Delegate to `qa-healer`. Patch spec drift: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. Do not add `waitForTimeout`. Report a product bug in `triage.json` and leave that spec alone. The result stays in the run folder.
+An E2E User Journey TCs run is not a ticket. The server message says `E2E User Journey TCs`. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Delegate to `qa-healer`. Patch spec drift: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. Do not add `waitForTimeout`. Report a product bug on the `bugs` array in `triage.json` and leave that spec alone. The server writes `bugs.md`. A skipped or deprecated test is not a bug. The result stays in the run folder.
 
 ## Quick Reference
 
@@ -45,7 +45,7 @@ An E2E User Journey TCs run is not a ticket. The server message says `E2E User J
 | Step 0 | Read `runs/<run-id>/preflight.json` (`ok: true`) and `context-pack.json`. Do not call Linear, GitHub, or `/auth/password` yourself |
 | Step 0b | Use `appUrl` from the context pack. Do not start a dev server. A 403 does not change the target |
 | Explore | Walk the live app → write `FEATURE.md` in the run directory. Do not write specs |
-| Author | Generate common POM → generate module POMs → generate specs → write `planned-specs.json` |
+| Author | Read `e2e-coverage.md` → generate common POM → generate module POMs → generate specs for `new` rows only → write `planned-specs.json` |
 | Heal | 3 heals of the whole suite. Each heal patches once and stops. The server re-runs |
 | Handoff | The server writes `runs/<run-id>/qa-result.json` from the Playwright reporter |
 
@@ -55,7 +55,7 @@ An E2E User Journey TCs run is not a ticket. The server message says `E2E User J
 
 ### 0. Pre-Workflow
 
-0. Read the run directory in the user message. If `preflight.json` is missing or `"ok"` is not true, stop. Do not run `scripts/preflight.mjs` and do not call Linear, GitHub, or `/auth/password`. On success, read `context-pack.json` and nothing else from Linear or GitHub. Acceptance criteria say what to test. `pullRequests[].fileDetails` are the only product files you may use. `connectedTickets` are the only other issues. Do not clone the product repo and do not read folders outside this one. The spec count in the user prompt (for example 15) is the number of tests to write for that ticket. Delegate exploration to `qa-explorer`, spec writing to `qa-author`, and fixes to `qa-healer`.
+0. Read the run directory in the user message. If `preflight.json` is missing or `"ok"` is not true, stop. Do not run `scripts/preflight.mjs` and do not call Linear, GitHub, or `/auth/password`. On success, read `context-pack.json` and `e2e-coverage.md`, and nothing else from Linear or GitHub. Acceptance criteria say what to test. `e2e-coverage.md` lists the cases already run for search, asset crud, and document editing. Do not write those again. There is no minimum and no maximum number of new tests. The number is the uncovered behavior of this ticket. `pullRequests[].fileDetails` are the only product files you may use. `connectedTickets` are the only other issues. Do not clone the product repo and do not read folders outside this one. Delegate exploration to `qa-explorer`, spec writing to `qa-author`, and fixes to `qa-healer`.
 1. Read `references/custom-instructions.md` for project conventions and known pitfalls.
 2. Read any agent instruction files in order: `AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`, `CURSOR.md`.
 3. Read `playwright.config.ts` to understand:
@@ -83,7 +83,7 @@ You may not write `FEATURE.md` until you have navigated the app in this run and 
 
 ### 1. Explore: UI Exploration & Test Planning
 
-**1a. Explore the Application** — Preflight already installed the tools. Call `node_modules/.bin/playwright-cli`. Chromium is already at `PLAYWRIGHT_BROWSERS_PATH` (`/ms-playwright` in the container). Do not run `--help` or `--version`. Do not run `playwright install`, `install-browser`, or look for `/opt/google/chrome`. Load `runs/cache/stytch/session.json` with `state-load`, then open `appUrl`. Do not write spec files. Record each interaction, navigation path, interactive element, form field, and data dependency for `FEATURE.md`.
+**1a. Explore the Application** — Preflight already installed the tools. Call `node_modules/.bin/playwright-cli`. Chromium is already at `PLAYWRIGHT_BROWSERS_PATH` (`/ms-playwright` in the container). Do not run `--help` or `--version`. Do not run `playwright install`, `install-browser`, or look for `/opt/google/chrome`. Load `runs/cache/stytch/session.json` with `state-load`, then open `appUrl`. That session is admin. When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer`, then `state-load` `runs/cache/stytch/<persona>.json`. Do not read the file and do not call `/auth/password`. Do not write spec files. Record each interaction, navigation path, interactive element, form field, data dependency, and the persona that saw it for `FEATURE.md`.
 
 Track console errors, info messages, and network API calls. When an interaction triggers an API call, record the method, URL pattern, and the action in the API Endpoints section of `FEATURE.md`. Author uses that list for `page.waitForResponse`. Track API calls with `playwright-cli requests`. The `--static` flag is boolean, so `--static=false` crashes the CLI; the default already excludes static assets.
 
@@ -102,18 +102,11 @@ This is the reliable source of truth for `page.waitForResponse()` patterns in Au
 
 **1b. Check existing structure** — Before creating new directories or files, list the target directory with `ls` or `find` to match existing naming conventions (e.g., `advisor/` not `advisors/`). Do not assume directory names.
 
-**1c. Map User Flows** — Document entry point, route, prerequisites, and primary user journey, edge cases.
-for example, if its a listing page, check
-1. table loading state, before/during the api call. 
-2. data visibility after api call
-3. row actions if any(select, actions menu)
-4. pagination, search, filter
-5. combination + complex edge cases(like on search, if i am on page 5, page should revert to page 1.)
-6. cover negative flow path, toast message capture, console, network capture and assert in testcases.
+**1c. Map User Flows** — Read `e2e-coverage.md` first. Document entry point, route, prerequisites, and the behavior this ticket changes. For a listing page the ticket touches, consider loading state, data after the API call, row actions, pagination, search, filter, and the boundary where a search on a later page returns to page 1. Cover the negative path, toast, console, and network for behavior the coverage file does not already assert.
 
-Analyze the API request and response and expand the scenarios from that. Write every scenario, selector, and API call into `FEATURE.md`. Do not write a spec file in Explore.
+Analyze the API request and response and expand the scenarios from that. Write every new scenario, selector, and API call into `FEATURE.md`. Do not write a spec file in Explore.
 
-**MANDATORY: Example: Every listing page must be tested at 100% action coverage.** Explore must identify and plan tests for EVERY action on every listing/table page. Do not skip any action. The following checklist is exhaustive — verify each one during exploration and mark `[x]` or `[ ]` in the FEATURE.md:
+**Plan the ticket, not a second copy of the checked-in journeys.** Search, asset crud, and document editing already run in E2E User Journey TCs. The checklist below is the menu of behaviors to consider. If `e2e-coverage.md` already asserts an item, mark it `[x]`, cite that id, and set the planned-cases status to `covered`. If the ticket does not change the item, leave it out. If the ticket changes it and no row asserts the new outcome, plan a new case and set the status to `new`. A surface that is not one of those three journeys has no baseline, so plan the checklist for that surface. There is no minimum count and no maximum count.
 
 - **Row selection** — Single row checkbox/select
 - **Select all** — Header checkbox selects all visible rows
@@ -135,8 +128,9 @@ Analyze the API request and response and expand the scenarios from that. Write e
 **1e. Write the FEATURE.md** — Save `FEATURE.md` in the run directory (`runs/<ticket>/<run-id>/FEATURE.md`). Do not put it under `specs/` or `tests/`. The coordinator reads that file. It documents:
 - URL, role-based access, data models
 - **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Author can wait on it
-- **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
-- Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
+- **Action coverage matrix** — Each behavior this ticket changes. Cite a covered id, or mark `[ ]` when Author must write a new case
+- Planned-cases table: Id, Type (`positive`, `negative`, `edge`), Suite (`BVT`, `Smoke`, `Sanity`, `Regression`), Persona (`admin`, `support`, or `viewer`), Title, Status (`covered` with an id from `e2e-coverage.md`, or `new`)
+- Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which new tests are written and verified
 - Detailed selectors from a fresh snapshot
 - Execution commands
 
@@ -146,7 +140,7 @@ This is the single source of truth for what each module tests and its current st
 
 ### 2. Author: Test Generation
 
-**CRITICAL: Author builds on Explore's plan.** Explore produces the FEATURE.md with API Endpoints, Action Coverage Matrix, and test scenarios. Author MUST use these as its source of truth — never generate tests from scratch or skip planned scenarios.
+**CRITICAL: Author builds on Explore's plan and on `e2e-coverage.md`.** Explore produces the FEATURE.md with API Endpoints, Action Coverage Matrix, and the planned-cases table. Author writes a test for every `new` row and does not write a `covered` row. There is no minimum and no maximum. Do not pad the run, and do not stop while a `new` row has no test.
 
 **2a. Create Common POM Class** — **Mandatory.** Always create a shared POM class (e.g., `common-pom.ts`) with reusable component locators and methods:
 - Dropdowns: `selectOption(label, value)`, `isOpen()`
@@ -172,11 +166,24 @@ This common POM is imported by all module POMs to avoid duplication.
 - Create real data via API/UI (e.g., create a lead, then verify it appears in the list)
 - Verify persistence (CRUD round-trips prove the API works end-to-end)
 - Use typed interfaces for test data (not inline objects)
-- Cover all relevant roles per the module's access model
-- Each file covers one scenario group
-- **Every listing page action must have a test** — reference the Action Coverage Matrix from Explore FEATURE.md. No action is optional.
+- Cover the roles this ticket changes
+- One file is one suite (`bvt`, `smoke`, `sanity`, or `regression`). Types share that file
+- The id is `TC-<TICKET>-001`. Do not reuse an id from `e2e-coverage.md`
+- Tag each test with one type and one suite: `{ tag: ['@positive', '@smoke'] }`
+- The default `injectAuthCookies(page.context())` is admin. A support or viewer case passes that name: `injectAuthCookies(page.context(), 'viewer')`
+- Write a test for each planned row whose status is `new`. Do not write a `covered` row
 - **Every data-loading action must use `page.waitForResponse`** — reference the API Endpoints section from Explore. Never use `waitForTimeout` for data loading.
-- **Test every checkbox from Explore** — if Explore marked `[ ]` for an action, Author MUST write a test for it.
+- A new row Explore left as `[ ]` still needs a test. A covered row does not
+
+```ts
+test.describe('LEX-3717 documents — smoke', () => {
+  test('TC-LEX-3717-001: Save keeps the new expiry after reload', {
+    tag: ['@positive', '@smoke'],
+  }, async ({ page }) => {
+    // Do the change, reload, and assert the value stuck.
+  })
+})
+```
 
 **2e. Hand off** — Write `planned-specs.json` in the run directory. `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run the suite yourself.
 
@@ -186,9 +193,9 @@ The server starts this only after Playwright fails. Delegate it to `qa-healer`.
 
 1. Read `playwright/results.json` and `playwright/output.log`.
 2. Replay the failing step with `playwright-cli`. Load `runs/cache/stytch/session.json` with `playwright-cli state-load`. Do not read that file and do not log in.
-3. Classify every failure and write `triage.json` in the run directory as `{"failures":[...]}`.
+3. Classify every failure and write `triage.json` in the run directory as `{"failures":[...],"bugs":[...]}`.
    - `spec`: the test is wrong and the product behavior is unchanged. Patch every spec failure in this one return. This includes a renamed role, name, or test id; a locator that matches several elements, which you narrow without changing the expected outcome; and an existing `waitForResponse` or `expect` timeout that expired while the snapshot already shows that control, which you raise without adding `waitForTimeout` and without editing `playwright.config.ts`. `action` is `patched`.
-   - `bug`: the product did the wrong thing. A loaded value is wrong, a request was sent that must be blocked, or the page is an error response and the control is absent because of it. Do not edit the spec. `action` is `reported`. The server keeps this in the run folder and does not call Linear.
+   - `bug`: the product did the wrong thing. A loaded value is wrong, a request was sent that must be blocked, or the page is an error response and the control is absent because of it. Do not edit the spec. `action` is `reported`. Add one object to `bugs` per defect. Several failed TCs for the same defect go on that one object, with steps, expected, actual, at least one evidence item, severity, and `severityReason`. The server writes `bugs.md` and does not call Linear. Do not file a skipped or deprecated test.
 4. If you are unsure, class it as `bug` and do not edit. Do not add a test. Do not run the suite. The server re-runs it only when a spec file changed during this heal. The cap is 3 heals of the whole suite, not 3 attempts per test.
 
 ### 4. Verdict & Handoff

@@ -22,8 +22,32 @@ from app.settings import SECRET_ENV, get_settings
 
 
 def session_state_path() -> Path:
-    """The only Stytch cookie file. A run folder does not get its own copy."""
+    """Default persona cookie file. A named persona lives beside it as <persona>.json."""
     return get_settings().root / "runs" / "cache" / "stytch" / "session.json"
+
+
+_PERSONA_ARG = re.compile(
+    r"injectAuthCookies\(\s*[^,]+,\s*['\"](admin|support|viewer)['\"]",
+    re.IGNORECASE,
+)
+
+
+def personas_requested(specs: list[str]) -> list[str]:
+    """Personas a spec asks for by name. The default session is signed in separately."""
+    root = get_settings().root
+    found: list[str] = []
+    default = (os.environ.get("STYTCH_PERSONA") or "admin").strip().lower() or "admin"
+    for spec in specs:
+        path = Path(spec)
+        if not path.is_file():
+            path = root / spec
+        if not path.is_file():
+            continue
+        for name in _PERSONA_ARG.findall(path.read_text(encoding="utf-8", errors="replace")):
+            persona = name.lower()
+            if persona != default and persona not in found:
+                found.append(persona)
+    return found
 
 
 def _session_expired(log_text: str) -> bool:
@@ -45,6 +69,7 @@ def _opencode_env(run_dir: Path) -> dict[str, str]:
         env["AWS_BEARER_TOKEN_BEDROCK"] = token
     env["AWS_REGION"] = (os.environ.get("AWS_REGION") or "us-east-1").strip() or "us-east-1"
     env["OPENCODE_MAIN_MODEL"] = settings.main_model
+    env["OPENCODE_SUB_MODEL"] = settings.sub_model
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
@@ -66,16 +91,21 @@ def _playwright_env(run_dir: Path) -> dict[str, str]:
     return env
 
 
-def ensure_session(*, fresh: bool = False) -> tuple[int, str]:
-    """Sign in as STYTCH_PERSONA. The server process still has the password."""
+def ensure_session(*, fresh: bool = False, persona: str | None = None) -> tuple[int, str]:
+    """Sign in as one persona. The server process still has the password."""
     settings = get_settings()
-    command = ["node", "scripts/session.mjs"]
+    name = (persona or os.environ.get("STYTCH_PERSONA") or "admin").strip().lower() or "admin"
+    if name not in {"admin", "support", "viewer"}:
+        return 1, f"persona must be admin, support, or viewer. Got {name}"
+    env = os.environ.copy()
+    env["PERSONA_DIRECT"] = "1"
+    command = ["node", "scripts/persona.mjs", name]
     if fresh:
         command.append("--fresh")
     process = subprocess.run(
         command,
         cwd=settings.root,
-        env=os.environ.copy(),
+        env=env,
         capture_output=True,
         text=True,
     )
@@ -163,17 +193,18 @@ def run_opencode(
     command = ["opencode", "run", "--format", "json"]
     if active_session:
         command.extend(["--session", active_session])
+    model = settings.main_model if agent == "qa" else settings.sub_model
     command.extend([
         "--agent",
         agent,
         "--model",
-        settings.main_model,
+        model,
         "--title",
         title,
         "--auto",
         prompt,
     ])
-    book.row(agent, "launch", f"continue {active_session}" if active_session else f"new session  {settings.main_model}")
+    book.row(agent, "launch", f"continue {active_session}" if active_session else f"new session  {model}")
     started_ms = int(time.time() * 1000)
 
     def remember(text: str) -> None:
@@ -465,6 +496,11 @@ def _stream_playwright(process: subprocess.Popen[bytes], master: int, handle: An
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     book = Logbook(run_dir)
     ready, detail = ensure_session()
+    if ready == 0:
+        for name in personas_requested(specs):
+            ready, detail = ensure_session(persona=name)
+            if ready != 0:
+                break
     if ready != 0:
         book.row("server", "session", f"failed  {detail or 'could not sign in'}")
         return {
@@ -476,13 +512,30 @@ def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
     log_text = _playwright_log(run_dir)
     if result["exitCode"] == 0 or not _session_expired(log_text):
         return result
-    book.row("server", "session", "session expired during the run. signing in again as the same persona")
-    refreshed, detail = ensure_session(fresh=True)
+    book.row("server", "session", "session expired during the run. signing in again")
+    targets = _expired_personas(log_text) or [None]
+    refreshed = 0
+    detail = ""
+    for name in targets:
+        refreshed, detail = ensure_session(fresh=True, persona=name)
+        if refreshed != 0:
+            break
     if refreshed != 0:
         book.row("server", "session", f"refresh failed  {detail or 'could not sign in'}")
         return result
     book.row("server", "session", "refreshed. resuming the same specs")
     return _run_playwright_once(run_dir, specs)
+
+
+def _expired_personas(log_text: str) -> list[str]:
+    if "for persona" not in log_text.lower():
+        return []
+    found: list[str] = []
+    for name in re.findall(r"persona (admin|support|viewer)", log_text, re.IGNORECASE):
+        persona = name.lower()
+        if persona not in found:
+            found.append(persona)
+    return found
 
 
 def _playwright_log(run_dir: Path) -> str:

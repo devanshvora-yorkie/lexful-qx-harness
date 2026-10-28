@@ -56,8 +56,6 @@ class Settings:
     qa_url: str
     phase1_on_start: bool
     run_ux_audit: bool = True
-    ux_before_after: bool = False
-    ux_mode: str = "simple"
 
 
 def get_settings() -> Settings:
@@ -80,7 +78,5 @@ def get_settings() -> Settings:
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
         phase1_on_start=_flag("QA_PHASE1_ON_START", default=False),
         run_ux_audit=_flag("QA_RUN_UX_AUDIT", default=True),
-        ux_before_after=_flag("QA_UX_BEFORE_AFTER", default=False),
-        ux_mode=os.getenv("QA_UX_MODE", "simple").strip(),
     )
 

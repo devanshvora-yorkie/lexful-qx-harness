@@ -15,9 +15,9 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
 - **"Ask Lex" appears 3×** in the DOM — scope with `header` or `.first()`.
 - **Drawer state leaks across tests** — reset with `page.goto('about:blank')` before navigating,
   or an open drawer blocks treegrid re-render.
-- **Auth cookie expiry is silent**: the session in `runs/cache/stytch/session.json` lasts ~12h.
-  The server refreshes that one file for the persona in `STYTCH_PERSONA` and reruns the suite if it
-  expires. Do not call `/auth/password` per test. The API rate-limits.
+- **Auth cookie expiry is silent**: the default session in `runs/cache/stytch/session.json` is admin and lasts ~12h.
+  `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer` writes `runs/cache/stytch/<persona>.json` without replacing the admin file.
+  The server refreshes a file that expires and reruns the suite. Do not call `/auth/password` per test. The API rate-limits.
 - **CloudFront 403 on shared UAT**: ~1-3% of navigations; escalates if the suite runs several times an
   hour. `retries: 2` absorbs it, but space out runs.
 - **`waitUntil: 'networkidle'` is banned** — it caused multi-minute hangs. `domcontentloaded` + an

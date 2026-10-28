@@ -16,4 +16,44 @@ Write `triage.json` in the run directory as one object: `{"failures":[...]}`. Ev
 - A request was sent that the test requires to be blocked.
 - The response is an error page (403, 4xx, 5xx) and the control is absent because of that error.
 
-If you are unsure, class it as `bug` and do not edit. Do not run the suite. Say which files you changed, or say that you changed none.
+If you are unsure, class it as `bug` and do not edit.
+
+Add a `bugs` array to the same `triage.json`. One object is one defect. When several failed TCs are the same defect, list them all on that object. The server writes `bugs.md` from this array. Do not write `bugs.md` yourself. Do not file a skipped or deprecated test.
+
+```json
+{
+  "failures": [
+    {"class": "bug", "action": "reported", "title": "TC-LEX-3717-002: Create is blocked while the name is empty"}
+  ],
+  "bugs": [
+    {
+      "area": "Documents",
+      "failure": "Create stays enabled when the name is empty",
+      "context": "LEX-3717 document name guard",
+      "severity": "High",
+      "severityReason": "A technician can save a document with no name, so the new row cannot be identified.",
+      "description": "The create drawer enables Create while Name is empty. The API accepts the write and the grid shows a blank name. A technician cannot tell which record was just added.",
+      "affectedTests": [
+        {"id": "TC-LEX-3717-002", "suite": "Smoke", "title": "Create is blocked while the name is empty", "note": "Create stayed enabled and the POST returned 201"}
+      ],
+      "steps": [
+        "Navigate to https://e2e-test.uat.lexful.net/docs/d/all/system.document as Admin",
+        "Open the New document drawer",
+        "Choose an organization and leave Name empty",
+        "Click Create"
+      ],
+      "expected": "Create stays disabled, and no document is written.",
+      "actual": "Create is enabled. POST /v1/assets/system.document returns 201 and a blank-name row appears.",
+      "rootCause": "Unknown — requires investigation",
+      "evidence": [
+        {"test": "TC-LEX-3717-002", "step": 4, "detail": "playwright/output.log: expected disabled, received enabled"}
+      ],
+      "labels": ["documents", "create"]
+    }
+  ]
+}
+```
+
+Severity is Critical, High, Medium, or Low. Say why in `severityReason`. The server writes that reason into the description and sets priority from severity: Critical is P0, High is P1, Medium is P2, Low is P3. Include repro steps and at least one evidence item. Do not file a skipped or deprecated test.
+
+Do not run the suite. Say which files you changed, or say that you changed none.

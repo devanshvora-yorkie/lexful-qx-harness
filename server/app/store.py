@@ -349,6 +349,7 @@ preflight.json     sign-in and toolchain checks
 preflight.log      sign-in command output
 toolchain.log      local tool checks
 triage-N.json      healer classification for heal N: spec drift, or a product bug
+bugs.md            product bugs for this attempt, when a failure remains
 heal-N.md          short healer note for heal N
 auth-state.json    browser cookies captured for this attempt, when present
 playwright/        results.json, output.log, the HTML report, screenshots, and traces
@@ -367,8 +368,10 @@ qa-result.json       passed, failed, skipped, and flaky counts
 manifest.json        status, model, heal count, and timestamps
 preflight.json       sign-in, Linear, and GitHub checks
 context-pack.json    ticket, pull request, and files gathered before the agent
-FEATURE.md           what the explorer observed on UAT
+e2e-coverage.md      checked-in search, asset crud, and document editing cases already run
+FEATURE.md           what the explorer observed on UAT, and which of those cases are new
 prompt.md            instructions sent to the coordinator
+bugs.md              product bugs for this attempt, when a failure remains
 planned-specs.json   spec files the agent planned
 specs/               specs written for this ticket
 explore/             browser snapshots

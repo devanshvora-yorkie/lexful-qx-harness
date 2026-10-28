@@ -43,6 +43,10 @@ That starts the run and streams the log. If E2E User Journey TCs is still runnin
 
 Inside this suite the steps are Explore, Author, and Heal. Those names are in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`.
 
+Before the coordinator starts, the server writes `e2e-coverage.md` into the run. That file lists the cases already in `e2e test cases` for search, asset crud, and document editing. Author does not write those baselines again. New cases cover the behavior this ticket adds or changes, including a surface that is not one of those three journeys. Each new test is tagged with one type (`@positive`, `@negative`, `@edge`) and one suite (`@bvt`, `@smoke`, `@sanity`, `@regression`). There is no fixed count.
+
+A product bug that remains after Heal is written to `bugs.md` in the run folder and copied into `report.md`. A skipped or deprecated test is not filed as a bug.
+
 ## E2E User Journey TCs
 
 Docker queues this before any ticket when `QA_PHASE1_ON_START=true`. It runs the specs already in `e2e test cases` against UAT. No Explore, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
@@ -91,14 +95,22 @@ runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/
   planned-specs.json
   qa-result.json        functional pass/fail counts and verdict
   ux-findings.json      structured UI/UX findings
-  ux-scorecard.json     UX scores and advisory verdict
-  ux-report.md          detailed 5-lens UI/UX audit report
-  before-after/         (optional) Before UAT vs After concept mocks
+  ux-scorecard.json     UX score and verdict, recomputed by the server
+  ux-report.html        UI/UX audit report
 ```
 
 E2E User Journey TCs do not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Feature Specific TCs stay in that attempt's `specs/` folder.
 
-`runs/regression/` and `runs/LEX-*/` are links to those folders for attempts that already existed. `runs/index.json` is the list the server uses. The Stytch session is `runs/cache/stytch/session.json`, for the account named by `STYTCH_PERSONA`. Do not commit `.env` or that file.
+`runs/regression/` and `runs/LEX-*/` are links to those folders for attempts that already existed. `runs/index.json` is the list the server uses. The default Stytch session is `runs/cache/stytch/session.json`, for the account named by `STYTCH_PERSONA` (`admin` unless that value changes). Do not commit `.env` or that file.
+
+A case that has to run as another role signs in without changing the default:
+
+```bash
+node scripts/persona.mjs support
+node scripts/persona.mjs viewer
+```
+
+Each command writes `runs/cache/stytch/<persona>.json`. A spec selects it with `injectAuthCookies(page.context(), 'support')`. A spec that omits the argument stays on the default session. The server signs in every named persona before Playwright. Inside a ticket run the same command is how Explore looks at that role before Author writes the case.
 
 `runs/` is gitignored.
 

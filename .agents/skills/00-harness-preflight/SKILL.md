@@ -40,7 +40,7 @@ The script writes `runs/<run-id>/preflight.json` and `context-pack.json`. It ins
    - `primaryPr` is the PR the specs should follow.
    - Starting from `--pr` reads that pull request only, takes the LEX key from its title, branch, or body, then loads that ticket and its connected issues.
 
-4. Hand off to `lexful-autonomous-agent-qa` with the pack path. Tell it the spec count the user asked for. Do not shrink the pack.
+4. Hand off to `lexful-autonomous-agent-qa` with the pack path and `e2e-coverage.md`. There is no fixed spec count. Do not shrink the pack.
 
 ## What the script checks
 
@@ -50,7 +50,7 @@ The script writes `runs/<run-id>/preflight.json` and `context-pack.json`. It ins
 | Chromium | `npx playwright install chromium` has a browser binary |
 | Playwright CLI | `playwright-cli` runs |
 | FastAPI | `server/.venv` imports fastapi, uvicorn, and pydantic |
-| OpenCode | `opencode` is on PATH, OpenRouter is logged in, and every agent is Haiku 5.5 |
+| OpenCode | `opencode` is on PATH and the configured model is available |
 | Env file | `LINEAR_API_KEY`, `GITHUB_TOKEN`, `STYTCH_ORGANIZATION_ID`, and the email and password for `STYTCH_PERSONA` are set |
 | Linear | Viewer query succeeds. With a ticket, that issue is fetched |
 | GitHub | The token is accepted. Files are loaded only from the pull request diff |

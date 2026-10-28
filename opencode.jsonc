@@ -165,7 +165,7 @@
       "mode": "subagent",
       "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Write POM and Playwright specs from FEATURE.md and the context pack. No browser exploration.",
-      "system": "Read .agents/prompts/qa-author.md and the Author step of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Write specs from FEATURE.md and the context pack. Do not explore. Do not read .env. Do not clone a product repo.",
+      "system": "Read .agents/prompts/qa-author.md and the Author step of .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Read e2e-coverage.md and do not rewrite a case it lists. Write specs from FEATURE.md and the context pack. Do not explore. Do not read .env. Do not clone a product repo.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
@@ -194,7 +194,7 @@
       "mode": "subagent",
       "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Heal spec drift in the checked-in suite. Report a product bug. Do not add tests or call Linear.",
-      "system": "Read .agents/prompts/qa-healer.md and the Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch renamed locators, strict-mode locators, and an existing wait that expired while the control was already visible. Write triage.json. Do not add a test. Do not edit a spec to hide a product bug. Do not read .env.",
+      "system": "Read .agents/prompts/qa-healer.md and the Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Patch renamed locators, strict-mode locators, and an existing wait that expired while the control was already visible. Write triage.json with a bugs array for product defects. Do not file a skipped or deprecated test. Do not add a test. Do not edit a spec to hide a product bug. Do not read .env.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
@@ -231,8 +231,8 @@
     "ux-auditor": {
       "mode": "subagent",
       "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
-      "description": "Performs 5-lens UI/UX audit, pattern checks, drift review, and generates UX findings and Before/After mocks.",
-      "system": "Read .agents/prompts/qa-ux-auditor.md, .agents/skills/lexful-ux-audit-gate/SKILL.md, .agents/skills/fluent-ui-design-system/SKILL.md, and .agents/ux/QA_TRACEABILITY.md. Use playwright-cli state-load runs/cache/stytch/session.json. Evaluate the ticket journey against .agents/ux/lexful-ux-checks.yaml. Write ux-findings.json, ux-scorecard.json, and ux-report.md in the run directory.",
+      "description": "Audits the ticket journey for UX quality and writes structured findings. The server renders the HTML report.",
+      "system": "Read .agents/prompts/ux-auditor.md, .agents/skills/ux-audit/SKILL.md, .agents/skills/design-system/SKILL.md, and .agents/ux/traceability.md. Use playwright-cli state-load runs/cache/stytch/session.json. Evaluate the ticket journey against .agents/ux/checks.yaml and .agents/ux/pattern-library.md. Write ux-findings.json and ux-scorecard.json in the run directory. The harness fills .agents/skills/lexful-ux-audit-gate/audit-preview.html into ux-report.html. Do not write HTML or fill that template.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },

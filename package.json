@@ -13,7 +13,8 @@
     "e2e": "node scripts/ticket.mjs --phase1",
     "phase1": "node scripts/ticket.mjs --phase1",
     "specs": "node scripts/specs.mjs",
-    "session": "node scripts/session.mjs"
+    "session": "node scripts/session.mjs",
+    "persona": "node scripts/persona.mjs"
   },
   "keywords": [],
   "author": "",

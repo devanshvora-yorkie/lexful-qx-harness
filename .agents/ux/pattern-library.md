@@ -2,13 +2,13 @@
 
 **Purpose.** A catalog of well-known bad-UX patterns, each translated into what it would look like *specifically inside Lexful*. This is what the AI checks against during the free-roaming exploratory pass (Step 2b in the skill file), on top of the 5 cited lenses in the main rulebook.
 
-**How this differs from the rulebook:** the rulebook (`Lexful_UX_Rulebook_v0.1.md`) has specific rules (A1, B4, D2...) written for Lexful's 3 named journeys. This library is broader — general UX failure patterns that could show up **anywhere** in the product, used so the AI isn't limited to only what we already thought to write a rule for.
+**How this differs from the rulebook:** `rulebook.md` has specific rules (A1, B4, D2...) written for Lexful's 3 named journeys. This library is broader — general UX failure patterns that could show up **anywhere** in the product, used so the AI isn't limited to only what we already thought to write a rule for.
 
 **How to use a pattern in a finding:** cite it as `BP-##`, same discipline as a rule ID — no uncited findings. If a real issue doesn't match any pattern here, write it up anyway and flag it as "ungrouped" so we can add a pattern next revision.
 
 **Marks:** `[ASSUMED]` = guessed from public info/brief, needs confirmation. `[CONFIRM]` = direct question for John/Sherwin.
 
-**⚠️ Severity scale superseded (Oct 6):** every "S1–S4" severity below uses the **old** UX-only scale. As of Oct 5, the project uses engineering's shared **S0–S3** scale instead (see `Lexful_UX_Rulebook_v0.5.md`, Section 7, which has the full old→new mapping table). Short version: old S1→new S0 or S1, old S2→new S1 or S2, old S3→new S2, old S4→new S3. Entries below have not yet been individually re-labeled — convert via the table before citing a severity from this document in a real finding.
+**⚠️ Severity scale superseded (Oct 6):** every "S1–S4" severity below uses the **old** UX-only scale. As of Oct 5, the project uses engineering's shared **S0–S3** scale instead (see `rulebook.md`, Section 7, which has the full old→new mapping table). Short version: old S1→new S0 or S1, old S2→new S1 or S2, old S3→new S2, old S4→new S3. Entries below have not yet been individually re-labeled — convert via the table before citing a severity from this document in a real finding.
 
 ---
 
@@ -175,7 +175,7 @@ Not bad-UX patterns — this is context on what Lexful's engineering side alread
 
 ## Changelog
 - v0.6 — Added a top-of-document note flagging that all severities below use the superseded old S1–S4 scale; points to the rulebook's new S0–S3 scale (confirmed Oct 5 with engineering) and its mapping table. No individual BP entries relabeled yet.
-- v0.5 — Strengthened BP-11 and BP-12 with real confirmed evidence: a 2-character search ("To") returned results with no visible match to the query. Logged as Live Findings Log #11. Flagged as contradicting the earlier "no LLM" description of search — needs direct confirmation of matching logic.
+- v0.5 — Strengthened BP-11 and BP-12 with real confirmed evidence: a 2-character search ("To") returned results with no visible match to the query. Observed Oct 5. Flagged as contradicting the earlier "no LLM" description of search — needs direct confirmation of matching logic.
 - v0.4 — Downgraded BP-101 from "likely bug" to "confirmed intentional, verify discoverability only" per QA's search test document. Added a confirmed-good-patterns note to Section L (search close/filter/case behaviors already well-tested). Added Section N: existing engineering tooling context (axe via Storybook, non-blocking; Chromatic is component-level only).
 - v0.3 — Added Section M (BP-106 to BP-109) from [REDACTED]'s own hands-on screenshots: empty-state inconsistency, missing search guidance, absent toast confirmations, possible markdown-rendering bug. Strengthened BP-20 and BP-103 with real confirmed evidence. Logged the floating-action-bar suggestion as an open design question rather than a codified pattern.
 - v0.2 — Added Section K (5 confirmed real issues from Sept 29 live walkthrough: BP-100 to BP-105) and Section L (confirmed product facts to prevent false positives: archive behavior, read-only org rules, locked core fields, no templates, real persona names). Corrected accessibility references to WCAG 2.1 AA per Lexful's own internal doc.

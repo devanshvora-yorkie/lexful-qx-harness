@@ -5,8 +5,7 @@ import { ROOT, check, playwrightCliBin } from './harness-env.mjs';
 
 const VENV_PYTHON = path.join(ROOT, 'server', '.venv', 'bin', 'python');
 const REQUIREMENTS = path.join(ROOT, 'server', 'requirements.txt');
-const MAIN_MODEL = 'amazon-bedrock/us.anthropic.claude-haiku-5-5';
-const SUB_MODEL = 'amazon-bedrock/us.anthropic.claude-haiku-5-5';
+const MODEL_FALLBACK = 'amazon-bedrock/us.anthropic.claude-haiku-5-5';
 
 function log(line) {
   const text = `${line}\n`;
@@ -161,20 +160,19 @@ function configuredValue(name) {
 function ensureOpenCodeSetup() {
   const config = loadJsonc(path.join(ROOT, 'opencode.jsonc'));
   const agents = config.agents || {};
+  const mainModel = configuredValue('OPENCODE_MAIN_MODEL') || MODEL_FALLBACK;
+  const subModel = configuredValue('OPENCODE_SUB_MODEL') || MODEL_FALLBACK;
   const expected = {
-    qa: MAIN_MODEL,
-    'qa-explorer': SUB_MODEL,
-    'qa-author': SUB_MODEL,
-    'qa-healer': SUB_MODEL,
+    qa: mainModel,
+    'qa-explorer': subModel,
+    'qa-author': subModel,
+    'qa-healer': subModel,
+    'ux-auditor': subModel,
   };
   const problems = [];
   for (const [name, model] of Object.entries(expected)) {
     if (agents[name]?.model !== model) problems.push(`${name} is ${agents[name]?.model || 'missing'}`);
   }
-  const mainFile = configuredValue('OPENCODE_MAIN_MODEL');
-  const subFile = configuredValue('OPENCODE_SUB_MODEL');
-  if (mainFile !== MAIN_MODEL) problems.push(`OPENCODE_MAIN_MODEL is ${mainFile || 'missing'}`);
-  if (subFile !== SUB_MODEL) problems.push(`OPENCODE_SUB_MODEL is ${subFile || 'missing'}`);
   const quiet = (args) => {
     const result = spawnSync('opencode', args, { cwd: ROOT, encoding: 'utf8' });
     if (result.status !== 0) throw new Error((result.stderr || result.stdout || 'opencode failed').trim().slice(0, 300));
@@ -185,10 +183,12 @@ function ensureOpenCodeSetup() {
     problems.push('Bedrock key is missing. Set BEDROCK_API_KEY');
   }
   const models = new Set(quiet(['models', '--standalone']).split('\n').map((line) => line.trim()));
-  if (!models.has(MAIN_MODEL)) problems.push(`${MAIN_MODEL} is not available`);
-  if (!models.has(SUB_MODEL)) problems.push(`${SUB_MODEL} is not available`);
+  for (const id of new Set([mainModel, subModel])) {
+    if (!models.has(id)) problems.push(`${id} is not available`);
+  }
   if (problems.length) throw new Error(problems.join('; '));
-  return check('OpenCode setup', 'pass', `Bedrock key set; us-east-1; ${MAIN_MODEL}`);
+  const listed = mainModel === subModel ? mainModel : `${mainModel}; ${subModel}`;
+  return check('OpenCode setup', 'pass', `Bedrock key set; ${listed}`);
 }
 
 export function ensureToolchain() {

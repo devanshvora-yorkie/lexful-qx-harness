@@ -19,8 +19,11 @@ from app.logbook import (
     session_id_from_text,
 )
 from app.runners import _preflight_row, _session_expired
-from app.main import health, run_phase1, run_ticket
+from app.main import health, persona_client_allowed, run_phase1, run_ticket
+from app.bugs import collect_bugs, publish_bugs, render_bugs
+from app.coverage import load_cases, write_coverage_index
 from app.pipeline import (
+    _lead_prompt,
     failed_tests,
     spec_was_patched,
     startup_order,
@@ -29,7 +32,7 @@ from app.pipeline import (
     suspicious_patches,
     verdict_for,
 )
-from app.runners import checked_in_specs, common_test_dir, planned_specs
+from app.runners import checked_in_specs, common_test_dir, personas_requested, planned_specs
 from app.store import (
     create_run,
     find_active_phase1,
@@ -413,6 +416,171 @@ class ApiTest(unittest.TestCase):
         again = run_phase1()
         self.assertTrue(again["skipped"])
         self.assertEqual(again["runId"], started["runId"])
+
+
+class PersonaTest(unittest.TestCase):
+    def test_persona_login_stays_on_localhost(self):
+        self.assertTrue(persona_client_allowed("127.0.0.1"))
+        self.assertTrue(persona_client_allowed("::1"))
+        self.assertFalse(persona_client_allowed("10.0.0.8"))
+        self.assertFalse(persona_client_allowed(None))
+
+    def test_named_persona_in_a_spec_is_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = Path(tmp) / "roles.spec.ts"
+            spec.write_text(
+                "await injectAuthCookies(page.context())\n"
+                "await injectAuthCookies(page.context(), 'viewer')\n"
+                "await injectAuthCookies(page.context(), \"support\")\n",
+                encoding="utf-8",
+            )
+            previous = os.environ.get("STYTCH_PERSONA")
+            os.environ["STYTCH_PERSONA"] = "admin"
+            try:
+                self.assertEqual(personas_requested([str(spec)]), ["viewer", "support"])
+            finally:
+                if previous is None:
+                    os.environ.pop("STYTCH_PERSONA", None)
+                else:
+                    os.environ["STYTCH_PERSONA"] = previous
+
+
+class CoverageTest(unittest.TestCase):
+    def test_checked_in_journeys_are_indexed_without_a_count_floor(self):
+        root = Path(__file__).resolve().parents[2] / "e2e test cases"
+        cases = load_cases(root)
+        by_id = {case.id: case for case in cases}
+        self.assertEqual(by_id["TC-DOC-001"].type, "positive")
+        self.assertEqual(by_id["TC-DOC-001"].suite, "bvt")
+        self.assertEqual(by_id["TC-DOC-009"].type, "negative")
+        self.assertEqual(by_id["TC-DOC-009"].suite, "smoke")
+        self.assertEqual(by_id["TC-DOC-011"].type, "edge")
+        self.assertEqual(by_id["TC-DOC-011"].suite, "regression")
+        self.assertEqual(by_id["TC-01"].journey, "search")
+        self.assertEqual(by_id["TC-06"].type, "negative")
+        self.assertTrue(any(case.journey == "asset crud" and case.type == "negative" and "invalid credentials" in case.title for case in cases))
+        self.assertGreaterEqual(len(cases), 50)
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "e2e-coverage.md"
+            self.assertEqual(write_coverage_index(root, dest), len(cases))
+            text = dest.read_text(encoding="utf-8")
+            self.assertIn("no minimum", text)
+            self.assertIn("TC-DOC-001", text)
+            self.assertIn("search", text)
+            self.assertIn("asset crud", text)
+            self.assertIn("document editing", text)
+
+    def test_lead_prompt_has_no_floor_and_points_at_coverage(self):
+        text = _lead_prompt(Path("/tmp/runs/tickets/LEX-1/attempt"), "LEX-1", {})
+        self.assertNotIn("at least", text.lower())
+        self.assertNotIn("15", text)
+        self.assertIn("e2e-coverage.md", text)
+        self.assertIn("no minimum and no maximum", text)
+        self.assertIn("node scripts/persona.mjs support", text)
+
+
+class BugReportTest(unittest.TestCase):
+    def test_bug_record_uses_the_required_format_and_groups_cases(self):
+        text = render_bugs(
+            [{
+                "area": "Documents",
+                "failure": "Create stays enabled when the name is empty",
+                "context": "LEX-3717 document name guard",
+                "severity": "High",
+                "priority": "P3",
+                "severityReason": "A technician can save a document with no name.",
+                "description": "The create drawer enables Create while Name is empty. The grid then shows a blank row.",
+                "affectedTests": [
+                    {"id": "TC-LEX-3717-002", "suite": "Smoke", "title": "Create is blocked while the name is empty", "note": "Create stayed enabled"},
+                    {"id": "TC-LEX-3717-004", "suite": "Regression", "title": "Reload keeps the blank name", "note": "Blank name survived reload"},
+                ],
+                "steps": [
+                    "Navigate to https://e2e-test.uat.lexful.net/docs/d/all/system.document as Admin",
+                    "Leave Name empty and click Create",
+                ],
+                "expected": "Create stays disabled, and no document is written.",
+                "actual": "POST /v1/assets/system.document returns 201.",
+                "rootCause": "Unknown — requires investigation",
+                "evidence": [{"test": "TC-LEX-3717-002", "step": 2, "detail": "expected disabled, received enabled"}],
+                "labels": ["documents", "create"],
+            }],
+            ticket="LEX-3717",
+            url="https://e2e-test.uat.lexful.net",
+            build="unknown",
+            when="2026-10-27",
+            cycle="LEX-3717-cycle-1",
+        )
+        self.assertIn("Title:          Documents — Create stays enabled when the name is empty — LEX-3717 document name guard", text)
+        self.assertIn("Type:           Bug", text)
+        self.assertIn("Severity:       High", text)
+        self.assertIn("Priority:       P1", text)
+        self.assertNotIn("P3", text)
+        self.assertIn("A technician can save a document with no name.", text)
+        self.assertNotIn("Severity reason:", text)
+        self.assertIn("URL:     https://e2e-test.uat.lexful.net", text)
+        self.assertIn("Build:   unknown", text)
+        self.assertIn("Date:    2026-10-27", text)
+        self.assertNotIn("Affected test cases:", text)
+        self.assertNotIn("Execution cycle:", text)
+        self.assertIn("1. Navigate to https://e2e-test.uat.lexful.net/docs/d/all/system.document as Admin", text)
+        self.assertIn("Expected Result:", text)
+        self.assertIn("Actual Result:", text)
+        self.assertIn("Root Cause:", text)
+        self.assertIn("Unknown — requires investigation", text)
+        self.assertIn("- [TC-LEX-3717-002 step 2]: expected disabled, received enabled", text)
+        self.assertNotIn("Fix Version:", text)
+        self.assertIn("qa-generated", text)
+        self.assertIn("regression", text)
+        self.assertNotIn("Affected Test Cases Detail:", text)
+
+    def test_skipped_and_spec_failures_are_not_filed(self):
+        bugs = collect_bugs({
+            "failures": [
+                {"class": "spec", "action": "patched", "title": "renamed button"},
+                {"class": "bug", "action": "skipped", "title": "deprecated path"},
+                {"class": "bug", "action": "reported", "title": "Deprecated: old drawer", "deprecated": True},
+            ],
+            "bugs": [
+                {"title": "Deprecated case", "deprecated": True, "severity": "Low"},
+            ],
+        }, [{"title": "renamed button", "file": "e2e test cases/search/search.spec.ts", "error": "locator"}])
+        self.assertEqual(bugs, [])
+
+    def test_unclassified_failure_still_gets_a_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            wrote = publish_bugs(
+                folder,
+                ticket="LEX-3717",
+                run_id="LEX-3717-1",
+                url="https://e2e-test.uat.lexful.net",
+                build="unknown",
+                failed=1,
+                triage={},
+                still_failing=[{
+                    "title": "TC-LEX-3717-003: reload drops the tag",
+                    "file": "runs/tickets/LEX-3717/specs/documents-sanity.spec.ts",
+                    "error": "expected tag, received none",
+                }],
+                when="2026-10-27",
+                cycle=2,
+            )
+            self.assertTrue(wrote)
+            text = (folder / "bugs.md").read_text(encoding="utf-8")
+            self.assertIn("Severity:       Medium", text)
+            self.assertIn("Priority:       P2", text)
+            self.assertIn("- [TC-LEX-3717-003 step 1]: expected tag, received none", text)
+            self.assertIn("Medium until the impact is confirmed.", text)
+            self.assertFalse(publish_bugs(
+                folder,
+                ticket="LEX-3717",
+                run_id="LEX-3717-1",
+                url="https://e2e-test.uat.lexful.net",
+                build="unknown",
+                failed=0,
+                triage={"bugs": [{"area": "Documents", "failure": "gone", "severity": "High"}]},
+                still_failing=[],
+            ))
 
 
 if __name__ == "__main__":

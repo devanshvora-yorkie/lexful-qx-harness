@@ -146,15 +146,31 @@ export function personaName() {
   return name;
 }
 
-export function personaCredentials() {
-  const name = personaName();
-  const [emailKey, passwordKey] = PERSONAS[name];
-  return { name, emailKey, passwordKey, email: env(emailKey), password: env(passwordKey) };
+export function personaCredentials(name = personaName()) {
+  const key = String(name || personaName()).trim().toLowerCase();
+  if (!PERSONAS[key]) {
+    throw new Error(`STYTCH_PERSONA must be admin, support, or viewer. Got ${key}`);
+  }
+  const [emailKey, passwordKey] = PERSONAS[key];
+  return { name: key, emailKey, passwordKey, email: env(emailKey), password: env(passwordKey) };
 }
 
-/** The only Stytch cookie file. Playwright and playwright-cli both read this path. */
+/** Default persona cookie file. Playwright reads this when a test does not name a persona. */
 export function sessionFile() {
   return path.join(ROOT, 'runs', 'cache', 'stytch', 'session.json');
+}
+
+/** Cookie file for one persona. The default persona also keeps session.json. */
+export function personaSessionFile(name) {
+  const creds = personaCredentials(name);
+  return path.join(ROOT, 'runs', 'cache', 'stytch', `${creds.name}.json`);
+}
+
+export function sessionTargets(name = personaName()) {
+  const creds = personaCredentials(name);
+  const named = personaSessionFile(creds.name);
+  if (creds.name === personaName()) return [sessionFile(), named];
+  return [named];
 }
 
 function writeSecretJson(file, value) {
@@ -196,8 +212,8 @@ async function probeApp(cookies) {
   };
 }
 
-function publishSession(record) {
-  writeSecretJson(sessionFile(), record);
+function publishSession(record, files) {
+  for (const file of files) writeSecretJson(file, record);
 }
 
 export function sessionReusable(cached, creds, now = Math.floor(Date.now() / 1000)) {
@@ -208,8 +224,7 @@ export function sessionReusable(cached, creds, now = Math.floor(Date.now() / 100
   return Array.isArray(cached.cookies) && cached.cookies.length > 0;
 }
 
-async function loginStytch() {
-  const creds = personaCredentials();
+async function loginStytch(creds = personaCredentials()) {
   if (!CFG.org || !creds.email || !creds.password) {
     throw new Error(`Set STYTCH_ORGANIZATION_ID, ${creds.emailKey}, and ${creds.passwordKey}`);
   }
@@ -244,46 +259,56 @@ function sessionUsable(probe) {
   return probe.pageStatus === 200 || probe.pageStatus === 403;
 }
 
+function readCached(file) {
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /**
- * One session file for the persona in STYTCH_PERSONA.
- * Reuse it only when the persona matches and more than an hour remains.
- * `force` signs in again. Callers do not pass a second destination.
+ * Sign in as `persona`, or as STYTCH_PERSONA when omitted.
+ * A named persona is stored at runs/cache/stytch/<persona>.json.
+ * The default persona is also stored at session.json, which existing specs read.
+ * Reuse a file only when the persona matches and more than an hour remains.
  */
-export async function ensureStytchSession({ force = false } = {}) {
-  const creds = personaCredentials();
-  const file = sessionFile();
+export async function ensureStytchSession({ force = false, persona } = {}) {
+  const creds = personaCredentials(persona);
+  const files = sessionTargets(creds.name);
   const now = Math.floor(Date.now() / 1000);
-  if (!force && existsSync(file)) {
-    try {
-      const cached = JSON.parse(readFileSync(file, 'utf8'));
-      if (sessionReusable(cached, creds, now)) {
+  if (!force) {
+    for (const file of files) {
+      const cached = readCached(file);
+      if (!cached || !sessionReusable(cached, creds, now)) continue;
+      try {
         const probe = await probeApp(cached.cookies);
-        if (sessionUsable(probe)) {
-          const record = {
-            ...cached,
-            persona: creds.name,
-            email: creds.email,
-            origins: [],
-            expiresAt: sessionExpiry(cached.cookies),
-            probe,
-            reusedAt: new Date().toISOString(),
-          };
-          publishSession(record);
-          return {
-            reused: true,
-            persona: creds.name,
-            status: cached.status,
-            cookieCount: cached.cookies.length,
-            ...probe,
-          };
-        }
+        if (!sessionUsable(probe)) continue;
+        const record = {
+          ...cached,
+          persona: creds.name,
+          email: creds.email,
+          origins: [],
+          expiresAt: sessionExpiry(cached.cookies),
+          probe,
+          reusedAt: new Date().toISOString(),
+        };
+        publishSession(record, files);
+        return {
+          reused: true,
+          persona: creds.name,
+          status: cached.status,
+          cookieCount: cached.cookies.length,
+          file: path.relative(ROOT, files[files.length - 1]),
+          ...probe,
+        };
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('STYTCH_PERSONA')) throw err;
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith('STYTCH_PERSONA')) throw err;
-      /* unreadable cache falls through to a fresh login */
     }
   }
-  const fresh = await loginStytch();
+  const fresh = await loginStytch(creds);
   const record = {
     persona: creds.name,
     email: creds.email,
@@ -294,12 +319,13 @@ export async function ensureStytchSession({ force = false } = {}) {
     origins: [],
     probe: { landed: fresh.landed, onLogin: fresh.onLogin, pageStatus: fresh.pageStatus },
   };
-  publishSession(record);
+  publishSession(record, files);
   return {
     reused: false,
     persona: creds.name,
     status: fresh.status,
     cookieCount: fresh.cookies.length,
+    file: path.relative(ROOT, files[files.length - 1]),
     landed: fresh.landed,
     onLogin: fresh.onLogin,
     pageStatus: fresh.pageStatus,

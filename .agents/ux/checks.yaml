@@ -1,6 +1,6 @@
-# Lexful UX Checks v0.5 (DRAFT, unsigned)
-# Machine-readable version of the UX Rulebook v0.5 + Bad UX Pattern Library v0.6.
-# The automated audit reads THIS file. Humans edit it. Rule IDs must match the two documents.
+# UX checks (DRAFT, unsigned)
+# Machine-readable version of rulebook.md and pattern-library.md.
+# The audit reads this file. Rule IDs must match those two documents.
 #
 # verify:  script = deterministic Playwright/axe check | ai = model judges screenshot + page structure | human = needs a person
 # qa_refs: QA test case ids from qa-specs/ that cover the same behavior. Cite them in findings as qaRefs.
@@ -8,7 +8,7 @@
 
 meta:
   version: 0.6.0
-  source_docs: [Lexful_UX_Rulebook_v0.5, Lexful_Bad_UX_Pattern_Library_v0.6]
+  source_docs: [rulebook.md, pattern-library.md]
   environment: UAT only, demo/synthetic data only
   default_persona: Support        # technician role. Use Admin only for admin screens, Viewer for read-only checks
   accessibility_bar: WCAG 2.1 AA
@@ -35,16 +35,15 @@ meta:
     - "An S0 or S1 is accepted only if reproduced at least 2 times, your own screenshot shows the problem (not the opposite), and you tried to disprove it."
     - "If your evidence contradicts your claim, withdraw or downgrade the finding and list it under heldForReview as Withdrawn."
     - "Never copy wording, ids or findings from any sample or demo file. Every ticket comes from what you observed in this run."
-  environment_notes:              # from QA, see QA_TRACEABILITY.md section 1
+  environment_notes:              # from QA, see traceability.md section 1
     - "CloudFront WAF can answer bursts with 403 Request blocked. Stop 45 seconds, retry at most 3 times, one worker. This is the environment, not an app defect."
     - "The Stytch session JWT lives 5 minutes. If you land on a login page mid-run, stop and ask the user to log in again. Never loop."
     - "URL patterns: /docs/assets, /docs/d/all/<type> (example servers), /docs/d/all/system.document, record drawer in the URL as ?drawer=. Do not guess URLs."
     - "Only the org owner persona has been exercised by QA. If Settings, Account and Platform are visible, report the role as Admin or owner (inferred). Never write Support unless the app shows it."
-  visual_suggestions:             # used by the lexful-ui-before-after skill
-    - Checks with visual_fix true can get a Before/After pair. shadcn_hint names the implementation (shadcn/ui component); fluent_hint gives the Fluent design rationale.
+  remediation:                    # written fix guidance. The report does not include mock images.
+    - shadcn_hint names the shadcn/ui component. fluent_hint gives the Fluent design rationale.
     - "Direction (Oct 13): shadcn/ui components with Fluent-aligned design. Authority order: Lexful Storybook and style guide, then Fluent, then shadcn defaults."
-    - Confirm component props in the official docs, and run the quick stack check first (see fluent-ui-design-system).
-    - Max 4 pairs per run. After images are concept mocks, never the live product.
+    - Confirm component props in the official docs, and run the quick stack check first (see design-system).
   output_rules:
     - Every finding must cite a check id or rule ref. No reference = discard.
     - Low-confidence findings go in the report only, never to Linear.
@@ -72,12 +71,11 @@ checks:
     title: Results visibly relate to the query
     check: Each result should contain the query text, or the UI should show why it matched.
     default_severity: S2
-    visual_fix: true
     fluent_hint: "Emphasize the matched text in each result with Text (semibold) and show which field matched as secondary text. No dedicated highlight component in v9."
     shadcn_hint: "Matched text in font-semibold inside each result; show the matched field as secondary text-xs text inside Command items."
     verify: [script, ai]
     automation_hint: Type a short query, read result titles, flag any result whose visible text lacks the query. Test short queries (1-3 characters) on purpose.
-    known_issue: "Oct 5 - searching 'To' returned 3 results with no visible match (Findings Log #11)."
+    known_issue: "Oct 5 - searching 'To' returned 3 results with no visible match."
     confidence: confirmed
     qa_refs: ["TC-SRCH105", "TC-SRCH106", "TC-SRCH107", "TC-SRCH136", "TC-SRCH138", "TC-SRCH139", "SPEC-TC-04", "SPEC-TC-05", "SPEC-TC-07"]
     qa_note: "Matching is decided by the server (GET /v1/search, 20 per page). The shorthand AD is rewritten to Active Directory on purpose, and a hint shows it (SPEC-TC-04): do not flag that. Check the hint is visible and that a result's visible text explains the match."
@@ -89,7 +87,6 @@ checks:
     title: Match highlighting
     check: The matched term or field is visibly highlighted so the user can see why a result appeared.
     default_severity: O          # design suggestion when the UI works
-    visual_fix: true
     fluent_hint: "Compose Text with emphasis on the matched substring. No dedicated highlight component in v9."
     shadcn_hint: "Wrap the matched substring in a font-semibold span inside Command items."
     verify: [ai]
@@ -102,7 +99,6 @@ checks:
     title: Global vs in-page search is distinguishable
     check: A user can tell the header (global) search from the in-page table search at a glance, via placeholder, icon or position.
     default_severity: O          # design suggestion when the UI works
-    visual_fix: true
     fluent_hint: "SearchBox with a distinct placeholder naming the scope (for example 'Search documents'); optional Tag showing the active scope."
     shadcn_hint: "Input Group with a distinct placeholder naming the scope; optional Badge showing the active scope."
     verify: [ai, human]
@@ -216,12 +212,11 @@ checks:
     title: All validation errors shown together
     check: Submitting an incomplete create form lists every missing required field at once, with specific messages.
     default_severity: S3
-    visual_fix: true
     fluent_hint: "Field with validationState 'error' and validationMessage around every required Input; show all errors after one submit. Verify prop names in the Field doc."
     shadcn_hint: "Field with an error message on every required control, all shown after one submit. Verify Field subcomponents in the shadcn docs."
     verify: [script]
     automation_hint: Fill only the name, submit, count visible field errors, compare to the number of required fields.
-    known_issue: Oct 1 - errors appeared one at a time (Findings Log #1).
+    known_issue: Oct 1 - errors appeared one at a time.
     confidence: confirmed
     qa_refs: ["TC-DOC-009", "TC-DOC-010", "assets-crud_spec.ts:L162-L178"]
     qa_note: "QA treats these as expected: Create stays disabled until Name and Organization (and Role for Servers) are set (TC-DOC-009, assets-crud_spec.ts:L162-L178), and an empty name triggers native browser validation (TC-DOC-010). So disabled-until-ready is not a defect. The UX gap is only that required fields are not marked or explained: rate S3 or Observation, S2 only if you could not work out what was missing."
@@ -245,7 +240,6 @@ checks:
     title: Destructive actions confirm clearly
     check: Archive or delete asks for confirmation and states what will happen. Archive is a soft delete, so the item must be restorable.
     default_severity: S1
-    visual_fix: true
     fluent_hint: "Dialog with modalType 'alert'; default focus on the safe action (Cancel); destructive button is not the default focus."
     shadcn_hint: "AlertDialog; autofocus Cancel; destructive action uses Button variant destructive."
     verify: [script, ai]
@@ -260,7 +254,6 @@ checks:
     title: Irreversible settings warn first
     check: Marking a custom field as the record-name field cannot be undone. A warning must appear before commit.
     default_severity: S2
-    visual_fix: true
     fluent_hint: "Field hint text plus a Dialog (alert) before committing an irreversible setting."
     shadcn_hint: "Field description text plus AlertDialog before committing an irreversible setting."
     verify: [ai, human]
@@ -286,12 +279,11 @@ checks:
     title: Visible confirmation after create, save, link
     check: A toast or inline message confirms each action. A Toaster component exists in Storybook, so check which screens use it and which do not.
     default_severity: S3          # S2 only when the outcome cannot be seen (calibration_rules)
-    visual_fix: true
     fluent_hint: "Toast (via Toaster) for transient confirmation; MessageBar if the notice must stay. Verify hook and prop names in the Toast doc."
     shadcn_hint: "Sonner toast for create, save and link; Alert if the notice must persist."
     verify: [script]
     automation_hint: After each action, wait up to 3 seconds for a status or toast element.
-    known_issue: Oct 1 - none observed in multiple screenshots (Findings Log #2).
+    known_issue: Oct 1 - no toast observed after create, save, or link.
     confidence: confirmed
     qa_refs: []
     qa_note: "No QA test asserts a toast. QA's POM looks for react-toastify classes (Toastify__toast), which may not be the library the app uses (Lexful's Storybook has a Toaster). Confirm which library the app uses before recommending Sonner. Staged edits close the save bar, so a visible result may already exist: apply the visible-outcome rule."
@@ -303,11 +295,10 @@ checks:
     title: Empty states offer a clear next step
     check: An empty list shows an inline create action, like the Documents empty state does.
     default_severity: S3
-    visual_fix: true
     fluent_hint: "No EmptyState in v9. Compose icon, Text (subtitle) and a primary Button, matching the Documents empty state."
     shadcn_hint: "Empty with EmptyMedia (icon), EmptyTitle, EmptyDescription and a Button inside EmptyContent, same as the Documents empty state."
     verify: [script, ai]
-    known_issue: Assets home empty state has no inline CTA (Findings Log #3).
+    known_issue: Assets home empty state has no inline CTA.
     confidence: confirmed
 
   - id: CRUD-08
@@ -318,7 +309,7 @@ checks:
     check: Buttons and inputs match the Storybook components (Button variants, BulkActionBar). Flag unexplained one-off styling.
     default_severity: O          # design suggestion when the UI works
     verify: [ai, human]
-    known_issue: Edit button styled differently from other buttons, may be intentional (Findings Log #4).
+    known_issue: Edit button styled differently from other buttons, may be intentional.
     confidence: unconfirmed
 
   - id: CRUD-09
@@ -414,7 +405,7 @@ checks:
     check: Syntax such as ==highlight== renders as styled text, not literal characters.
     default_severity: S3
     verify: [script]
-    known_issue: Oct 1 - literal ==text== seen, may have been test content (Findings Log #5).
+    known_issue: Oct 1 - literal ==text== seen, may have been test content.
     confidence: unconfirmed
     qa_refs: ["TC-DOC-007"]
     qa_note: "Underline and Highlight exist only in HTML mode; Markdown mode does not offer them and the toolbar says so (TC-DOC-007). Typing ==text== in a Markdown document showing raw text may be expected. Test both modes before reporting. If the editor shows highlight styling that the saved view does not, rate S3 for the mismatch."
@@ -426,7 +417,6 @@ checks:
     title: Save state is always visible
     check: The user can tell whether the document is saved, saving or unsaved.
     default_severity: S2
-    visual_fix: true
     fluent_hint: "Small caption Text with Spinner (tiny) while saving, then 'Saved'."
     shadcn_hint: "text-xs status text with Spinner while saving, then 'Saved'."
     verify: [ai]
@@ -513,7 +503,6 @@ checks:
     title: Visible focus and focus return
     check: A visible focus indicator shows when tabbing. Closing a modal or drawer returns focus sensibly.
     default_severity: S2
-    visual_fix: true
     fluent_hint: "useRestoreFocusSource and useRestoreFocusTarget on Drawer and Dialog triggers; Escape closes unless modalType is 'alert'."
     shadcn_hint: "Radix Dialog behavior (Sheet, AlertDialog): confirm focus returns to the trigger and Escape closes; for custom panels add the same behavior."
     verify: [script]
@@ -527,7 +516,6 @@ checks:
     title: Icon-only buttons have accessible names
     check: Every button that shows only an icon (more, expand, close, delete) has a name a screen reader can announce.
     default_severity: S3
-    visual_fix: true
     fluent_hint: "Icon-only Button needs aria-label or Tooltip with relationship 'label'."
     shadcn_hint: "Button variant ghost with an icon size plus aria-label, or wrap in Tooltip."
     verify: [script]
@@ -541,7 +529,6 @@ checks:
     title: Drawer header action hierarchy
     check: In the asset detail drawer, primary, secondary and utility actions are visually distinguishable, not equal weight.
     default_severity: O          # design suggestion when the UI works
-    visual_fix: true
     fluent_hint: "Drawer (Inline for non-blocking detail): DrawerHeader with DrawerHeaderTitle and an action slot holding a subtle close Button; group secondary actions in a MenuButton; at most one primary Button; TabList for the tabs."
     shadcn_hint: "Title row with Button ghost icons (aria-label) for expand and close; secondary actions in one Dropdown Menu 'More'; at most one default Button; Tabs below the header."
     verify: [ai, human]
