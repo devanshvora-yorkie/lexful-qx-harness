@@ -25,7 +25,10 @@ from app.coverage import load_cases, write_coverage_index
 from app.pipeline import (
     _lead_prompt,
     failed_tests,
+    merge_outcomes,
+    outcomes_by_file,
     spec_was_patched,
+    specs_for_failures,
     startup_order,
     record_suite_edits,
     suite_files_changed,
@@ -34,6 +37,7 @@ from app.pipeline import (
 )
 from app.runners import checked_in_specs, common_test_dir, personas_requested, planned_specs
 from app.store import (
+    attach_e2e_log,
     create_run,
     find_active_phase1,
     find_active_sha,
@@ -41,6 +45,7 @@ from app.store import (
     list_runs,
     publish_folder,
     recover_runs,
+    share_e2e_log,
     relocate_legacy_runs,
     update_run,
 )
@@ -304,7 +309,7 @@ class StoreTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_round_trip(self):
-        created = create_run(ticket="LEX-3371", pr=1418, sha="abc123", spec_count=15)
+        created = create_run(ticket="LEX-3371", pr=1418, sha="abc123")
         self.assertEqual(created["status"], "accepted")
         self.assertIsNone(created["opencodeSession"])
         self.assertTrue(created["folder"].startswith("tickets/LEX-3371/"))
@@ -323,22 +328,44 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(find_active_sha("abc123"))
 
     def test_recovery_and_spec_discovery(self):
-        created = create_run(ticket="LEX-3400", pr=None, sha=None, spec_count=None)
+        created = create_run(ticket="LEX-3400", pr=None, sha=None)
         run = Path(self.tmp.name) / created["folder"]
         spec = run / "specs" / "added.spec.ts"
         spec.write_text("import { test } from '@playwright/test'\n")
         found = planned_specs(run, 0)
         self.assertTrue(any(item.endswith("added.spec.ts") for item in found))
         update_run(created["id"], status="agent")
-        waiting = create_run(ticket="LEX-3401", pr=None, sha=None, spec_count=None)
+        waiting = create_run(ticket="LEX-3401", pr=None, sha=None)
         update_run(waiting["id"], status="queued")
         requeued = recover_runs()
         self.assertIn(waiting["id"], requeued)
-        self.assertEqual(get_run(created["id"])["status"], "failed")
-        self.assertIn("restarted", get_run(created["id"])["error"])
+        failed = get_run(created["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("restarted", failed["error"])
+        report = Path(self.tmp.name) / failed["folder"] / "report.md"
+        self.assertIn("restarted", report.read_text(encoding="utf-8"))
+        self.assertTrue((report.parent / "qa-result.json").is_file())
+
+    def test_e2e_log_is_stored_on_the_ticket(self):
+        phase1 = create_run(ticket=None, pr=None, sha=None, kind="phase1")
+        phase1_dir = Path(self.tmp.name) / phase1["folder"]
+        (phase1_dir / "run.log").write_text("e2e line\n", encoding="utf-8")
+        (phase1_dir / "report.md").write_text("# journey\n", encoding="utf-8")
+        update_run(phase1["id"], status="completed")
+        waiting = create_run(ticket="LEX-3500", pr=None, sha=None)
+        update_run(waiting["id"], status="queued")
+        self.assertEqual(share_e2e_log(phase1["id"]), [waiting["id"]])
+        saved = Path(self.tmp.name) / waiting["folder"] / "e2e" / "run.log"
+        self.assertEqual(saved.read_text(encoding="utf-8"), "e2e line\n")
+        self.assertTrue((saved.parent / "report.md").is_file())
+        later = create_run(ticket="LEX-3501", pr=None, sha=None)
+        later_dir = Path(self.tmp.name) / later["folder"]
+        self.assertTrue(attach_e2e_log(later_dir))
+        self.assertIn("e2e line", (later_dir / "e2e" / "run.log").read_text(encoding="utf-8"))
+        self.assertFalse(attach_e2e_log(later_dir))
 
     def test_phase1_folder(self):
-        created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+        created = create_run(ticket=None, pr=None, sha=None, kind="phase1")
         self.assertTrue(created["id"].startswith("regression-"))
         self.assertTrue(created["folder"].startswith("phase-1/"))
         self.assertNotIn("passed", created["folder"])
@@ -469,6 +496,50 @@ class CoverageTest(unittest.TestCase):
             self.assertIn("search", text)
             self.assertIn("asset crud", text)
             self.assertIn("document editing", text)
+
+    def test_a_title_word_does_not_choose_the_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            journey = Path(tmp) / "widgets"
+            journey.mkdir()
+            (journey / "widgets.spec.ts").write_text(
+                "test.describe('Widgets', () => {\n"
+                "  test('TC-1 clears the field and cancels', async () => {})\n"
+                "})\n",
+                encoding="utf-8",
+            )
+            (journey / "FEATURE.md").write_text(
+                "| TC | Title | Type | Suite |\n"
+                "|---|---|---|---|\n"
+                "| TC-1 | clears the field and cancels | positive | Smoke |\n",
+                encoding="utf-8",
+            )
+            recorded = load_cases(Path(tmp))
+            self.assertEqual(recorded[0].type, "positive")
+            self.assertEqual(recorded[0].suite, "smoke")
+            (journey / "FEATURE.md").write_text("# no inventory\n", encoding="utf-8")
+            guessed = load_cases(Path(tmp))
+            self.assertEqual(guessed[0].type, "positive")
+
+    def test_failed_file_counts_replace_only_that_file(self):
+        def report(file: str, results: list[tuple[str, str]]) -> dict:
+            return {"suites": [{"file": file, "specs": [
+                {"title": title, "ok": status == "expected", "file": file, "tests": [{"status": status}]}
+                for title, status in results
+            ], "suites": []}]}
+
+        before = outcomes_by_file(report("search/search.spec.ts", [("TC-01", "expected"), ("TC-06", "unexpected")]))
+        before.update(outcomes_by_file(report("asset crud/assets-crud.spec.ts", [("AC-011", "expected")])))
+        after = outcomes_by_file(report("search/search.spec.ts", [("TC-01", "expected"), ("TC-06", "expected")]))
+        merged = merge_outcomes(before, after, ["e2e test cases/search/search.spec.ts"])
+        self.assertEqual(merged, {"passed": 3, "failed": 0, "skipped": 0, "flaky": 0})
+        failed = report("search/search.spec.ts", [("TC-06", "unexpected")])
+        self.assertEqual(
+            specs_for_failures(
+                ["e2e test cases/search/search.spec.ts", "e2e test cases/asset crud/assets-crud.spec.ts"],
+                failed,
+            ),
+            ["e2e test cases/search/search.spec.ts"],
+        )
 
     def test_lead_prompt_has_no_floor_and_points_at_coverage(self):
         text = _lead_prompt(Path("/tmp/runs/tickets/LEX-1/attempt"), "LEX-1", {})

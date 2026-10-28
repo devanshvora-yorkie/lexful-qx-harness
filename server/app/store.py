@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -187,7 +188,6 @@ def create_run(
     ticket: str | None,
     pr: int | None,
     sha: str | None,
-    spec_count: int | None,
     kind: str = "ticket",
 ) -> dict[str, Any]:
     label = "regression" if kind == "phase1" else ticket or (f"pr-{pr}" if pr else "manual")
@@ -199,7 +199,6 @@ def create_run(
         "ticket": None if kind == "phase1" else ticket,
         "pr": pr,
         "sha": sha,
-        "specCount": spec_count,
         "status": "accepted",
         "createdAt": now,
         "updatedAt": now,
@@ -346,13 +345,9 @@ run.log            the full log, one line per event
 qa-result.json     passed, failed, skipped, and flaky counts
 manifest.json      status, model, heal count, and timestamps
 preflight.json     sign-in and toolchain checks
-preflight.log      sign-in command output
-toolchain.log      local tool checks
 triage-N.json      healer classification for heal N: spec drift, or a product bug
 bugs.md            product bugs for this attempt, when a failure remains
-heal-N.md          short healer note for heal N
-auth-state.json    browser cookies captured for this attempt, when present
-playwright/        results.json, output.log, the HTML report, screenshots, and traces
+playwright/        results.json, output.log, and a screenshot when a test fails
 opencode/          the agent session and the healer transcript
 """
 
@@ -370,12 +365,16 @@ preflight.json       sign-in, Linear, and GitHub checks
 context-pack.json    ticket, pull request, and files gathered before the agent
 e2e-coverage.md      checked-in search, asset crud, and document editing cases already run
 FEATURE.md           what the explorer observed on UAT, and which of those cases are new
-prompt.md            instructions sent to the coordinator
 bugs.md              product bugs for this attempt, when a failure remains
 planned-specs.json   spec files the agent planned
 specs/               specs written for this ticket
 explore/             browser snapshots
-playwright/          results.json, output.log, the HTML report, screenshots, and traces
+ux-report.html       UI review, when that switch is on
+ux-findings.json     findings behind the UI review
+ux-scorecard.json    score and verdict for the UI review
+e2e/run.log          E2E User Journey log from the journey run that preceded this attempt
+e2e/report.md        that journey run's verdict
+playwright/          results.json, output.log, and a screenshot when a test fails
 opencode/            the agent session and subagent transcripts
 """
 
@@ -391,6 +390,7 @@ phase-1/
 tickets/
   Feature Specific TCs. One folder per Linear ticket, then one folder per attempt.
   Example: tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect
+  e2e/run.log in that folder is a copy of the E2E User Journey log.
 
 pull-requests/
   A run started from a pull request number, when there is no ticket.
@@ -439,6 +439,68 @@ def list_runs(ticket: str | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+_E2E_LOG_FILES = ("run.log", "report.md", "qa-result.json", "bugs.md")
+_FINISHED = {"completed", "needs_revision", "halted", "failed"}
+
+
+def latest_finished_phase1() -> dict[str, Any] | None:
+    """Newest E2E User Journey run that has a log. The index is newest first."""
+    for row in list_runs():
+        if row.get("kind") != "phase1" or row.get("status") not in _FINISHED:
+            continue
+        if (run_dir(str(row["id"])) / "run.log").is_file():
+            return dict(row)
+    return None
+
+
+def _copy_e2e_log(source: Path, into: Path, phase1_id: str) -> bool:
+    if not (source / "run.log").is_file():
+        return False
+    dest = into / "e2e"
+    if (dest / "run.log").is_file():
+        return False
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in _E2E_LOG_FILES:
+        src = source / name
+        if src.is_file():
+            shutil.copyfile(src, dest / name)
+    folder = ""
+    row = get_run(phase1_id)
+    if row and row.get("folder"):
+        folder = str(row["folder"])
+    (dest / "source.txt").write_text(
+        "E2E User Journey TCs. Copied from runs/" + (folder or source.name) + "\n",
+        encoding="utf-8",
+    )
+    return True
+
+
+def share_e2e_log(phase1_id: str) -> list[str]:
+    """Copy the finished journey log into ticket attempts that are still waiting."""
+    source = run_dir(phase1_id)
+    copied: list[str] = []
+    waiting = {"accepted", "queued"}
+    for row in list_runs():
+        folder = str(row.get("folder") or "")
+        if row.get("kind") == "phase1" or not folder.startswith("tickets/"):
+            continue
+        if row.get("status") not in waiting:
+            continue
+        if _copy_e2e_log(source, runs_root() / folder, phase1_id):
+            copied.append(str(row["id"]))
+    return copied
+
+
+def attach_e2e_log(ticket_folder: Path) -> bool:
+    """Copy the latest journey log into this ticket attempt when it starts."""
+    if (ticket_folder / "e2e" / "run.log").is_file():
+        return False
+    phase1 = latest_finished_phase1()
+    if phase1 is None:
+        return False
+    return _copy_e2e_log(run_dir(str(phase1["id"])), ticket_folder, str(phase1["id"]))
+
+
 def find_active_phase1() -> dict[str, Any] | None:
     """A checked-in suite run that has not finished. A second trigger follows this one."""
     active = {"accepted", "queued", "preflight", "agent", "execute", "heal"}
@@ -457,6 +519,41 @@ def find_active_sha(sha: str) -> dict[str, Any] | None:
     return None
 
 
+def _write_interrupted(run_id: str) -> None:
+    """A restart used to leave a folder with no report. Write one, then put the result in the name."""
+    row = get_run(run_id) or {}
+    folder = run_dir(run_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    reason = "The server restarted during the run. This attempt has no finished suite verdict."
+    (folder / "report.md").write_text(
+        "\n".join([
+            f"# {row.get('ticket') or run_id}",
+            "",
+            "- Status: failed",
+            "- Verdict: HALTED",
+            "",
+            reason,
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    (folder / "qa-result.json").write_text(
+        json.dumps(
+            {
+                "ticket_id": row.get("ticket"),
+                "run_id": run_id,
+                "verdict": "HALTED",
+                "test_results": {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0},
+                "open_issues": [reason],
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    publish_folder(run_id, summary=None, verdict=None)
+
+
 def recover_runs() -> list[str]:
     """After a restart, fail runs that were mid-flight and return the ones still waiting to start."""
     interrupted = {"preflight", "agent", "execute", "heal"}
@@ -469,6 +566,7 @@ def recover_runs() -> list[str]:
             continue
         if status in interrupted:
             update_run(run_id, status="failed", error="server restarted during the run")
+            _write_interrupted(run_id)
         elif status in waiting:
             requeue.append(run_id)
     return requeue

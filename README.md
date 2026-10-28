@@ -83,7 +83,7 @@ runs/phase-1/2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision/
   manifest.json         status, model, heal count
   triage-N.json         healer classification for heal N
   heal-N.md             healer note for heal N
-  playwright/           results.json, html report, output.log
+  playwright/           results.json, output.log, screenshots when a test fails
   opencode/             agent session and healer transcript
 
 runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/

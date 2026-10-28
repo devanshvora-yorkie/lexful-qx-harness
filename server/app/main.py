@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.logbook import Logbook
 from app.pipeline import execute_run, startup_order
@@ -41,7 +41,7 @@ async def _lifespan(_app: FastAPI):
     waiting = [row for row in (get_run(run_id) for run_id in waiting_ids) if row]
     fresh = None
     if get_settings().phase1_on_start and not any(row.get("kind") == "phase1" for row in waiting):
-        created = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+        created = create_run(ticket=None, pr=None, sha=None, kind="phase1")
         update_run(created["id"], status="queued")
         fresh = created["id"]
         log.info("E2E User Journey TCs queued %s", fresh)
@@ -92,7 +92,6 @@ def require_secret(
 
 class RunBody(BaseModel):
     pr: int | None = None
-    spec_count: int | None = Field(default=None, alias="specCount")
 
 
 class DeployBody(BaseModel):
@@ -100,8 +99,6 @@ class DeployBody(BaseModel):
     pull_request: int | None = None
     ticket: str | None = None
     sha: str | None = None
-    ref: str | None = None
-    spec_count: int | None = Field(default=None, alias="specCount")
 
 
 def _enqueue(row: dict[str, Any]) -> dict[str, Any]:
@@ -158,7 +155,7 @@ def run_phase1() -> dict[str, Any]:
             "runId": existing["id"],
             "status": existing["status"],
         }
-    row = create_run(ticket=None, pr=None, sha=None, spec_count=None, kind="phase1")
+    row = create_run(ticket=None, pr=None, sha=None, kind="phase1")
     queued = _enqueue(row)
     log.info("E2E User Journey TCs queued %s", row["id"])
     print(f"E2E User Journey TCs queued  {row['id']}", flush=True)
@@ -169,16 +166,14 @@ def run_phase1() -> dict[str, Any]:
 def run_ticket(ticket_key: str, body: RunBody | None = None) -> dict[str, Any]:
     if not TICKET_RE.match(ticket_key):
         raise HTTPException(status_code=400, detail="Ticket must look like LEX-1234")
-    spec_count = body.spec_count if body else None
     pr = body.pr if body else None
-    row = create_run(ticket=ticket_key.upper(), pr=pr, sha=None, spec_count=spec_count)
+    row = create_run(ticket=ticket_key.upper(), pr=pr, sha=None)
     return _enqueue(row)
 
 
 @app.post("/run/pr/{number}", status_code=202, dependencies=[Depends(require_secret)])
 def run_pr(number: int, body: RunBody | None = None) -> dict[str, Any]:
-    spec_count = body.spec_count if body else None
-    row = create_run(ticket=None, pr=number, sha=None, spec_count=spec_count)
+    row = create_run(ticket=None, pr=number, sha=None)
     return _enqueue(row)
 
 
@@ -194,7 +189,7 @@ def uat_deploy(body: DeployBody) -> dict[str, Any]:
             return {"success": True, "skipped": True, "reason": "sha already accepted", "runId": existing["id"], "sha": body.sha}
     if not pr and not ticket and not body.sha:
         raise HTTPException(status_code=400, detail="Provide pr, ticket, or sha")
-    row = create_run(ticket=ticket, pr=pr, sha=body.sha, spec_count=body.spec_count)
+    row = create_run(ticket=ticket, pr=pr, sha=body.sha)
     queued = _enqueue(row)
     queued["sha"] = body.sha
     return queued

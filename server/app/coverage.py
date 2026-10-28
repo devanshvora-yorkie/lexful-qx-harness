@@ -22,14 +22,7 @@ _TC_ID = re.compile(r"(TC-[A-Za-z0-9-]+)")
 _DESCRIBE = re.compile(r"test\.describe\(\s*([\"'`])(.+?)\1")
 _TEST = re.compile(r"(?<![\w.])test\(\s*([\"'`])(.+?)\1")
 _INVENTORY_HEADER = re.compile(r"\|\s*TC\s*\|\s*Title\s*\|\s*Type\s*\|\s*Suite\b", re.IGNORECASE)
-_NEGATIVE = re.compile(
-    r"\b(invalid|reject(?:ed|ion)?|blocked|empty|missing|no-results|no results|401|403|4xx|expired|forbidden)\b",
-    re.IGNORECASE,
-)
-_EDGE = re.compile(
-    r"\b(discard\w*|cancel\w*|clear\w*|edge|boundary|wrap\w*|reset\w*|debounc\w*|only the)\b",
-    re.IGNORECASE,
-)
+_TYPES = ("negative", "edge", "positive")
 
 
 @dataclass(frozen=True)
@@ -110,11 +103,13 @@ def _cases_for_journey(folder: Path) -> list[Case]:
     from_md = _parse_feature_table(folder / "FEATURE.md", folder.name)
     if not from_md:
         return _with_generated_ids(from_specs)
-    by_id = {case.id: case for case in from_specs}
+    by_id = {case.id: case for case in from_specs if case.id}
+    by_title = {case.title: case for case in from_specs}
     ordered: list[Case] = []
     seen: set[str] = set()
+    titles: set[str] = set()
     for row in from_md:
-        spec = by_id.get(row.id)
+        spec = by_id.get(row.id) or by_title.get(row.title)
         ordered.append(Case(
             journey=folder.name,
             id=row.id,
@@ -125,9 +120,11 @@ def _cases_for_journey(folder: Path) -> list[Case]:
             file=spec.file if spec else row.file,
         ))
         seen.add(row.id)
+        titles.add(row.title)
     for case in from_specs:
-        if case.id not in seen:
-            ordered.append(case)
+        if case.id in seen or case.title in titles:
+            continue
+        ordered.append(case)
     return ordered
 
 
@@ -216,19 +213,20 @@ def _parse_feature_table(path: Path, journey: str) -> list[Case]:
     return rows
 
 
+def _named_label(text: str, names: tuple[str, ...]) -> str:
+    """A label the author wrote: a describe suffix, an @tag, or the cell itself."""
+    lowered = text.lower()
+    stripped = lowered.strip()
+    if stripped in names:
+        return stripped
+    for name in names:
+        if f"@{name}" in lowered or f"— {name}" in lowered or f"- {name}" in lowered:
+            return name
+    return ""
+
+
 def _type_for(group: str, title: str) -> str:
-    lowered = group.lower()
-    if "negative" in lowered:
-        return "negative"
-    if "edge" in lowered:
-        return "edge"
-    if "positive" in lowered:
-        return "positive"
-    if _NEGATIVE.search(title):
-        return "negative"
-    if _EDGE.search(title):
-        return "edge"
-    return "positive"
+    return _named_label(group, _TYPES) or _named_label(title, _TYPES) or "positive"
 
 
 def _suite_for(group: str) -> str:

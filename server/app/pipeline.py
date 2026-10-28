@@ -105,6 +105,92 @@ def failed_tests(report: dict[str, Any]) -> list[dict[str, str]]:
     return found
 
 
+def _spec_name(file: str) -> str:
+    return Path(file).name
+
+
+def outcomes_by_file(report: dict[str, Any]) -> dict[str, dict[str, int]]:
+    """Pass and fail counts keyed by spec file name. A heal re-run replaces one file's counts."""
+    found: dict[str, dict[str, int]] = {}
+
+    def add(file: str, counts: dict[str, int]) -> None:
+        key = _spec_name(file)
+        if not key:
+            return
+        bucket = found.setdefault(key, {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0})
+        for name in bucket:
+            bucket[name] += counts[name]
+
+    def count_spec(spec: dict[str, Any]) -> dict[str, int]:
+        counts = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+        tests = [item for item in (spec.get("tests") or []) if isinstance(item, dict)]
+        if not tests:
+            if spec.get("ok") is False:
+                counts["failed"] += 1
+            return counts
+        for test in tests:
+            status = test.get("status")
+            if status == "expected":
+                counts["passed"] += 1
+            elif status == "flaky":
+                counts["flaky"] += 1
+            elif status == "skipped":
+                counts["skipped"] += 1
+            elif status in {"unexpected", "failed"}:
+                counts["failed"] += 1
+        return counts
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        for spec in node.get("specs") or []:
+            if isinstance(spec, dict):
+                add(str(spec.get("file") or node.get("file") or ""), count_spec(spec))
+        for child in node.get("suites") or []:
+            walk(child)
+
+    for suite in report.get("suites") or []:
+        walk(suite)
+    return found
+
+
+def specs_for_failures(specs: list[str], report: dict[str, Any]) -> list[str]:
+    """Spec files that still have a hard failure. A flaky pass stays out of the re-run."""
+    failed_names = {_spec_name(item["file"]) for item in failed_tests(report) if item.get("file")}
+    return [spec for spec in specs if _spec_name(spec) in failed_names]
+
+
+def replace_outcomes(
+    before: dict[str, dict[str, int]],
+    after: dict[str, dict[str, int]],
+    rerun_specs: list[str],
+) -> dict[str, dict[str, int]]:
+    """Keep files that were not re-run. A later heal must start from this map, not from the partial report."""
+    merged = {name: dict(counts) for name, counts in before.items()}
+    replaced = {_spec_name(spec) for spec in rerun_specs}
+    for name, counts in after.items():
+        if name in replaced or name not in merged:
+            merged[name] = dict(counts)
+    return merged
+
+
+def sum_outcomes(files: dict[str, dict[str, int]]) -> dict[str, int]:
+    totals = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+    for counts in files.values():
+        for key in totals:
+            totals[key] += int(counts.get(key) or 0)
+    return totals
+
+
+def merge_outcomes(
+    before: dict[str, dict[str, int]],
+    after: dict[str, dict[str, int]],
+    rerun_specs: list[str],
+) -> dict[str, int]:
+    """Keep counts for files that were not re-run. Replace the files the healer just ran."""
+    return sum_outcomes(replace_outcomes(before, after, rerun_specs))
+
+
 def spec_was_patched(triage: dict[str, Any]) -> bool:
     failures = triage.get("failures")
     if not isinstance(failures, list):
@@ -138,6 +224,9 @@ def execute_run(run_id: str) -> None:
         if row.get("kind") == "phase1":
             _execute_phase1(run_id, row, folder, book)
         else:
+            store.attach_e2e_log(folder)
+            if (folder / "e2e" / "run.log").is_file():
+                book.row("server", "e2e", "E2E User Journey log saved in e2e/run.log")
             _execute(run_id, row, folder, book)
     except Exception as exc:
         book.row("server", "failed", str(exc)[:220])
@@ -145,6 +234,12 @@ def execute_run(run_id: str) -> None:
         store.update_run(run_id, status="failed", error=str(exc)[:500])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[str(exc)[:500]])
         _seal(run_id, None, "HALTED")
+    finally:
+        if row.get("kind") == "phase1":
+            try:
+                store.share_e2e_log(run_id)
+            except Exception:
+                log.exception("e2e log was not copied into the ticket folder")
 
 
 def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
@@ -404,6 +499,7 @@ def _execute_and_heal(
         return summary
     if _suite_passed(result["exitCode"], summary):
         return summary
+    baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
         book.phase(f"heal {attempt} of {heal_attempts}")
@@ -414,7 +510,7 @@ def _execute_and_heal(
             else _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
         )
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
-        before = _suite_revision()
+        before = _heal_revision(folder, classify)
         before_text = _suite_texts() if classify else {}
         heal_code, session_id = runners.run_opencode(
             folder,
@@ -433,24 +529,31 @@ def _execute_and_heal(
         if heal_code != 0:
             book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
             continue
-        changed = suite_files_changed(before, _suite_revision())
-        if classify and not changed:
-            book.row("server", "heal", _unchanged_heal_message(triage))
-            break
+        changed = suite_files_changed(before, _heal_revision(folder, classify))
         for line in suspicious_patches(triage):
             book.row("server", "heal", line[:220])
-        if changed:
-            book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
+        if not changed:
+            book.row("server", "heal", _unchanged_heal_message(triage))
+            break
+        book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
+        previous_report = _read_json(folder / "playwright" / "results.json")
+        rerun = specs_for_failures(specs, previous_report) or specs
+        if not baseline:
+            baseline = outcomes_by_file(previous_report)
         store.update_run(run_id, status="execute")
         book.phase("playwright")
-        why = (
-            f"re-running after heal {attempt} because a spec file changed"
-            if changed
-            else f"re-running after heal {attempt}"
-        )
-        book.row("playwright", "started", why)
-        result = runners.run_playwright(folder, specs)
-        summary = result["summary"]
+        book.row("playwright", "started", f"re-running {len(rerun)} failed file(s) after heal {attempt}"[:240])
+        result = runners.run_playwright(folder, rerun)
+        if rerun != specs and baseline:
+            baseline = replace_outcomes(
+                baseline,
+                outcomes_by_file(_read_json(folder / "playwright" / "results.json")),
+                rerun,
+            )
+            summary = sum_outcomes(baseline)
+        else:
+            summary = result["summary"]
+            baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
         book.row("playwright", "result", _counts(summary))
         if _suite_passed(result["exitCode"], summary):
             return summary
@@ -545,7 +648,7 @@ def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: lis
         "Follow the Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
         "Delegate only to qa-healer for one patch. This is one heal of the whole suite, not three attempts per test.",
         "Do not re-explore and do not add scenarios.",
-        "Do not run the suite. The server will run it after you return.",
+        "Do not run the suite. The server re-runs the failed spec files only if you changed one.",
         "If the control is on the page and the product did the wrong thing, do not edit the spec.",
         "Add a bugs array to triage.json, one object per product defect. The server writes bugs.md from it.",
         "Do not put a skipped or deprecated test in failures or in bugs.",
@@ -586,7 +689,7 @@ def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]
         "Failures:",
         listed,
         f"Specs: {', '.join(specs)}",
-        "Do not run the suite. The server re-runs it only if you changed a spec file.",
+        "Do not run the suite. The server re-runs the failed spec files only if you changed one.",
     ])
 
 
@@ -638,6 +741,19 @@ def _suite_sources() -> list[Path]:
 def _suite_revision() -> tuple[tuple[str, int], ...]:
     root = _suite_root()
     return tuple((path.relative_to(root).as_posix(), path.stat().st_mtime_ns) for path in _suite_sources())
+
+
+def _heal_revision(folder: Path, classify: bool) -> tuple[tuple[str, int], ...]:
+    """E2E heals edit the checked-in suite. A ticket heal edits that run's specs/ folder."""
+    if classify:
+        return _suite_revision()
+    root = folder / "specs"
+    if not root.is_dir():
+        return ()
+    files = sorted(
+        path for path in root.rglob("*") if path.is_file() and path.suffix in {".ts", ".js"}
+    )
+    return tuple((path.relative_to(root).as_posix(), path.stat().st_mtime_ns) for path in files)
 
 
 def _suite_texts() -> dict[str, str]:

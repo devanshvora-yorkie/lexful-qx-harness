@@ -19,6 +19,6 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
   `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer` writes `runs/cache/stytch/<persona>.json` without replacing the admin file.
   The server refreshes a file that expires and reruns the suite. Do not call `/auth/password` per test. The API rate-limits.
 - **CloudFront 403 on shared UAT**: ~1-3% of navigations; escalates if the suite runs several times an
-  hour. `retries: 2` absorbs it, but space out runs.
+  hour. Playwright retries a failed test once. A second failure is left for the healer. Space out runs.
 - **`waitUntil: 'networkidle'` is banned** — it caused multi-minute hangs. `domcontentloaded` + an
   explicit per-page wait.

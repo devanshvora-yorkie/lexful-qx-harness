@@ -12,7 +12,7 @@ services:
       OPENCODE_DISABLE_AUTOUPDATE: "1"
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       CI: "1"
-      AWS_REGION: us-east-1
+      AWS_REGION: ${AWS_REGION:-us-east-1}
       # OpenCode reads the bearer token. .env stores it as BEDROCK_API_KEY.
       AWS_BEARER_TOKEN_BEDROCK: ${BEDROCK_API_KEY:-}
       # E2E User Journey TCs. Set QA_PHASE1_ON_START=false in .env to skip them on startup.

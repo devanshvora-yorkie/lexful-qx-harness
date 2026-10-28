@@ -5,6 +5,7 @@
   "provider": {
     "amazon-bedrock": {
       "options": {
+        // US inference profile. Keep this the same value as AWS_REGION in .env.
         "region": "us-east-1"
       },
       "models": {
