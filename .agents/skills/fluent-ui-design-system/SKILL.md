@@ -1,19 +1,15 @@
 ---
 name: fluent-ui-design-system
 description: "Use when auditing or proposing changes to Lexful's UI against the agreed design direction: shadcn/ui components (Radix + Tailwind) with Microsoft Fluent UI as the design-alignment reference. Covers action hierarchy, spacing, type, radius, behavior, accessibility, plus the Fluent to shadcn component map."
-version: 0.2.0
+version: 0.3.0
 status: "DRAFT, unsigned"
 sources_verified: "2026-10-13 against storybooks.fluentui.dev (component index, Spacing, Border Radii, Typography, Button, Drawer) and ui.shadcn.com (component list, Sheet, Alert, Empty)"
 config:
-  before_after_comparison: false
   output_mode: simple
 ---
 ## Antigravity Docker Environment Testing
 - When testing these skill files on the Antigravity platform, execution must run through the designated Docker container or image environment. 
 - Ensure the Docker environment is running before validating the UX skill findings.
-
-## Capability Toggles
-- **Before-After Comparison**: The visual before-after generation capability can be toggled ON or OFF as required. By default, consider this OFF unless requested.
 
 ## Output Modes (Ticket Generation)
 Provide output based on the requested mode to give the user full control:
@@ -32,7 +28,7 @@ _Skill name kept as `fluent-ui-design-system` so existing links keep working._
 - `references/components.md` — every component in the official Fluent v9 index (the design reference).
 - `references/shadcn-components.md` — the shadcn/ui components available today and how to compose them (the implementation).
 - `references/lexful-mapping.md` — which Lexful screen elements map to which Fluent component, known gaps, and the evidence about Lexful's real stack.
-- Used together with `lexful-ui-before-after` (builds the Before/After visuals) and `lexful-ux-audit-gate` (produces the findings).
+- Used together with `lexful-ux-audit-gate` (produces the findings and the HTML output; it writes solutions as text only, no visual mocks).
 
 ---
 
@@ -191,8 +187,9 @@ Every recommendation must state:
 3. **Scale equivalents:** spacing, radius and type, as Fluent token names and Tailwind classes.
 4. Whether Lexful already does this (then say "no change needed").
 5. The detected-stack line, and which source won if Lexful's Storybook and Fluent disagree.
-6. Effort in S / M / L using the definitions in `lexful-ui-before-after`.
+6. Effort in S / M / L (S = a variant, prop, class or copy change; M = compose components already in the app; L = a new component, state or backend work).
 
 ## Changelog
+- **v0.3.0**: Removed the Before-After capability entirely (it referenced a `lexful-ui-before-after` skill that no longer exists): dropped the `config.before_after_comparison` toggle, the "Capability Toggles" section, the companion-file reference, and inlined the S/M/L effort definitions. Solutions are text-only (shadcn implementation + Fluent rationale), never image mocks.
 - **v0.2.0**: Direction set to shadcn/ui components with Fluent-aligned design. Added the authority order, the adoption profile, Tailwind equivalents of Fluent scales, a Fluent-to-shadcn quick-pick, and a new output contract. Replaced the "never assume Fluent" stack check with a quick stack check.
 - **v0.1.0** — First version, built from the official Fluent UI React v9 index and docs (2026-10-13).
