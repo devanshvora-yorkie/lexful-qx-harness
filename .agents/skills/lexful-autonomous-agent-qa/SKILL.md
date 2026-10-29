@@ -1,7 +1,7 @@
 ---
 name: lexful-autonomous-agent-qa
 description: Generate and verify Playwright E2E tests from a test plan.
-version: 1.0.0
+version: 1.1.0
 author: Hermes
 tags: [qa, testing, e2e, playwright, test-generation, test-debugging, automation, pom-pattern]
 ---
@@ -85,6 +85,11 @@ Track console errors, info messages, and network API calls. When an interaction 
 
 This is the reliable source of truth for `page.waitForResponse()` patterns in Phase 2.
 
+**MANDATORY: Capture Evidence Screenshots for Observations.** In addition to textual DOM snapshots and request logs, capture live `.png` screenshots for all significant UI states, drawer transitions, form states, validation gates, empty states, and UX observations:
+`playwright-cli screenshot explore/ux/<descriptive-name>.png` (or `explore/<name>.png`).
+These visual screenshots serve as direct evidence attached inside observation cards in the interactive HTML UX report (`ux-report.html`).
+
+**Re-Run Exploration & Stakeholder Fix Verification:** When exploring a ticket that has previous runs in `runs/tickets/<ticket>/`, read the previous findings (`ux-findings.json`) from the earlier run. Actively inspect each previously flagged area to check if stakeholders/developers resolved the issue on UAT. If resolved, capture a verification screenshot: `playwright-cli screenshot explore/ux/resolved-<findingId>.png` and log the fix in `FEATURE.md` under "Stakeholder Fixes & Resolution Verification" so downstream audit stages treat it as `Resolved` (0 deductions) rather than a persistent defect.
 
 **CRITICAL: Store snapshots for later reference.** When `browser_snapshot` output is large, save it to a file in the workspace (e.g., `snapshot-{module}.txt`) so elements and structure can be referenced during test generation. If the snapshot exceeds context limits, use targeted extraction via `browser_evaluate` with JS selectors to capture only the relevant DOM.
 
@@ -126,6 +131,8 @@ Analyze the API request and response and expand the scenarios from that. Write e
   - URL, role-based access, data models
   - **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Phase 2 can wait on it
   - **Action coverage matrix** — Every action listed above with `[x]` or `[ ]` per role
+  - **Visual evidence captures** — List of captured `.png` screenshots under `explore/ux/` or `explore/` mapped to journey steps and observed behaviors
+  - **Stakeholder fixes & resolution verification** — Verification status of previously reported findings on this ticket (which items are verified fixed on UAT with resolved screenshots vs. persisting)
   - Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which tests are written and verified
   - Detailed selectors from a fresh snapshot
   - Execution commands

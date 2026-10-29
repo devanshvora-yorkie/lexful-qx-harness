@@ -247,6 +247,12 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         if ux_session_id:
             store.update_run(run_id, opencodeSession=ux_session_id)
             runners.export_session(folder, ux_session_id)
+        if not (folder / "ux-report.html").is_file() and (folder / "ux-findings.json").is_file():
+            try:
+                import subprocess
+                subprocess.run(["python3", "scripts/generate_ux_report.py", str(folder)], check=False)
+            except Exception as e:
+                log.warning("failed to auto-generate ux-report.html: %s", e)
         ux_card = _read_json(folder / "ux-scorecard.json")
         ux_findings = _read_findings(folder / "ux-findings.json")
         ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "ADVISORY-FAIL"))
@@ -503,22 +509,40 @@ def _ux_audit_prompt(
     mode: str = "simple",
 ) -> str:
     relative = _display(folder)
-    return "\n".join([
+    prompt_lines = [
         f"UI/UX Audit for ticket: {ticket}",
         f"Run directory: {relative}",
         f"Context pack: {relative}/context-pack.json",
         f"Feature map and explored routes: {relative}/FEATURE.md",
         f"Exploration snapshots: {relative}/explore/",
         f"Triage notes and healed locators: {relative}/triage.json",
+    ]
+
+    # Detect prior runs for this ticket to verify stakeholder resolutions
+    if folder.parent.is_dir():
+        prior_finding_files = [
+            sibling / "ux-findings.json"
+            for sibling in sorted(folder.parent.iterdir())
+            if sibling.is_dir() and sibling != folder and (sibling / "ux-findings.json").is_file()
+        ]
+        if prior_finding_files:
+            latest_prior = prior_finding_files[-1]
+            prompt_lines.extend([
+                f"Prior run UX findings for {ticket}: {_display(latest_prior)}",
+                "Ticket re-run resolution protocol: Check if previously identified findings were resolved by stakeholders on UAT.",
+                "If an issue is now resolved on UAT: DO NOT re-detect or flag it as an active defect (S0–S3). Mark status as 'Resolved', deduction 0 pts, and capture verification screenshot.",
+            ])
+
+    prompt_lines.extend([
         "Follow .agents/skills/lexful-ux-audit-gate/SKILL.md, .agents/skills/fluent-ui-design-system/SKILL.md, and .agents/ux/QA_TRACEABILITY.md.",
         "Evaluate the ticket journey against .agents/ux/lexful-ux-checks.yaml and .agents/ux/Lexful_Bad_UX_Pattern_Library_v0.6.md.",
         "Remember calibration rules: working UI passes; QA-expected behavior is at most an Observation (O).",
         "Review any locator heals in triage.json per rules H1-H6.",
         f"Output mode: {mode} (simple = suggested solution focus; advanced = full background, reasoning, and technical breakdown).",
-        f"Before/After concept mocks enabled: {'true' if with_visuals else 'false'}.",
-        f"Write ux-findings.json, ux-scorecard.json, and ux-report.md into {relative}/.",
+        f"Write ux-findings.json, ux-scorecard.json, ux-report.md, and ux-report.html (interactive HTML preview modeled after .agents/ux/templates/audit-preview-reference.html) into {relative}/.",
         "Do not write test specs and do not edit product code.",
     ])
+    return "\n".join(prompt_lines)
 
 
 def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: list[str]) -> str:
@@ -834,6 +858,7 @@ def _write_qa_result(
             "score": ux_card.get("score"),
             "findings_count": len(_read_findings(folder / "ux-findings.json")),
             "report_file": "ux-report.md" if (folder / "ux-report.md").is_file() else None,
+            "html_report_file": "ux-report.html" if (folder / "ux-report.html").is_file() else None,
         }
     if extra:
         payload.update(extra)
@@ -870,6 +895,8 @@ def _ux_report_section(folder: Path) -> list[str]:
         "- Detailed Report: `ux-report.md`",
         "- Structured Findings: `ux-findings.json`",
     ]
+    if (folder / "ux-report.html").is_file():
+        lines.append("- Interactive Preview Report: `ux-report.html`")
     if (folder / "before-after").is_dir():
         lines.append("- Visual Concept Mocks: `before-after/`")
     if findings:

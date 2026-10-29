@@ -1,7 +1,7 @@
 ---
 name: fluent-ui-design-system
 description: "Use when auditing or proposing changes to Lexful's UI against the agreed design direction: shadcn/ui components (Radix + Tailwind) with Microsoft Fluent UI as the design-alignment reference. Covers action hierarchy, spacing, type, radius, behavior, accessibility, plus the Fluent to shadcn component map."
-version: 0.3.0
+version: 0.3.2
 status: "DRAFT, unsigned"
 sources_verified: "2026-10-13 against storybooks.fluentui.dev (component index, Spacing, Border Radii, Typography, Button, Drawer) and ui.shadcn.com (component list, Sheet, Alert, Empty)"
 config:
@@ -188,8 +188,12 @@ Every recommendation must state:
 4. Whether Lexful already does this (then say "no change needed").
 5. The detected-stack line, and which source won if Lexful's Storybook and Fluent disagree.
 6. Effort in S / M / L (S = a variant, prop, class or copy change; M = compose components already in the app; L = a new component, state or backend work).
+7. **Observation Evidence vs. Solution Mocks Distinction:** Solution guidance remains text-only (concrete shadcn/Tailwind code props; no synthetic redesign image mocks). However, **live evidence screenshots of the observed state** on UAT are strictly mandatory and must be attached to each observation and finding for visual verification in the HTML report.
+8. **Adopted Recommendations on Ticket Re-Runs:** If a design recommendation from an earlier run on this ticket has been implemented by stakeholders (e.g. shadcn component composed, Fluent action hierarchy applied, or spacing adjusted), mark the item as `Adopted / Resolved` with 0 deductions and state "Resolved by stakeholders; no further change needed."
 
 ## Changelog
+- **v0.3.2 — 2026-10-29**: Added guidance for adopted recommendations on ticket re-runs: mark verified stakeholder fixes as Adopted / Resolved with zero deductions.
+- **v0.3.1 — 2026-10-29**: Clarified output contract: solutions remain text-only (no mockups), but live evidence screenshots of observed behavior on UAT are mandatory for all observations and findings.
 - **v0.3.0**: Removed the Before-After capability entirely (it referenced a `lexful-ui-before-after` skill that no longer exists): dropped the `config.before_after_comparison` toggle, the "Capability Toggles" section, the companion-file reference, and inlined the S/M/L effort definitions. Solutions are text-only (shadcn implementation + Fluent rationale), never image mocks.
 - **v0.2.0**: Direction set to shadcn/ui components with Fluent-aligned design. Added the authority order, the adoption profile, Tailwind equivalents of Fluent scales, a Fluent-to-shadcn quick-pick, and a new output contract. Replaced the "never assume Fluent" stack check with a quick stack check.
 - **v0.1.0** — First version, built from the official Fluent UI React v9 index and docs (2026-10-13).

@@ -486,6 +486,10 @@
       border-left: 4px solid var(--accent-cyan);
     }
 
+    .finding-card.severity-Resolved {
+      border-left: 4px solid var(--accent-emerald);
+    }
+
     .finding-header {
       display: flex;
       justify-content: space-between;
@@ -532,13 +536,82 @@
       border-radius: 6px;
     }
 
+    .badge-resolved {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
     .tag-lens {
       font-size: 0.75rem;
-      color: var(--text-muted);
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border-subtle);
+      color: #c084fc;
+      background: rgba(139, 92, 246, 0.12);
+      border: 1px solid rgba(139, 92, 246, 0.3);
       padding: 3px 10px;
       border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tag-rule {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #38bdf8;
+      background: rgba(6, 182, 212, 0.12);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      padding: 3px 10px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tag-pattern {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #fb7185;
+      background: rgba(244, 63, 94, 0.12);
+      border: 1px solid rgba(244, 63, 94, 0.35);
+      padding: 3px 10px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tag-qa {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: #94a3b8;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      padding: 3px 9px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .tag-stack {
+      font-size: 0.72rem;
+      color: #818cf8;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
 
     .finding-title {
@@ -951,10 +1024,15 @@
 
     <!-- Tab Bar -->
     <div class="tab-bar">
-      <button class="tab-btn active" onclick="switchTab('tab-findings', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-        UI/UX Audit &amp; Findings
-        <span class="tab-count">3</span>
+      <button class="tab-btn active" onclick="switchTab('tab-defects', this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        UI/UX Defects (S0–S3)
+        <span class="tab-count">2</span>
+      </button>
+      <button class="tab-btn" onclick="switchTab('tab-observations', this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        UX Observations &amp; Verification (O)
+        <span class="tab-count">2</span>
       </button>
       <button class="tab-btn" onclick="switchTab('tab-evidence', this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -982,16 +1060,18 @@
       </button>
     </div>
 
-    <!-- TAB 1: UI/UX AUDIT & FINDINGS -->
-    <div id="tab-findings" class="tab-pane active">
+    <!-- TAB 1: UI/UX DEFECTS (S0–S3) -->
+    <div id="tab-defects" class="tab-pane active">
       
       <div class="filter-bar">
         <div class="filter-pills">
-          <button class="filter-pill active" onclick="filterFindings('all', this)">All Items (3)</button>
-          <button class="filter-pill" onclick="filterFindings('S3', this)">Defects / S3 (2)</button>
-          <button class="filter-pill" onclick="filterFindings('O', this)">Observations / O (1)</button>
+          <button class="filter-pill active" onclick="filterDefects('all', this)">All Defects (2)</button>
+          <button class="filter-pill" onclick="filterDefects('S0', this)">S0 Blocker (0)</button>
+          <button class="filter-pill" onclick="filterDefects('S1', this)">S1 Critical (0)</button>
+          <button class="filter-pill" onclick="filterDefects('S2', this)">S2 Major (0)</button>
+          <button class="filter-pill" onclick="filterDefects('S3', this)">S3 Minor (2)</button>
         </div>
-        <span style="font-size:0.8rem;color:var(--text-dim)">Scoring calibration: S0=-40, S1=-25, S2=-10, S3=-3, O=0</span>
+        <span style="font-size:0.8rem;color:var(--text-dim)">Scoring calibration: S0=-40, S1=-25 (Blocking) • S2=-10, S3=-3 (Non-blocking)</span>
       </div>
 
       <!-- Finding 1 -->
@@ -1001,7 +1081,9 @@
             <span class="finding-id">UX-LEX3717-01</span>
             <span class="badge-s3">Severity: S3 (Low)</span>
             <span class="tag-lens">Lens B: Clarity &amp; Trust</span>
-            <span class="tag-lens">Rule: CRUD-10</span>
+            <span class="tag-rule"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Rule: CRUD-10</span>
+            <span class="tag-pattern"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>Pattern: BP-51</span>
+            <span class="tag-qa">QA: asset-types-save.spec.ts:L142</span>
             <span class="badge-pill badge-emerald">Confidence: High</span>
           </div>
           <span style="font-size:0.8rem;color:var(--text-dim)">Deduction: -3 pts</span>
@@ -1052,7 +1134,9 @@
             <span class="finding-id">UX-LEX3717-02</span>
             <span class="badge-s3">Severity: S3 (Low)</span>
             <span class="tag-lens">Lens B: Clarity &amp; Trust</span>
-            <span class="tag-lens">Rule: CRUD-06 / BP-108</span>
+            <span class="tag-rule"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Rule: CRUD-06</span>
+            <span class="tag-pattern"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>Pattern: BP-108</span>
+            <span class="tag-qa">QA: asset-types-save.spec.ts:L204</span>
             <span class="badge-pill badge-amber">Confidence: Medium</span>
           </div>
           <span style="font-size:0.8rem;color:var(--text-dim)">Deduction: -3 pts</span>
@@ -1090,15 +1174,47 @@
         </div>
       </article>
 
-      <!-- Finding 3 -->
-      <article class="finding-card severity-O" data-severity="O">
+    </div>
+
+    <!-- TAB 2: UX OBSERVATIONS & VERIFICATION (O) -->
+    <div id="tab-observations" class="tab-pane">
+
+      <!-- Informational Callout Banner -->
+      <div style="display:flex;align-items:center;gap:14px;background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.25);border-radius:14px;padding:16px 20px;margin-bottom:20px;">
+        <div style="width:36px;height:36px;border-radius:10px;background:rgba(6,182,212,0.18);display:flex;align-items:center;justify-content:center;color:#38bdf8;flex-shrink:0;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        </div>
+        <div>
+          <h4 style="font-size:0.95rem;font-weight:600;color:#fff;margin-bottom:3px;">UX Observations &amp; Verification (O)</h4>
+          <p style="font-size:0.82rem;color:var(--text-muted);margin:0;line-height:1.5;">
+            Observations document intended behaviors, positive verifications, design polish suggestions, or items held for review. They carry <strong>0 deduction points</strong> and have <strong>zero blocking impact</strong> on release gating.
+          </p>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <div class="filter-pills">
+          <button class="filter-pill active" onclick="filterObservations('all', this)">All Observations (2)</button>
+          <button class="filter-pill" onclick="filterObservations('Reported', this)">Reported (1)</button>
+          <button class="filter-pill" onclick="filterObservations('Resolved', this)">Resolved (1)</button>
+          <button class="filter-pill" onclick="filterObservations('Held for review', this)">Held for Review (0)</button>
+          <button class="filter-pill" onclick="filterObservations('Withdrawn', this)">Withdrawn (0)</button>
+        </div>
+        <span style="font-size:0.8rem;color:var(--text-dim)">Scoring impact: 0 deduction pts • Advisory only</span>
+      </div>
+
+      <!-- Finding 3 (Observation) -->
+      <article class="finding-card severity-O" data-severity="O" data-status="Reported">
         <div class="finding-header">
           <div class="finding-meta">
             <span class="finding-id">UX-LEX3717-03</span>
             <span class="badge-obs">Observation: Working (O)</span>
             <span class="tag-lens">Lens A: Flows &amp; Speed</span>
-            <span class="tag-lens">Rule: CRUD-10</span>
+            <span class="tag-rule"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Rule: CRUD-10</span>
+            <span class="tag-stack">shadcn/ui + Fluent</span>
+            <span class="tag-qa">QA: PATCH payload verified</span>
             <span class="badge-pill badge-emerald">Confidence: High</span>
+            <span class="badge-pill badge-violet">Status: Reported</span>
           </div>
           <span style="font-size:0.8rem;color:var(--text-dim)">Deduction: 0 pts</span>
         </div>
@@ -1125,6 +1241,59 @@
             </div>
             <div class="section-box-content">
               No change required. The partial-save architecture preserves schema definitions without weakening backend immutability guardrails. The floating save bar dynamically appears when a switch is dirtied and closes immediately upon commit.
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <!-- Finding 4 (Resolved on Re-Run) -->
+      <article class="finding-card severity-Resolved" data-severity="O" data-status="Resolved">
+        <div class="finding-header">
+          <div class="finding-meta">
+            <span class="finding-id">UX-LEX3717-04</span>
+            <span class="badge-resolved"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Resolved on Re-Run</span>
+            <span class="tag-lens">Lens C: Visual Coherence</span>
+            <span class="tag-rule"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Rule: LAYOUT-02</span>
+            <span class="tag-stack">Fluent UI v9</span>
+            <span class="badge-pill badge-emerald">Prior: S3 Minor</span>
+            <span class="badge-pill badge-emerald">Status: Resolved</span>
+          </div>
+          <span style="font-size:0.8rem;color:var(--accent-emerald);font-weight:600;">Deduction: 0 pts (Verified Fix)</span>
+        </div>
+
+        <div style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);border-radius:10px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:12px;">
+          <div style="width:24px;height:24px;border-radius:6px;background:rgba(16,185,129,0.2);display:flex;align-items:center;justify-content:center;color:#34d399;flex-shrink:0;margin-top:1px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div>
+            <div style="font-size:0.85rem;font-weight:700;color:#34d399;margin-bottom:2px;">Ticket Re-Run Resolution Verified</div>
+            <div style="font-size:0.82rem;color:var(--text-muted);line-height:1.4;">
+              Stakeholders addressed the truncate overflow defect flagged in prior run <code style="font-family:var(--font-mono);font-size:0.78rem;color:#38bdf8;">2026-10-27_1430Z_abc1</code>. Live re-exploration verifies the label container now flex-wraps properly with tooltip affordance. Deduction waived (0 pts).
+            </div>
+          </div>
+        </div>
+
+        <h3 class="finding-title">Label truncation overflow resolved with CSS wrap and Fluent tooltip on asset card header</h3>
+
+        <div class="finding-body-grid">
+          <div class="section-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              Resolution Verification
+            </div>
+            <div class="section-box-content">
+              <strong>Verified on Live UAT:</strong><br>
+              Inspected <code style="font-family:var(--font-mono)">explore/ux/resolved-UX-LEX3717-04.png</code>. The header title spans 42 characters without truncation clipping. The parent container applies <code style="font-family:var(--font-mono)">overflow-wrap: break-word</code> and renders an interactive tooltip on hover. No layout shift detected.
+            </div>
+          </div>
+
+          <div class="section-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+              Recommendation Adopted
+            </div>
+            <div class="section-box-content">
+              Developer applied Fluent UI <code style="font-family:var(--font-mono)">Tooltip</code> wrapper around <code style="font-family:var(--font-mono)">Subtitle2</code> component per recommendation. Defect removed from active gating.
             </div>
           </div>
         </div>
@@ -1491,10 +1660,10 @@ export function toApiProperty(p: DraftProperty) {
       btn.classList.add('active');
     }
 
-    function filterFindings(severity, btn) {
-      document.querySelectorAll('.filter-pill').forEach(el => el.classList.remove('active'));
+    function filterDefects(severity, btn) {
+      document.querySelectorAll('#tab-defects .filter-pill').forEach(el => el.classList.remove('active'));
       btn.classList.add('active');
-      const cards = document.querySelectorAll('.finding-card[data-severity]');
+      const cards = document.querySelectorAll('#tab-defects .finding-card[data-severity]');
       cards.forEach(card => {
         if (severity === 'all' || card.getAttribute('data-severity') === severity) {
           card.style.display = 'block';
@@ -1502,6 +1671,23 @@ export function toApiProperty(p: DraftProperty) {
           card.style.display = 'none';
         }
       });
+    }
+
+    function filterObservations(status, btn) {
+      document.querySelectorAll('#tab-observations .filter-pill').forEach(el => el.classList.remove('active'));
+      btn.classList.add('active');
+      const cards = document.querySelectorAll('#tab-observations .finding-card');
+      cards.forEach(card => {
+        if (status === 'all' || card.getAttribute('data-status') === status) {
+          card.style.display = 'block';
+        } else {
+          card.style.display = 'none';
+        }
+      });
+    }
+
+    function filterFindings(severity, btn) {
+      filterDefects(severity, btn);
     }
 
     function openLightbox(src, caption) {
