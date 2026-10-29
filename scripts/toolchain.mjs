@@ -164,9 +164,6 @@ function ensureOpenCodeSetup() {
   const subModel = configuredValue('OPENCODE_SUB_MODEL') || MODEL_FALLBACK;
   const expected = {
     qa: mainModel,
-    'qa-explorer': subModel,
-    'qa-author': subModel,
-    'qa-healer': subModel,
     'ux-auditor': subModel,
   };
   const problems = [];

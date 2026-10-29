@@ -19,8 +19,7 @@ _ECHO: set[str] = set()
 def echo_run(folder: Path) -> None:
     """Copy this run's log lines to the process terminal.
 
-    E2E User Journey TCs start inside the server when QA_PHASE1_ON_START is on.
-    Nothing tails run.log in that case, so the lines are printed here.
+    When no client is tailing run.log, lines are copied to the harness process terminal here.
     """
     _ECHO.add(str(folder.resolve()))
 

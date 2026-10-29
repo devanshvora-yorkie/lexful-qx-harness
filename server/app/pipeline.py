@@ -5,13 +5,14 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app import runners, store
-from app.bugs import latest_triage, publish_bugs
+from app.bugs import failure_kind, latest_triage, publish_bugs
 from app.coverage import write_coverage_index
 from app.logbook import Logbook, echo_run, plain
 from app.settings import get_settings
@@ -32,6 +33,147 @@ def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: 
     ):
         return "PERFECT"
     return "NEEDS_REVISION"
+
+
+_GAP_SKIP = ("out of scope", "not changed", "existing draft", "existing behavior")
+_STOP_WORDS = frozenset(
+    "a an the and or of to for in on at by with from into over under than then this that those "
+    "these it its is are was were be been being as if not no nor but so such per via when while "
+    "before after until about your our their they them we you do does did has have had can may "
+    "will just also only same each both any all some".split()
+)
+
+
+def signoff_blockers(folder: Path) -> list[str]:
+    """Ticket requirements still open after a green Playwright run."""
+    feature = _read_text(folder / "FEATURE.md")
+    required = _required_text(folder)
+    required_words = _content_words(required)
+    passed = _content_words(_passing_titles(folder))
+    issues: list[str] = []
+    for criterion in _acceptance_lines(folder):
+        words = _content_words(criterion)
+        if not words:
+            continue
+        needed = 1 if len(words) < 3 else 2
+        if len(words & passed) < needed:
+            issues.append(f"acceptance criterion not covered by a passing test: {criterion}")
+    for gap in _feature_gaps(feature):
+        lowered = gap.lower()
+        if any(phrase in lowered for phrase in _GAP_SKIP):
+            continue
+        overlap = _content_words(gap) & required_words
+        if len(overlap) >= 2 or any(len(word) >= 8 for word in overlap):
+            issues.append(f"gap: {gap}")
+    for note in _leftover_notes(folder):
+        issues.append(f"leftover fixtures: {note}")
+    return issues
+
+
+def heal_stopped_on_bugs(triage: dict[str, Any]) -> bool:
+    """True when every remaining failure is a product bug, so another heal will not change the spec."""
+    failures = triage.get("failures")
+    if not isinstance(failures, list) or not failures:
+        return False
+    kinds = [failure_kind(item) for item in failures if isinstance(item, dict)]
+    return bool(kinds) and all(kind == "bug" for kind in kinds)
+
+
+def _content_words(text: str) -> set[str]:
+    return {
+        word for word in re.findall(r"[a-z0-9][a-z0-9-]{4,}", text.lower())
+        if word not in _STOP_WORDS
+    }
+
+
+def _feature_gaps(text: str) -> list[str]:
+    lines = text.splitlines()
+    start = next((index + 1 for index, line in enumerate(lines) if line.strip().lower() == "## gaps"), None)
+    if start is None:
+        return []
+    items: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("## "):
+            break
+        stripped = line.strip()
+        if not stripped or stripped.lower().startswith("these are"):
+            continue
+        cleaned = re.sub(r"^(\d+\.|[-*])\s*", "", stripped)
+        cleaned = cleaned.replace("**", "").strip()
+        if cleaned:
+            items.append(cleaned)
+    return items
+
+
+def _acceptance_lines(folder: Path) -> list[str]:
+    pack = _read_json(folder / "context-pack.json")
+    ticket = pack.get("ticket") if isinstance(pack.get("ticket"), dict) else {}
+    text = str(ticket.get("acceptanceCriteria") or "")
+    rows: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("*", "-", "•")) or re.match(r"\d+\.", stripped):
+            rows.append(re.sub(r"^(\d+\.|[-*•])\s*", "", stripped))
+    if not rows and text.strip():
+        rows.append(text.strip())
+    return rows
+
+
+def _required_text(folder: Path) -> str:
+    pack = _read_json(folder / "context-pack.json")
+    ticket = pack.get("ticket") if isinstance(pack.get("ticket"), dict) else {}
+    parts = [
+        str(ticket.get("summary") or ""),
+        str(ticket.get("description") or ""),
+        str(ticket.get("acceptanceCriteria") or ""),
+    ]
+    pull_requests = pack.get("pullRequests")
+    if isinstance(pull_requests, list):
+        for pull_request in pull_requests:
+            if isinstance(pull_request, dict):
+                parts.append(str(pull_request.get("title") or ""))
+                parts.append(str(pull_request.get("body") or ""))
+    return "\n".join(parts)
+
+
+def _passing_titles(folder: Path) -> str:
+    report = _read_json(folder / "playwright" / "results.json")
+    titles: list[str] = []
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        for spec in node.get("specs") or []:
+            if isinstance(spec, dict) and spec.get("ok") is True:
+                titles.append(str(spec.get("title") or ""))
+        for child in node.get("suites") or []:
+            walk(child)
+
+    for suite in report.get("suites") or []:
+        walk(suite)
+    return " ".join(titles)
+
+
+def _leftover_notes(folder: Path) -> list[str]:
+    card = _read_json(folder / "ux-scorecard.json")
+    notes = card.get("envNotes")
+    if not isinstance(notes, list):
+        return []
+    found: list[str] = []
+    for note in notes:
+        text = str(note)
+        lowered = text.lower()
+        if "leftover" in lowered and ("fixture" in lowered or "attachment" in lowered):
+            found.append(text)
+    return found
+
+
+def _read_text(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _suite_passed(exit_code: int, summary: dict[str, int]) -> bool:
@@ -103,6 +245,72 @@ def failed_tests(report: dict[str, Any]) -> list[dict[str, str]]:
     for suite in report.get("suites") or []:
         walk(suite, "")
     return found
+
+
+def test_outcomes_from_report(report: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Spec file basename -> test title -> passed|failed|flaky|skipped."""
+
+    def status_for(test: dict[str, Any]) -> str:
+        raw = test.get("status")
+        if raw == "expected":
+            return "passed"
+        if raw == "flaky":
+            return "flaky"
+        if raw == "skipped":
+            return "skipped"
+        return "failed"
+
+    found: dict[str, dict[str, str]] = {}
+
+    def walk(node: Any, current: str) -> None:
+        if not isinstance(node, dict):
+            return
+        current = str(node.get("file") or current)
+        for spec in node.get("specs") or []:
+            if not isinstance(spec, dict):
+                continue
+            file_key = _spec_name(str(spec.get("file") or current))
+            title = str(spec.get("title") or "").strip() or "unnamed"
+            tests = [item for item in (spec.get("tests") or []) if isinstance(item, dict)]
+            bucket = found.setdefault(file_key, {})
+            if tests:
+                for test in tests:
+                    bucket[title] = status_for(test)
+            elif spec.get("ok") is False:
+                bucket[title] = "failed"
+        for child in node.get("suites") or []:
+            walk(child, current)
+
+    for suite in report.get("suites") or []:
+        walk(suite, "")
+    return found
+
+
+def merge_test_outcomes(
+    before: dict[str, dict[str, str]],
+    report: dict[str, Any],
+    rerun_specs: list[str],
+) -> dict[str, dict[str, str]]:
+    after = test_outcomes_from_report(report)
+    merged = {name: dict(titles) for name, titles in before.items()}
+    replaced = {_spec_name(spec) for spec in rerun_specs}
+    for file_key, titles in after.items():
+        if file_key in replaced or file_key not in merged:
+            merged[file_key] = dict(titles)
+        else:
+            merged[file_key].update(titles)
+    return merged
+
+
+def write_test_outcomes_json(folder: Path, outcomes: dict[str, dict[str, str]]) -> None:
+    rows = [
+        {"file": file_key, "title": title, "status": status}
+        for file_key in sorted(outcomes)
+        for title, status in sorted(outcomes[file_key].items())
+    ]
+    target = folder / "playwright" / "test-outcomes.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
 
 def _spec_name(file: str) -> str:
@@ -196,7 +404,7 @@ def spec_was_patched(triage: dict[str, Any]) -> bool:
     if not isinstance(failures, list):
         return False
     return any(
-        isinstance(item, dict) and item.get("class") == "spec" and item.get("action") == "patched"
+        isinstance(item, dict) and failure_kind(item) == "spec" and item.get("action") == "patched"
         for item in failures
     )
 
@@ -209,8 +417,9 @@ def suspicious_patches(triage: dict[str, Any]) -> list[str]:
     for item in failures:
         if not isinstance(item, dict):
             continue
-        if item.get("class") in {"bug", "timing"} and item.get("action") == "patched":
-            lines.append(f"healer edited a {item.get('class')} failure: {item.get('title')}")
+        kind = failure_kind(item)
+        if kind in {"bug", "timing"} and item.get("action") == "patched":
+            lines.append(f"healer edited a {kind} failure: {item.get('title')}")
     return lines
 
 
@@ -318,13 +527,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     book.row("server", "specs", f"{len(specs)} files  {', '.join(specs)}"[:240])
     summary = _execute_and_heal(run_id, folder, ticket, specs, settings.heal_attempts, session_id, book)
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
-    status = "completed" if verdict == "PERFECT" else "needs_revision"
     issues = [] if verdict == "PERFECT" else [_open_issue(summary)]
-    book.row(
-        "server",
-        "verdict",
-        f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}",
-    )
 
     if settings.run_ux_audit and ticket:
         book.phase("ui-ux audit")
@@ -345,7 +548,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         write_ux_report(folder, ticket)
         ux_card = _read_json(folder / "ux-scorecard.json")
         ux_findings = _read_findings(folder / "ux-findings.json")
-        ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "ADVISORY-FAIL"))
+        ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "INCOMPLETE — NOT A PASS"))
         book.row(
             "server",
             "ux-audit",
@@ -353,6 +556,23 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         )
     elif ticket:
         book.row("server", "ux-audit", "off  QA_RUN_UX_AUDIT=false  functional QA only")
+
+    blockers = signoff_blockers(folder) if ticket else []
+    if blockers:
+        issues = [*issues, *blockers]
+        if verdict == "PERFECT":
+            verdict = "NEEDS_REVISION"
+    status = "completed" if verdict == "PERFECT" else "needs_revision"
+    book.row(
+        "server",
+        "verdict",
+        f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}",
+    )
+    for blocker in blockers:
+        book.row("server", "signoff", blocker[:220])
+
+    if ticket and int(summary.get("passed") or 0) > 0:
+        _promote_into_suite(folder, ticket, book)
 
     store.update_run(run_id, status=status, error=None)
     if _record_bugs(folder, store.get_run(run_id) or row, summary):
@@ -370,7 +590,7 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
     book.row(
         "server",
         "queued",
-        'suite "e2e test cases"  UAT  qa-healer only, no new tests  each test is logged below',
+        'suite "e2e test cases"  UAT  qa heal only, no new tests  each test is logged below',
     )
     log.info("E2E User Journey TCs %s started", run_id)
     store.update_run(run_id, status="preflight")
@@ -494,20 +714,28 @@ def _execute_and_heal(
     result = runners.run_playwright(folder, specs)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
+    test_outcomes = test_outcomes_from_report(_read_json(folder / "playwright" / "results.json"))
     if result.get("setupError"):
         book.row("playwright", "error", str(result["setupError"]))
+        write_test_outcomes_json(folder, test_outcomes)
         return summary
     if _suite_passed(result["exitCode"], summary):
+        write_test_outcomes_json(folder, test_outcomes)
         return summary
     baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
+    attempts_used: dict[str, int] = {}
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
         book.phase(f"heal {attempt} of {heal_attempts}")
-        book.row("server", "heal", f"{attempt} of {heal_attempts}  calling qa-healer for spec drift  {len(specs)} files")
+        who = "qa E2E heal" if classify else "qa feature heal"
+        book.row("server", "heal", f"{attempt} of {heal_attempts}  {who}  {len(specs)} files")
+        failing_now = failed_tests(_read_json(folder / "playwright" / "results.json"))
+        for item in failing_now:
+            attempts_used[item["title"]] = attempts_used.get(item["title"], 0) + 1
         prompt = (
             _phase1_heal_prompt(folder, attempt, heal_attempts, specs)
             if classify
-            else _heal_prompt(folder, ticket, attempt, heal_attempts, specs)
+            else _heal_prompt(folder, ticket, attempt, heal_attempts, specs, failing_now, attempts_used)
         )
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
         before = _heal_revision(folder, classify)
@@ -534,7 +762,9 @@ def _execute_and_heal(
             book.row("server", "heal", line[:220])
         if not changed:
             book.row("server", "heal", _unchanged_heal_message(triage))
-            break
+            if heal_stopped_on_bugs(triage):
+                break
+            continue
         book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
         previous_report = _read_json(folder / "playwright" / "results.json")
         rerun = specs_for_failures(specs, previous_report) or specs
@@ -544,19 +774,24 @@ def _execute_and_heal(
         book.phase("playwright")
         book.row("playwright", "started", f"re-running {len(rerun)} failed file(s) after heal {attempt}"[:240])
         result = runners.run_playwright(folder, rerun)
+        latest_report = _read_json(folder / "playwright" / "results.json")
         if rerun != specs and baseline:
             baseline = replace_outcomes(
                 baseline,
-                outcomes_by_file(_read_json(folder / "playwright" / "results.json")),
+                outcomes_by_file(latest_report),
                 rerun,
             )
+            test_outcomes = merge_test_outcomes(test_outcomes, latest_report, rerun)
             summary = sum_outcomes(baseline)
         else:
             summary = result["summary"]
-            baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
+            baseline = outcomes_by_file(latest_report)
+            test_outcomes = test_outcomes_from_report(latest_report)
         book.row("playwright", "result", _counts(summary))
         if _suite_passed(result["exitCode"], summary):
+            write_test_outcomes_json(folder, test_outcomes)
             return summary
+    write_test_outcomes_json(folder, test_outcomes)
     return summary
 
 
@@ -588,7 +823,7 @@ def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
         f"Ticket: {ticket}",
         f"Pull requests: {prs}",
         f"Connected Linear issues: {connected}",
-        "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md. This is Feature Specific TCs. You coordinate. Do not browse and do not write specs.",
+        "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md and .agents/prompts/qa.md. This is Feature Specific TCs. You own this session: Explore, Author, Heal, and Promote when asked. Do not spawn subagents.",
         f"Checked-in coverage: {relative}/e2e-coverage.md",
         "Those cases already run in E2E User Journey TCs for search, asset crud, and document editing.",
         "Do not write a case that file already lists. Cite its id.",
@@ -603,13 +838,75 @@ def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
         "That writes runs/cache/stytch/<persona>.json. Do not read the file. Load it with playwright-cli state-load.",
         "A spec for that persona calls injectAuthCookies(page.context(), 'support') or 'viewer'. Other specs keep the default call.",
         f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
-        f"Delegate Explore to qa-explorer. Give it {relative}/e2e-coverage.md. It writes {relative}/FEATURE.md, with the URL, API calls, the action matrix, and a planned-cases table. A covered row cites an id from e2e-coverage.md. A new row is the only one Author may write. Explore does not write specs.",
-        f"Read that file. Then delegate Author to qa-author. Give it {relative}/FEATURE.md, {relative}/e2e-coverage.md, the context pack, and {relative}/specs/.",
+        f"Walk the app with playwright-cli. Write {relative}/FEATURE.md and append each successful step to {relative}/explore/flow.md. When the walk includes a listing, use references/listing-exploration-hints.md. A covered row cites an id from e2e-coverage.md. A new row is a control the walk reached. A control the walk did not reach is a Gap, not a test.",
+        f"Then write specs and the POM under {relative}/specs/ from {relative}/FEATURE.md and {relative}/explore/flow.md. Open the app when a selector is missing. Do not write a Gap or a covered row.",
         f"Leave FEATURE.md at {relative}/FEATURE.md. Do not copy it into specs/ or tests/.",
         f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
         f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
-        "Do not run preflight, do not call /auth/password, and do not run the Playwright suite.",
+        "Do not run preflight, do not call /auth/password, and do not run the official Playwright suite. Replaying one step with playwright-cli is part of writing the spec.",
     ])
+
+
+def _promote_into_suite(folder: Path, ticket: str, book: Logbook) -> None:
+    """Copy the passing journeys into the checked-in suite before the run is sealed."""
+    book.phase("promote")
+    prompt = _promote_prompt(folder, ticket)
+    (folder / "promote-prompt.md").write_text(prompt + "\n", encoding="utf-8")
+    code, _session = runners.run_opencode(
+        folder,
+        session_id=None,
+        prompt=prompt,
+        title=f"{ticket} promote",
+        log_name="promote.jsonl",
+    )
+    promoted = _read_json(folder / "promoted.json")
+    cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
+    if code != 0:
+        book.row("server", "promote", _opencode_failure(folder, "promote.jsonl", code))
+        return
+    if not cases:
+        book.row("server", "promote", "no new journey copied")
+        return
+    book.row("server", "promote", f"{len(cases)} case(s) added to e2e test cases")
+
+
+def _promote_prompt(folder: Path, ticket: str) -> str:
+    relative = _display(folder)
+    return "\n".join([
+        f"Promote passing tests from ticket {ticket} into the checked-in suite before sign-off.",
+        f"Run directory: {relative}",
+        f"Final per-test status: {relative}/playwright/test-outcomes.json (use this after heals; not the partial results.json alone)",
+        f"Playwright report: {relative}/playwright/results.json",
+        f"Feature specs and POM: {relative}/specs/",
+        f"Coverage already in the suite: {relative}/e2e-coverage.md",
+        "Checked-in suite: `e2e test cases/`.",
+        "Follow the Promote step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
+        "Copy at most three tests that passed in this run: the positive path that completes the new behavior, the guard that keeps it safe, and the ordinary path that must keep working.",
+        "Skip gaps, failures, skips, tooltip-only checks, and any title already listed in e2e-coverage.md.",
+        "Document-editor flows go in `e2e test cases/document editing` with the next TC-DOC id.",
+        "Record drawers and attachments go in `e2e test cases/asset crud` with the next free AC- id.",
+        "Search-palette flows go in `e2e test cases/search`.",
+        "Import auth as `../../auth-helper`. Keep the POM beside the spec. Keep afterEach cleanup.",
+        "The test() title must match the FEATURE.md Title cell exactly, with no id prefix.",
+        "Append one inventory row per new test to that folder's FEATURE.md.",
+        f"Write {relative}/promoted.json as {{\"files\":[...],\"cases\":[{{\"id\":\"...\",\"title\":\"...\"}}]}}.",
+        "If nothing qualifies, write promoted.json with empty files and cases.",
+        "Do not run Playwright. Do not edit specs that were already in the suite. Do not change playwright.config.ts.",
+    ])
+
+
+def _promoted_section(folder: Path) -> list[str]:
+    promoted = _read_json(folder / "promoted.json")
+    cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
+    if not cases:
+        return []
+    lines = ["## Promoted into e2e test cases", ""]
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        lines.append(f"- `{case.get('id', '')}` {case.get('title', '')}".rstrip())
+    lines.append("")
+    return lines
 
 
 def _ux_audit_prompt(
@@ -626,34 +923,54 @@ def _ux_audit_prompt(
         f"Feature map and explored routes: {relative}/FEATURE.md",
         f"Exploration snapshots: {relative}/explore/",
         f"Triage notes and healed locators: {relative}/triage.json",
-        "Follow .agents/skills/ux-audit/SKILL.md, .agents/skills/design-system/SKILL.md, and .agents/ux/traceability.md.",
-        "Evaluate the ticket journey against .agents/ux/checks.yaml and .agents/ux/pattern-library.md.",
+        "Follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md.",
+        "Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md, .agents/ux/checks.yaml, .agents/ux/traceability.md, and .agents/ux/audit-preview-reference.html.",
+        "The HTML file is a visual reference. Do not copy its example findings.",
         "Working UI passes. QA-expected behavior is at most an Observation (O).",
-        "Review locator heals in triage.json per rules H1-H6.",
-        "Write the remediation in the finding. Do not create mock screens or a before-after folder.",
-        f"Write ux-findings.json and ux-scorecard.json into {relative}/.",
-        "The harness fills .agents/skills/lexful-ux-audit-gate/audit-preview.html and writes ux-report.html. Do not write HTML, do not fill that template, and do not write ux-report.md.",
+        "S2 and S3 do not fail the audit. With no S0 or S1, the verdict is PASS WITH ADVISORIES. Only S0 or S1 is BLOCKING FAIL.",
+        f"Write ux-report.html, ux-findings.json, and ux-scorecard.json into {relative}/.",
         "Do not write test specs and do not edit product code.",
     ])
 
 
-def _heal_prompt(folder: Path, ticket: str, attempt: int, total: int, specs: list[str]) -> str:
+def _heal_prompt(
+    folder: Path,
+    ticket: str,
+    attempt: int,
+    total: int,
+    specs: list[str],
+    failing: list[dict[str, str]] | None = None,
+    attempts_used: dict[str, int] | None = None,
+) -> str:
     relative = _display(folder)
     listed = ", ".join(specs)
+    counts = attempts_used or {}
+    failing_lines = [
+        f"- {item['title']}  (attempt {counts.get(item['title'], attempt)} of {total})"
+        for item in (failing or [])
+    ] or ["- the Playwright report has failures, but no test title was parsed"]
     return "\n".join([
         f"Ticket {ticket}. Heal attempt {attempt} of {total}.",
         f"Playwright results: {relative}/playwright/results.json",
         f"Playwright log: {relative}/playwright/output.log",
         f"Specs: {listed}",
-        "Follow the Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
-        "Delegate only to qa-healer for one patch. This is one heal of the whole suite, not three attempts per test.",
-        "Do not re-explore and do not add scenarios.",
-        "Do not run the suite. The server re-runs the failed spec files only if you changed one.",
-        "If the control is on the page and the product did the wrong thing, do not edit the spec.",
+        "Follow the Feature Specific Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Stay in this session.",
+        "Do not apply the E2E User Journey heal section.",
+        f"Exploration: {relative}/explore/ and {relative}/FEATURE.md and {relative}/explore/flow.md.",
+        "Replay each failing test below. Fix the locator, rewrite the step to a control this session saw, create the missing fixture, or remove the test.",
+        f"Stop after {total} attempts at a failing test. class is spec, gap, or bug.",
+        "A gap is a case the walk never reached. Remove or rewrite that test and leave the reason in FEATURE.md Gaps. Do not put it in bugs.",
+        "A behavior this ticket requires stays a gap on the record. Removing the test does not make the run a pass.",
+        "A bug is a step this session completed where the page then did the wrong thing. Do not change that expected outcome.",
+        "If you are unsure, class it gap and do not file a bug.",
         "Add a bugs array to triage.json, one object per product defect. The server writes bugs.md from it.",
-        "Do not put a skipped or deprecated test in failures or in bugs.",
+        "Do not put a skipped, deprecated, or gap test in bugs.",
+        "Before you return, delete every record this session created.",
+        "Do not run the official suite. The server re-runs the failed spec files when you change one.",
         "Each bug needs area, failure, context, severity (Critical, High, Medium, or Low), severityReason, description, affectedTests, steps, expected, actual, rootCause, and evidence.",
         "Severity decides priority: Critical is P0, High is P1, Medium is P2, Low is P3.",
+        "Still failing:",
+        *failing_lines,
     ])
 
 
@@ -666,8 +983,11 @@ def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]
     ) or "- the Playwright report has failures, but no test title was parsed"
     return "\n".join([
         "This is an E2E User Journey TCs heal. It is not Feature Specific TCs.",
-        "Do not call qa-explorer or qa-author. Do not write a new test. Do not call Linear, GitHub, or /auth/password.",
-        "Delegate only to qa-healer. In this one return, patch every spec-drift failure, then stop.",
+        "Follow only the E2E User Journey heal section in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
+        "Do not apply Feature Specific Heal. Do not remove a test because you are unsure.",
+        "Do not explore or write a new test. Do not call Linear, GitHub, or /auth/password.",
+        "In this one return, patch every spec-drift failure in the checked-in suite, then stop.",
+        "CloudFront 403 Request blocked on UAT is environment timing: class spec, retry navigation, do not file bugs.",
         f"Heal attempt {attempt} of {total}.",
         f"Run directory: {relative}",
         f"Playwright results: {relative}/playwright/results.json",
@@ -713,11 +1033,14 @@ def _unchanged_heal_message(triage: dict[str, Any]) -> str:
     failures = triage.get("failures")
     if not isinstance(failures, list) or not failures:
         return "no spec file changed. Remaining failures stay in this folder."
-    bugs = sum(1 for item in failures if isinstance(item, dict) and item.get("class") == "bug")
-    specs = sum(1 for item in failures if isinstance(item, dict) and item.get("class") == "spec")
+    bugs = sum(1 for item in failures if isinstance(item, dict) and failure_kind(item) == "bug")
+    specs = sum(1 for item in failures if isinstance(item, dict) and failure_kind(item) == "spec")
+    gaps = sum(1 for item in failures if isinstance(item, dict) and failure_kind(item) == "gap")
     parts = ["no spec file changed"]
     if bugs:
         parts.append(f"{bugs} product bug(s) logged in this folder")
+    if gaps:
+        parts.append(f"{gaps} gap(s) were not removed from the spec, so the suite is not re-run")
     if specs:
         parts.append(f"{specs} spec note(s) had no file edit, so the suite is not re-run")
     return ". ".join(parts) + "."
@@ -818,7 +1141,7 @@ def _triage_notes(triage: dict[str, Any]) -> list[str]:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or item.get("test") or "failure")
-        kind = str(item.get("class") or "note")
+        kind = failure_kind(item) or "note"
         action = str(item.get("action") or "")
         reason = " ".join(str(item.get("reason") or "").split())
         if len(reason) > 240:
@@ -843,7 +1166,7 @@ def _read_triage(path: Path) -> dict[str, Any]:
     if isinstance(data, dict):
         if isinstance(data.get("failures"), list):
             return data
-        if data.get("class"):
+        if failure_kind(data):
             return {"failures": [data]}
         return data
     return {}
@@ -904,10 +1227,13 @@ def _phase1_issues(folder: Path, summary: dict[str, int]) -> list[str]:
     failures = last.get("failures")
     if isinstance(failures, list):
         for item in failures:
-            if not isinstance(item, dict) or item.get("class") not in {"bug", "timing"}:
+            if not isinstance(item, dict):
+                continue
+            kind = failure_kind(item)
+            if kind not in {"bug", "timing"}:
                 continue
             reason = _failure_reason(item)
-            text = f"{item.get('class')}: {_failure_title(item)}"
+            text = f"{kind}: {_failure_title(item)}"
             if reason:
                 text += f" — {reason}"
             lines.append(text)
@@ -934,7 +1260,7 @@ def _triage_section(folder: Path) -> list[str]:
             if not isinstance(item, dict):
                 continue
             reason = _failure_reason(item)
-            text = f"- {item.get('class')} / {item.get('action')}: {_failure_title(item)}"
+            text = f"- {failure_kind(item) or 'note'} / {item.get('action')}: {_failure_title(item)}"
             if reason:
                 text += f" — {reason}"
             lines.append(text)
@@ -1087,5 +1413,8 @@ def _write_report(
     ux_section = _ux_report_section(folder)
     if ux_section:
         lines.extend(ux_section)
+    promoted = _promoted_section(folder)
+    if promoted:
+        lines.extend(promoted)
     lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. Product bugs are in `bugs.md` when a failure remains. The Stytch session is `runs/cache/stytch/session.json`.")
     (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

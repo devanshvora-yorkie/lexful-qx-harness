@@ -4,17 +4,27 @@ description: "Use when auditing or proposing changes to Lexful's UI against the 
 version: 0.3.0
 status: "DRAFT, unsigned"
 sources_verified: "2026-10-13 against storybooks.fluentui.dev (component index, Spacing, Border Radii, Typography, Button, Drawer) and ui.shadcn.com (component list, Sheet, Alert, Empty)"
+config:
+  output_mode: simple
 ---
+## Output Modes (Ticket Generation)
+Provide output based on the requested mode to give the user full control:
+- **Simple Mode**: Provide ONLY the detailed suggested solution. Hide all other contextual details, background, and internal reasoning.
+- **Advanced Mode**: Display ALL details, including the detailed suggested solution, hidden background context, technical reasoning, and the full audit breakdown.
 
-# Design system
 
-**Purpose.** Give the audit one place to look up (a) how Fluent UI solves a design problem, and (b) which shadcn/ui component Lexful would use to build it. Suggestions stay specific ("use shadcn `Empty` with a button in `EmptyContent`, following Fluent's one-primary-action rule") and checkable.
+
+# Fluent-aligned design for a shadcn/ui product (reference skill)
+
+_Folder: `.agents/skills/design-system`._
+
+**Purpose.** Give the audit agent one reliable place to look up (a) how Fluent UI solves a design problem, and (b) which shadcn/ui component Lexful would use to build it. Suggestions become specific ("use shadcn `Empty` with a button in `EmptyContent`, following Fluent's one-primary-action rule") and checkable, not vague ("make it cleaner").
 
 **Companion files (read as needed):**
 - `references/components.md` — every component in the official Fluent v9 index (the design reference).
 - `references/shadcn-components.md` — the shadcn/ui components available today and how to compose them (the implementation).
 - `references/lexful-mapping.md` — which Lexful screen elements map to which Fluent component, known gaps, and the evidence about Lexful's real stack.
-- Used by `ux-audit`, which writes the findings. Remediation is written text in the finding. This skill does not produce mock screens.
+- Used together with `ux-audit` (produces the findings and the HTML output; it writes solutions as text only, no visual mocks).
 
 ---
 
@@ -173,9 +183,9 @@ Every recommendation must state:
 3. **Scale equivalents:** spacing, radius and type, as Fluent token names and Tailwind classes.
 4. Whether Lexful already does this (then say "no change needed").
 5. The detected-stack line, and which source won if Lexful's Storybook and Fluent disagree.
-6. Effort: **S** changes a variant, prop, Tailwind class, or copy. **M** composes components Lexful already has, with no new data. **L** needs a new component, new state, or backend support.
+6. Effort in S / M / L (S = a variant, prop, class or copy change; M = compose components already in the app; L = a new component, state or backend work).
 
 ## Changelog
-- **v0.3.0**: Renamed to `design-system`. Removed the before/after toggle and the mock-image workflow. Effort scale is defined here. Recommendations stay written text for the audit report.
+- **v0.3.0**: Removed the Before-After capability entirely (it referenced a `lexful-ui-before-after` skill that no longer exists): dropped the `config.before_after_comparison` toggle, the "Capability Toggles" section, the companion-file reference, and inlined the S/M/L effort definitions. Solutions are text-only (shadcn implementation + Fluent rationale), never image mocks.
 - **v0.2.0**: Direction set to shadcn/ui components with Fluent-aligned design. Added the authority order, the adoption profile, Tailwind equivalents of Fluent scales, a Fluent-to-shadcn quick-pick, and a new output contract. Replaced the "never assume Fluent" stack check with a quick stack check.
 - **v0.1.0** — First version, built from the official Fluent UI React v9 index and docs (2026-10-13).

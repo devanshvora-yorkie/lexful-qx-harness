@@ -112,7 +112,7 @@ Default severity is S1 to S4 (see section 7). Verification: **[S]** scripted Pla
 - **In-page table search** (e.g. "Search Documents..."): scoped to that one table only, by design (TC-SRCH149). **Rule E4 update:** check this distinction is *discoverable* — a technician glancing at either box should have some cue they're not equivalent, not that the narrower one is a hidden limitation (see BP-101, downgraded from "likely bug" to "confirmed intentional, verify discoverability").
 - **Ask Lex (AI):** opens as a right-side drawer, not full-page — carries the typed query in as the first chat message, supports `@` mentions and `/` skills. **Confirmed live bug (Sept 29):** asking about a **read-only organization** let it make tool calls first and fail afterward, instead of checking access and declining immediately (BP-100).
 - **Known open item from QA's own test design:** TC-SRCH143 tests Escape-to-close on the search popup and explicitly flags uncertainty about whether Escape is supported at all — direct supporting evidence for rule D5 (drawers/panels needing Escape support). Confirm this specifically once you have UAT access.
-- **New open item (Oct 5, real evidence):** a 2-character search ("To") returned 3 results with no visible match to the query text, contradicting the Sept 29 description of search as plain "keyword + semantic, no LLM." `[CONFIRM]` the actual matching logic and which fields are searched beyond the visible name — see BP-11/BP-12.
+- **New open item (Oct 5, real evidence):** a 2-character search ("To") returned 3 results with no visible match to the query text, contradicting the Sept 29 description of search as plain "keyword + semantic, no LLM." `[CONFIRM]` the actual matching logic and which fields are searched beyond the visible name — see BP-11/BP-12 and Live Findings Log #11.
 - **Good patterns already confirmed, don't misflag these:** popup/drawer close (X or Escape) discards only the search state, never navigates away or loses page context (TC-SRCH103, TC-SRCH112, TC-SRCH128); switching asset-type/org filters correctly clears stale results from the previous filter (TC-SRCH135); results are case-insensitive and trim whitespace (TC-SRCH138, TC-SRCH139).
 
 Rules: A2, A4, A6, B6, D5, E3, E4, plus BP-100/BP-101.
@@ -147,7 +147,7 @@ Rules: A2, A4, A6, B6, D5, E3, E4, plus BP-100/BP-101.
 | Old S3 (noticeable friction, task still smooth) | **New S2** | |
 | Old S4 (cosmetic/minor polish) | **New S3** | |
 
-Until each existing finding is individually re-reviewed, read any "S1–S4" label elsewhere in this kit through this table rather than assuming it already matches the new scale.
+The pattern library entries that name a severity now use this S0–S3 scale. Read any remaining "S1–S4" label elsewhere in this kit through the table above.
 
 `[RESOLVED Oct 5]` "Severity-1" in the SOW maps to the new **S0 or S1** depending on whether it's a total block or a goal-blocking issue with the feature still reachable.
 
@@ -217,4 +217,4 @@ Noisy Linear tickets in the first weeks cost credibility (Brief). So:
 | v0.4 | 2026-10-05 | Added a real confirmed-bug open item to the Search checklist: a 2-character query returned results with no visible match to the query text, contradicting the earlier "keyword + semantic, no LLM" description. Flagged for direct confirmation with Sherwin/John. Still unsigned.
 | v0.5 | 2026-10-06 | **Superseded the UX severity scale.** Adopted engineering's S0–S3 QA bar (confirmed on the Oct 5 call, Sherwin agreed in principle) as the single shared scale, replacing the old independent S1–S4 scale. Added an old→new mapping table since earlier entries across all files still use the old labels. Pass/fail bar updated to "no S0 or S1 = pass." Noted the QA trigger mechanism (ticket-based vs. per-build) is still unresolved as of Oct 5.
 | v0.6 | 2026-10-16 | Added Severity v2 (section 7b): Observation tier (O), calibration rules so working UI passes, and the evidence gate for S0 and S1. Triggered by the first real run (one S1 contradicted by its own screenshot). |
-| v0.7 | 2026-10-22 | QA ingestion: QA's specs and findings for Search, Asset CRUD and Document editing added under `qa-specs/` and summarized in `traceability.md`. Behavior QA tests as expected is at most an Observation. 40 checks. |
+| v0.7 | 2026-10-22 | QA ingestion: QA's specs and findings for Search, Asset CRUD and Document editing added under `qa-specs/` and summarized in `.agents/ux/traceability.md`. Behavior QA tests as expected is at most an Observation. 40 checks. |

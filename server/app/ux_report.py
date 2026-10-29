@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE = ROOT / ".agents" / "skills" / "lexful-ux-audit-gate" / "audit-preview.html"
-GAUGE = {"PASS": "#3f6212", "ADVISORY-FAIL": "#b45309", "BLOCKING-FAIL": "#9f1239"}
+TEMPLATE = ROOT / ".agents" / "skills" / "ux-audit" / "audit-preview.html"
+GAUGE = {"PASS": "#3f6212", "PASS WITH ADVISORIES": "#b45309", "BLOCKING FAIL": "#9f1239"}
 
 PENALTY = {"S0": 40, "S1": 25, "S2": 10, "S3": 3, "O": 0}
 SEVERITY_ORDER = ("S0", "S1", "S2", "S3", "O")
@@ -27,10 +27,13 @@ def read_findings(path: Path) -> list[dict[str, Any]]:
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
-        for key in ("findings", "failures"):
+        combined: list[dict[str, Any]] = []
+        for key in ("findings", "defects", "observations", "failures"):
             rows = data.get(key)
             if isinstance(rows, list):
-                return [item for item in rows if isinstance(item, dict)]
+                combined.extend(item for item in rows if isinstance(item, dict))
+        if combined:
+            return combined
     return []
 
 
@@ -46,7 +49,7 @@ def read_scorecard(path: Path) -> dict[str, Any]:
 
 def score_findings(findings: list[dict[str, Any]]) -> tuple[dict[str, int], int, str]:
     counts = {key: 0 for key in SEVERITY_ORDER}
-    for item in findings:
+    for item in _unique_findings(findings):
         severity = str(item.get("severity") or "O").strip().upper()
         if severity not in counts:
             severity = "O"
@@ -54,9 +57,9 @@ def score_findings(findings: list[dict[str, Any]]) -> tuple[dict[str, int], int,
     deducted = sum(counts[key] * PENALTY[key] for key in SEVERITY_ORDER)
     score = max(0, 100 - deducted)
     if counts["S0"] or counts["S1"]:
-        verdict = "BLOCKING-FAIL"
+        verdict = "BLOCKING FAIL"
     elif counts["S2"] or counts["S3"]:
-        verdict = "ADVISORY-FAIL"
+        verdict = "PASS WITH ADVISORIES"
     else:
         verdict = "PASS"
     return counts, score, verdict
@@ -88,7 +91,7 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
     card_path = folder / "ux-scorecard.json"
     if not findings_path.is_file() and not card_path.is_file():
         return None
-    findings = read_findings(findings_path)
+    findings = _unique_findings(read_findings(findings_path))
     previous = read_scorecard(card_path)
     if findings_path.is_file():
         counts, score, verdict = score_findings(findings)
@@ -105,20 +108,61 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
         card["envNotes"] = notes
     card_path.write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
     report = folder / "ux-report.html"
-    report.write_text(
-        render_html(
-            ticket=ticket or folder.name,
-            run_id=folder.name,
-            run_date=_run_date(folder),
-            score=score,
-            verdict=verdict,
-            counts=counts,
-            findings=_ordered(findings),
-            notes=card.get("envNotes") or [],
-        ),
-        encoding="utf-8",
-    )
+    if not _agent_html(report, verdict):
+        report.write_text(
+            render_html(
+                ticket=ticket or folder.name,
+                run_id=folder.name,
+                run_date=_run_date(folder),
+                score=score,
+                verdict=verdict,
+                counts=counts,
+                findings=_ordered(findings),
+                notes=card.get("envNotes") or [],
+            ),
+            encoding="utf-8",
+        )
     return report
+
+
+def _unique_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One deduction per check, route, and title. A second copy of the same defect does not score again."""
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[dict[str, Any]] = []
+    for item in findings:
+        check = str(item.get("checkId") or "").strip().lower()
+        route = str(item.get("route") or item.get("screen") or item.get("journey") or "").strip().lower()
+        title = str(item.get("title") or "").strip().lower()
+        if check or title:
+            key = (check, route, title)
+            if key in seen:
+                continue
+            seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _agent_html(path: Path, verdict: str) -> bool:
+    """True when the auditor's HTML is a real report and states this verdict."""
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lowered = text.lower()
+    if "<html" not in lowered:
+        return False
+    if "__score__" in lowered or "__verdict__" in lowered:
+        return False
+    return _html_states_verdict(lowered, verdict)
+
+
+def _html_states_verdict(text: str, verdict: str) -> bool:
+    if verdict == "PASS WITH ADVISORIES":
+        return "pass with advisories" in text or "pass (advisory)" in text
+    if verdict == "BLOCKING FAIL":
+        return "blocking fail" in text or re.search(r"(?<!advisory-)\bfail\b", text) is not None
+    if verdict == "PASS":
+        return re.search(r"\bpass\b(?!\s+with)", text) is not None and "blocking fail" not in text and "advisory-fail" not in text
+    return verdict.lower() in text
 
 
 def _paragraphs(text: str) -> str:
@@ -155,7 +199,7 @@ def render_html(
         observation_cards = "\n".join(_card(item, number) for number, item in observations)
         observation_html = (
             '<section class="observations-section">'
-            "<h2>Observations and design suggestions</h2>"
+            "<h2>Observations &amp; Design Suggestions</h2>"
             "<p>These work as intended. They do not change the score or the release verdict.</p>"
             f"{observation_cards}</section>"
         )
@@ -207,10 +251,10 @@ def _anchor(item: dict[str, Any], number: int) -> str:
 
 
 def _kicker(verdict: str) -> str:
-    if verdict == "BLOCKING-FAIL":
+    if verdict == "BLOCKING FAIL":
         return "An S0 or S1 finding blocks release. Score starts at 100. S0 −40, S1 −25, S2 −10, S3 −3."
-    if verdict == "ADVISORY-FAIL":
-        return "No S0 or S1, so this does not block release. S2 and S3 are warnings. Score starts at 100. S0 −40, S1 −25, S2 −10, S3 −3."
+    if verdict == "PASS WITH ADVISORIES":
+        return "No S0 or S1, so this passes with advisories. S2 and S3 do not fail the audit. Score starts at 100. S0 −40, S1 −25, S2 −10, S3 −3."
     return "No scored findings. Score starts at 100. Observations do not change the score."
 
 
@@ -238,28 +282,15 @@ def _card(item: dict[str, Any], number: int) -> str:
     pattern = str(item.get("relatedPattern") or "")
     kicker = " · ".join(part for part in (check, lens, pattern, confidence) if part)
     observed = _paragraphs(str(item.get("evidence") or ""))
-    solution = _paragraphs(str(item.get("solution") or ""))
-    extra = []
-    implementation = str(item.get("implementationShadcn") or "").strip()
-    rationale = str(item.get("fluentRationale") or "").strip()
-    refs = item.get("qaRefs") or []
-    if isinstance(refs, list):
-        ref_text = ", ".join(str(ref) for ref in refs if ref)
-    else:
-        ref_text = str(refs).strip()
-    if implementation:
-        extra.append(("Implementation", implementation))
-    if rationale:
-        extra.append(("Design rationale", rationale))
-    if ref_text:
-        extra.append(("QA references", ref_text))
-    extra_html = ""
-    if extra:
-        rows = "".join(
-            f"<div><dt>{html.escape(label)}</dt><dd>{html.escape(text)}</dd></div>"
-            for label, text in extra
+    plan = "".join(
+        _plan_part(label, text)
+        for label, text in (
+            ("What to Fix (Plain English)", str(item.get("solution") or "")),
+            ("Developer Implementation", str(item.get("implementationShadcn") or "")),
+            ("Design Rationale", str(item.get("fluentRationale") or "")),
+            ("QA references", _refs(item)),
         )
-        extra_html = f"<dl class='plan-extra'>{rows}</dl>"
+    )
     return (
         f'<article class="finding-card severity-{html.escape(severity)}" id="{html.escape(_anchor(item, number))}">'
         f'<header class="finding-head"><span class="badge">{html.escape(severity)}</span>'
@@ -268,9 +299,26 @@ def _card(item: dict[str, Any], number: int) -> str:
         f'<section class="section-box"><h3>Observed defect</h3>'
         f'<div class="section-box-content">{observed}</div></section>'
         f'<section class="section-box plan"><h3>Design &amp; Remediation Plan</h3>'
-        f'<div class="section-box-content">{solution}{extra_html}</div></section>'
+        f'<div class="section-box-content">{plan}</div></section>'
         f"</article>"
     )
+
+
+def _plan_part(label: str, text: str) -> str:
+    body = text.strip()
+    if not body:
+        return ""
+    return (
+        f"<p><strong>{html.escape(label)}</strong></p>"
+        f"{_paragraphs(body)}"
+    )
+
+
+def _refs(item: dict[str, Any]) -> str:
+    refs = item.get("qaRefs") or []
+    if isinstance(refs, list):
+        return ", ".join(str(ref) for ref in refs if ref)
+    return str(refs).strip()
 
 
 def _run_date(folder: Path) -> str:

@@ -38,15 +38,15 @@ Authority order: Lexful Storybook and style guide, then Fluent guidance, then sh
 | Expiry count badges | `Badge` | CounterBadge | |
 | Hotkey hints (search shows a command-K hint) | `Kbd` | Not in Fluent | Good fit for technicians |
 
-## 3. Known findings with a written remedy
+## 3. Known findings that have a visual remedy
 
 | Finding | Source | shadcn implementation | Fluent rationale |
 |---|---|---|---|
 | Drawer header actions at equal weight (A11Y-04, BP-110) | Oct 1 screenshots | Title row; close and expand as `Button` ghost icon with `aria-label`; secondary actions in one `Dropdown Menu` "More"; at most one default Button | One primary action; quiet utility actions; group the rest |
-| Validation errors one at a time (CRUD-01, BP-20) | Oct 1 observation | `Field` with an error message on every required control, shown together on submit | Inline errors, all at once |
-| No confirmation after actions (CRUD-06, BP-108) | Oct 1 observation | `Sonner` toast for create, save, link; `Alert` for persistent notices | Transient vs persistent feedback |
-| Assets home empty state has no CTA (CRUD-07, BP-106) | Oct 1 observation | `Empty` with a `Button` in `EmptyContent`, same as Documents | Every empty state offers a next step |
-| Unrelated search results with no reason (SRCH-02, BP-11/12) | Oct 5 observation | Matched text in `font-semibold`; matched field as secondary `text-xs` text | Clarity of why something matched |
+| Validation errors one at a time (CRUD-01, BP-20) | Findings Log #1 | `Field` with an error message on every required control, shown together on submit | Inline errors, all at once |
+| No confirmation after actions (CRUD-06, BP-108) | Findings Log #2 | `Sonner` toast for create, save, link; `Alert` for persistent notices | Transient vs persistent feedback |
+| Assets home empty state has no CTA (CRUD-07, BP-106) | Findings Log #3 | `Empty` with a `Button` in `EmptyContent`, same as Documents | Every empty state offers a next step |
+| Unrelated search results with no reason (SRCH-02, BP-11/12) | Findings Log #11 | Matched text in `font-semibold`; matched field as secondary `text-xs` text | Clarity of why something matched |
 | No search guidance (BP-107) | Oct 1 screenshots | Placeholder naming what is searchable; recent items in `Command` | Guidance on first use |
 | Save state unclear in editor (DOC-05) | Rulebook | `text-xs` status with `Spinner` while saving, then "Saved" | Visible system status |
 | Icon-only buttons without names (A11Y-03) | Rulebook | `aria-label` or `Tooltip` | Accessible names |

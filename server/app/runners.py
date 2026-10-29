@@ -624,7 +624,10 @@ def planned_specs(run_dir: Path, started_at: float) -> list[str]:
             continue
         files = payload.get("test_files") if isinstance(payload, dict) else None
         if isinstance(files, list):
-            existing = [str(item) for item in files if (settings.root / str(item)).is_file()]
+            existing = [
+                str(item) for item in files
+                if _is_runnable_spec(settings.root / str(item))
+            ]
             if existing:
                 return existing
     found: list[str] = []
@@ -634,8 +637,23 @@ def planned_specs(run_dir: Path, started_at: float) -> list[str]:
     for spec in sorted(specs_dir.rglob("*.spec.ts")):
         if spec.stat().st_mtime < started_at - 1:
             continue
+        if not _is_runnable_spec(spec):
+            continue
         try:
             found.append(str(spec.relative_to(settings.root)))
         except ValueError:
             continue
     return found
+
+
+def _is_runnable_spec(path: Path) -> bool:
+    """A Playwright file under the run's specs folder. The explore walk log is not a spec."""
+    if not path.is_file():
+        return False
+    if "explore" in path.parts:
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "test(" in text

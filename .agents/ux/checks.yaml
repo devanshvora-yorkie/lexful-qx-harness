@@ -1,6 +1,7 @@
-# UX checks (DRAFT, unsigned)
-# Machine-readable version of rulebook.md and pattern-library.md.
-# The audit reads this file. Rule IDs must match those two documents.
+# Lexful UX Checks v0.6b (DRAFT, unsigned)
+# v0.6b (post Oct-27): removed the Before/After capability. Dropped visual_fix on all checks and renamed meta.visual_suggestions to meta.solution_guidance (text-only shadcn/Fluent guidance, no image pairs, no 4-pair cap).
+# Machine-readable version of the UX Rulebook v0.5 + Bad UX Pattern Library v0.6.
+# The automated audit reads THIS file. Humans edit it. Rule IDs must match the two documents.
 #
 # verify:  script = deterministic Playwright/axe check | ai = model judges screenshot + page structure | human = needs a person
 # qa_refs: QA test case ids from qa-specs/ that cover the same behavior. Cite them in findings as qaRefs.
@@ -8,7 +9,7 @@
 
 meta:
   version: 0.6.0
-  source_docs: [rulebook.md, pattern-library.md]
+  source_docs: [.agents/ux/rulebook.md, .agents/ux/pattern-library.md]
   environment: UAT only, demo/synthetic data only
   default_persona: Support        # technician role. Use Admin only for admin screens, Viewer for read-only checks
   accessibility_bar: WCAG 2.1 AA
@@ -35,15 +36,15 @@ meta:
     - "An S0 or S1 is accepted only if reproduced at least 2 times, your own screenshot shows the problem (not the opposite), and you tried to disprove it."
     - "If your evidence contradicts your claim, withdraw or downgrade the finding and list it under heldForReview as Withdrawn."
     - "Never copy wording, ids or findings from any sample or demo file. Every ticket comes from what you observed in this run."
-  environment_notes:              # from QA, see traceability.md section 1
+  environment_notes:              # from QA, see .agents/ux/traceability.md section 1
     - "CloudFront WAF can answer bursts with 403 Request blocked. Stop 45 seconds, retry at most 3 times, one worker. This is the environment, not an app defect."
     - "The Stytch session JWT lives 5 minutes. If you land on a login page mid-run, stop and ask the user to log in again. Never loop."
     - "URL patterns: /docs/assets, /docs/d/all/<type> (example servers), /docs/d/all/system.document, record drawer in the URL as ?drawer=. Do not guess URLs."
     - "Only the org owner persona has been exercised by QA. If Settings, Account and Platform are visible, report the role as Admin or owner (inferred). Never write Support unless the app shows it."
-  remediation:                    # written fix guidance. The report does not include mock images.
-    - shadcn_hint names the shadcn/ui component. fluent_hint gives the Fluent design rationale.
+  solution_guidance:               # used to write the Developer Implementation / Design Rationale parts of a solution (no visual mocks)
+    - shadcn_hint names the implementation (shadcn/ui component); fluent_hint gives the Fluent design rationale. Use both as text in the ticket's solution, never as an image.
     - "Direction (Oct 13): shadcn/ui components with Fluent-aligned design. Authority order: Lexful Storybook and style guide, then Fluent, then shadcn defaults."
-    - Confirm component props in the official docs, and run the quick stack check first (see design-system).
+    - Confirm component props in the official docs, and run the quick stack check first (see .agents/skills/design-system).
   output_rules:
     - Every finding must cite a check id or rule ref. No reference = discard.
     - Low-confidence findings go in the report only, never to Linear.
@@ -75,7 +76,7 @@ checks:
     shadcn_hint: "Matched text in font-semibold inside each result; show the matched field as secondary text-xs text inside Command items."
     verify: [script, ai]
     automation_hint: Type a short query, read result titles, flag any result whose visible text lacks the query. Test short queries (1-3 characters) on purpose.
-    known_issue: "Oct 5 - searching 'To' returned 3 results with no visible match."
+    known_issue: "Oct 5 - searching 'To' returned 3 results with no visible match (Findings Log #11)."
     confidence: confirmed
     qa_refs: ["TC-SRCH105", "TC-SRCH106", "TC-SRCH107", "TC-SRCH136", "TC-SRCH138", "TC-SRCH139", "SPEC-TC-04", "SPEC-TC-05", "SPEC-TC-07"]
     qa_note: "Matching is decided by the server (GET /v1/search, 20 per page). The shorthand AD is rewritten to Active Directory on purpose, and a hint shows it (SPEC-TC-04): do not flag that. Check the hint is visible and that a result's visible text explains the match."
@@ -216,7 +217,7 @@ checks:
     shadcn_hint: "Field with an error message on every required control, all shown after one submit. Verify Field subcomponents in the shadcn docs."
     verify: [script]
     automation_hint: Fill only the name, submit, count visible field errors, compare to the number of required fields.
-    known_issue: Oct 1 - errors appeared one at a time.
+    known_issue: Oct 1 - errors appeared one at a time (Findings Log #1).
     confidence: confirmed
     qa_refs: ["TC-DOC-009", "TC-DOC-010", "assets-crud_spec.ts:L162-L178"]
     qa_note: "QA treats these as expected: Create stays disabled until Name and Organization (and Role for Servers) are set (TC-DOC-009, assets-crud_spec.ts:L162-L178), and an empty name triggers native browser validation (TC-DOC-010). So disabled-until-ready is not a defect. The UX gap is only that required fields are not marked or explained: rate S3 or Observation, S2 only if you could not work out what was missing."
@@ -283,7 +284,7 @@ checks:
     shadcn_hint: "Sonner toast for create, save and link; Alert if the notice must persist."
     verify: [script]
     automation_hint: After each action, wait up to 3 seconds for a status or toast element.
-    known_issue: Oct 1 - no toast observed after create, save, or link.
+    known_issue: Oct 1 - none observed in multiple screenshots (Findings Log #2).
     confidence: confirmed
     qa_refs: []
     qa_note: "No QA test asserts a toast. QA's POM looks for react-toastify classes (Toastify__toast), which may not be the library the app uses (Lexful's Storybook has a Toaster). Confirm which library the app uses before recommending Sonner. Staged edits close the save bar, so a visible result may already exist: apply the visible-outcome rule."
@@ -298,7 +299,7 @@ checks:
     fluent_hint: "No EmptyState in v9. Compose icon, Text (subtitle) and a primary Button, matching the Documents empty state."
     shadcn_hint: "Empty with EmptyMedia (icon), EmptyTitle, EmptyDescription and a Button inside EmptyContent, same as the Documents empty state."
     verify: [script, ai]
-    known_issue: Assets home empty state has no inline CTA.
+    known_issue: Assets home empty state has no inline CTA (Findings Log #3).
     confidence: confirmed
 
   - id: CRUD-08
@@ -309,7 +310,7 @@ checks:
     check: Buttons and inputs match the Storybook components (Button variants, BulkActionBar). Flag unexplained one-off styling.
     default_severity: O          # design suggestion when the UI works
     verify: [ai, human]
-    known_issue: Edit button styled differently from other buttons, may be intentional.
+    known_issue: Edit button styled differently from other buttons, may be intentional (Findings Log #4).
     confidence: unconfirmed
 
   - id: CRUD-09
@@ -405,7 +406,7 @@ checks:
     check: Syntax such as ==highlight== renders as styled text, not literal characters.
     default_severity: S3
     verify: [script]
-    known_issue: Oct 1 - literal ==text== seen, may have been test content.
+    known_issue: Oct 1 - literal ==text== seen, may have been test content (Findings Log #5).
     confidence: unconfirmed
     qa_refs: ["TC-DOC-007"]
     qa_note: "Underline and Highlight exist only in HTML mode; Markdown mode does not offer them and the toolbar says so (TC-DOC-007). Typing ==text== in a Markdown document showing raw text may be expected. Test both modes before reporting. If the editor shows highlight styling that the saved view does not, rate S3 for the mismatch."

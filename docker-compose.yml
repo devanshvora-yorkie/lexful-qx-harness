@@ -15,7 +15,7 @@ services:
       AWS_REGION: ${AWS_REGION:-us-east-1}
       # OpenCode reads the bearer token. .env stores it as BEDROCK_API_KEY.
       AWS_BEARER_TOKEN_BEDROCK: ${BEDROCK_API_KEY:-}
-      # E2E User Journey TCs. Set QA_PHASE1_ON_START=false in .env to skip them on startup.
+      # E2E before each ticket when true. false = ticket only. npm run e2e always queues E2E explicitly.
       QA_PHASE1_ON_START: ${QA_PHASE1_ON_START:-true}
       # UI/UX audit. Set QA_RUN_UX_AUDIT=false to run functional QA only.
       QA_RUN_UX_AUDIT: ${QA_RUN_UX_AUDIT:-true}

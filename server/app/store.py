@@ -510,6 +510,15 @@ def find_active_phase1() -> dict[str, Any] | None:
     return None
 
 
+def find_running_run() -> dict[str, Any] | None:
+    """Run the worker is executing now (not merely queued)."""
+    running = {"preflight", "agent", "execute", "heal"}
+    for row in _read_index()["runs"]:
+        if row.get("status") in running:
+            return dict(row)
+    return None
+
+
 def find_active_sha(sha: str) -> dict[str, Any] | None:
     """Skip a sha that is already running or already finished cleanly. A needs-revision run can be tried again."""
     closed = {"failed", "halted", "needs_revision"}
@@ -519,12 +528,11 @@ def find_active_sha(sha: str) -> dict[str, Any] | None:
     return None
 
 
-def _write_interrupted(run_id: str) -> None:
-    """A restart used to leave a folder with no report. Write one, then put the result in the name."""
+def _write_halted(run_id: str, reason: str) -> None:
+    """Write a minimal report when a run stops without a normal verdict."""
     row = get_run(run_id) or {}
     folder = run_dir(run_id)
     folder.mkdir(parents=True, exist_ok=True)
-    reason = "The server restarted during the run. This attempt has no finished suite verdict."
     (folder / "report.md").write_text(
         "\n".join([
             f"# {row.get('ticket') or run_id}",
@@ -552,6 +560,30 @@ def _write_interrupted(run_id: str) -> None:
         encoding="utf-8",
     )
     publish_folder(run_id, summary=None, verdict=None)
+
+
+def _write_interrupted(run_id: str) -> None:
+    _write_halted(run_id, "The server restarted during the run. This attempt has no finished suite verdict.")
+
+
+_ACTIVE_RUN = {"accepted", "queued", "preflight", "agent", "execute", "heal"}
+
+
+def cancel_all_runs(reason: str = "cancelled by user") -> list[str]:
+    """Mark every in-flight or queued run as failed and write a halt report."""
+    from app.logbook import Logbook
+
+    stopped: list[str] = []
+    for row in list(list_runs()):
+        run_id = str(row.get("id") or "")
+        if not run_id or row.get("status") not in _ACTIVE_RUN:
+            continue
+        folder = run_dir(run_id)
+        Logbook(folder).row("server", "cancelled", reason[:220])
+        update_run(run_id, status="failed", error=reason[:500])
+        _write_halted(run_id, reason)
+        stopped.append(run_id)
+    return stopped
 
 
 def recover_runs() -> list[str]:

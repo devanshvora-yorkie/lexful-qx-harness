@@ -17,8 +17,10 @@ from app.pipeline import execute_run, startup_order
 from app.runners import ensure_session
 from app.settings import get_settings
 from app.store import (
+    cancel_all_runs,
     create_run,
     find_active_phase1,
+    find_running_run,
     find_active_sha,
     get_run,
     list_runs,
@@ -39,14 +41,7 @@ async def _lifespan(_app: FastAPI):
     waiting_ids = recover_runs()
     relocate_legacy_runs()
     waiting = [row for row in (get_run(run_id) for run_id in waiting_ids) if row]
-    fresh = None
-    if get_settings().phase1_on_start and not any(row.get("kind") == "phase1" for row in waiting):
-        created = create_run(ticket=None, pr=None, sha=None, kind="phase1")
-        update_run(created["id"], status="queued")
-        fresh = created["id"]
-        log.info("E2E User Journey TCs queued %s", fresh)
-        print(f"E2E User Journey TCs queued  {fresh}", flush=True)
-    for run_id in startup_order(waiting, fresh):
+    for run_id in startup_order(waiting):
         _queue.put_nowait(run_id)
     worker = asyncio.create_task(_worker())
     try:
@@ -102,9 +97,39 @@ class DeployBody(BaseModel):
 
 
 def _enqueue(row: dict[str, Any]) -> dict[str, Any]:
-    _queue.put_nowait(row["id"])
-    update_run(row["id"], status="queued")
-    return {"success": True, "runId": row["id"], "ticketKey": row.get("ticket"), "status": "queued"}
+    run_id = str(row["id"])
+    folder = run_dir(run_id)
+    book = Logbook(folder)
+    if row.get("kind") == "phase1":
+        book.row("server", "queued", 'E2E User Journey TCs  waiting for worker')
+    else:
+        ticket = row.get("ticket") or run_id
+        book.row("server", "queued", f"Feature Specific TCs  {ticket}  waiting for worker")
+    active = find_running_run()
+    if active and active.get("id") != run_id:
+        label = active.get("ticket") or active["id"]
+        book.row(
+            "server",
+            "queue",
+            f"behind {label}  {active['id']} ({active.get('status')})",
+        )
+    _queue.put_nowait(run_id)
+    update_run(run_id, status="queued")
+    return {"success": True, "runId": run_id, "ticketKey": row.get("ticket"), "status": "queued"}
+
+
+def _queue_phase1_if_configured() -> str | None:
+    """When QA_PHASE1_ON_START is true, queue E2E before a ticket. Never on container boot."""
+    if not get_settings().phase1_on_start:
+        return None
+    existing = find_active_phase1()
+    if existing:
+        return existing["id"]
+    row = create_run(ticket=None, pr=None, sha=None, kind="phase1")
+    _enqueue(row)
+    log.info("E2E User Journey TCs queued before ticket %s", row["id"])
+    print(f"E2E User Journey TCs queued  {row['id']}", flush=True)
+    return row["id"]
 
 
 def _with_activity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -118,7 +143,41 @@ def _with_activity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @app.get("/health")
 def health() -> dict[str, Any]:
     settings = get_settings()
-    return {"status": "ok", "port": settings.port, "runs": str(settings.runs)}
+    running = find_running_run()
+    return {
+        "status": "ok",
+        "port": settings.port,
+        "runs": str(settings.runs),
+        "phase1BeforeTicket": settings.phase1_on_start,
+        "runningRun": (
+            {
+                "id": running["id"],
+                "status": running.get("status"),
+                "kind": running.get("kind"),
+                "ticket": running.get("ticket"),
+            }
+            if running
+            else None
+        ),
+    }
+
+
+@app.post("/runs/cancel-all", status_code=200, dependencies=[Depends(require_secret)])
+async def cancel_runs() -> dict[str, Any]:
+    """Stop queued work and mark every active run failed. Restart the container to abort a run mid-flight."""
+    stopped = cancel_all_runs()
+    drained = 0
+    while True:
+        try:
+            _queue.get_nowait()
+            drained += 1
+            _queue.task_done()
+        except asyncio.QueueEmpty:
+            break
+    if stopped:
+        log.info("cancelled %s run(s), drained %s queue item(s)", len(stopped), drained)
+        print(f"cancelled {len(stopped)} run(s)  drained {drained} queue item(s)", flush=True)
+    return {"success": True, "cancelled": stopped, "drained": drained}
 
 
 @app.get("/runs", dependencies=[Depends(require_secret)])
@@ -167,8 +226,12 @@ def run_ticket(ticket_key: str, body: RunBody | None = None) -> dict[str, Any]:
     if not TICKET_RE.match(ticket_key):
         raise HTTPException(status_code=400, detail="Ticket must look like LEX-1234")
     pr = body.pr if body else None
+    phase1_id = _queue_phase1_if_configured()
     row = create_run(ticket=ticket_key.upper(), pr=pr, sha=None)
-    return _enqueue(row)
+    payload = _enqueue(row)
+    if phase1_id:
+        payload["phase1RunId"] = phase1_id
+    return payload
 
 
 @app.post("/run/pr/{number}", status_code=202, dependencies=[Depends(require_secret)])

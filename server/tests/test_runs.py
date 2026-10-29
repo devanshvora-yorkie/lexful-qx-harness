@@ -26,13 +26,17 @@ from app.pipeline import (
     _lead_prompt,
     failed_tests,
     merge_outcomes,
+    merge_test_outcomes,
     outcomes_by_file,
+    test_outcomes_from_report,
     spec_was_patched,
     specs_for_failures,
     startup_order,
     record_suite_edits,
     suite_files_changed,
     suspicious_patches,
+    heal_stopped_on_bugs,
+    signoff_blockers,
     verdict_for,
 )
 from app.runners import checked_in_specs, common_test_dir, personas_requested, planned_specs
@@ -218,6 +222,36 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(verdict_for({"passed": 3, "failed": 1}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
         self.assertEqual(verdict_for({"passed": 4, "failed": 0, "skipped": 2}, preflight_ok=True, produced_specs=True), "NEEDS_REVISION")
 
+    def test_a_required_gap_blocks_signoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "FEATURE.md").write_text(
+                "## Gaps\n\n"
+                "1. **Exact file-ID matching.** Needs a second file.\n"
+                "2. **Cross-record reference.** Out of scope per PR.\n",
+                encoding="utf-8",
+            )
+            (folder / "context-pack.json").write_text(json.dumps({
+                "ticket": {"acceptanceCriteria": "* inline images stay protected after save\n"},
+                "pullRequests": [{"title": "Protect embedded images", "body": "exact file-ID matching and the confirmation dialog"}],
+            }), encoding="utf-8")
+            (folder / "playwright").mkdir()
+            (folder / "playwright" / "results.json").write_text(json.dumps({
+                "suites": [{"specs": [{"title": "A saved inline image stays protected", "ok": True}]}],
+            }), encoding="utf-8")
+            (folder / "ux-scorecard.json").write_text(json.dumps({
+                "envNotes": ["E2E Demo holds 12 leftover fixtures from this run."],
+            }), encoding="utf-8")
+            issues = signoff_blockers(folder)
+            self.assertTrue(any(item.startswith("gap:") and "file-ID" in item for item in issues))
+            self.assertFalse(any("Cross-record" in item for item in issues))
+            self.assertTrue(any(item.startswith("leftover fixtures:") for item in issues))
+
+    def test_product_bugs_stop_the_heal_loop(self):
+        self.assertTrue(heal_stopped_on_bugs({"failures": [{"class": "bug"}]}))
+        self.assertFalse(heal_stopped_on_bugs({"failures": [{"class": "gap"}, {"class": "bug"}]}))
+        self.assertFalse(heal_stopped_on_bugs({"failures": []}))
+
 
 class Phase1Test(unittest.TestCase):
     def test_queue_puts_the_checked_in_suite_first(self):
@@ -247,6 +281,7 @@ class Phase1Test(unittest.TestCase):
         self.assertEqual(found[0]["title"], "renamed button")
         self.assertTrue(found[0]["error"].startswith("waiting for getByRole"))
         self.assertTrue(spec_was_patched({"failures": [{"class": "spec", "action": "patched"}]}))
+        self.assertTrue(spec_was_patched({"failures": [{"classification": "spec", "action": "patched"}]}))
         self.assertFalse(spec_was_patched({"failures": [{"class": "bug", "action": "reported"}]}))
         self.assertEqual(
             suspicious_patches({"failures": [{"class": "bug", "action": "patched", "title": "save failed"}]}),
@@ -331,9 +366,17 @@ class StoreTest(unittest.TestCase):
         created = create_run(ticket="LEX-3400", pr=None, sha=None)
         run = Path(self.tmp.name) / created["folder"]
         spec = run / "specs" / "added.spec.ts"
-        spec.write_text("import { test } from '@playwright/test'\n")
+        spec.write_text("import { test } from '@playwright/test'\ntest('added', async () => {})\n")
+        walk = run / "explore" / "flow.spec.ts"
+        walk.parent.mkdir(parents=True, exist_ok=True)
+        walk.write_text("test('walked step', async () => {})\n")
+        (run / "planned-specs.json").write_text(
+            json.dumps({"test_files": [str(walk.relative_to(Path(self.tmp.name)))]}),
+            encoding="utf-8",
+        )
         found = planned_specs(run, 0)
         self.assertTrue(any(item.endswith("added.spec.ts") for item in found))
+        self.assertFalse(any("explore" in item for item in found))
         update_run(created["id"], status="agent")
         waiting = create_run(ticket="LEX-3401", pr=None, sha=None)
         update_run(waiting["id"], status="queued")
@@ -486,6 +529,10 @@ class CoverageTest(unittest.TestCase):
         self.assertEqual(by_id["TC-01"].journey, "search")
         self.assertEqual(by_id["TC-06"].type, "negative")
         self.assertTrue(any(case.journey == "asset crud" and case.type == "negative" and "invalid credentials" in case.title for case in cases))
+        self.assertEqual(by_id["AC-035"].journey, "asset crud")
+        self.assertEqual(by_id["AC-035"].suite, "smoke")
+        self.assertEqual(by_id["AC-036"].type, "positive")
+        self.assertEqual(by_id["AC-037"].type, "negative")
         self.assertGreaterEqual(len(cases), 50)
         with tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / "e2e-coverage.md"
@@ -548,6 +595,32 @@ class CoverageTest(unittest.TestCase):
         self.assertIn("e2e-coverage.md", text)
         self.assertIn("no minimum and no maximum", text)
         self.assertIn("node scripts/persona.mjs support", text)
+        self.assertNotIn("qa-explorer", text)
+        self.assertNotIn("delegate", text.lower())
+        self.assertIn("listing-exploration-hints", text)
+
+    def test_merge_test_outcomes_keeps_unrerun_files(self):
+        def report(file: str, rows: list[tuple[str, str]]) -> dict:
+            return {
+                "suites": [{
+                    "file": file,
+                    "specs": [
+                        {"title": title, "file": file, "tests": [{"status": status}]}
+                        for title, status in rows
+                    ],
+                    "suites": [],
+                }],
+            }
+
+        bvt = report("specs/move-records-bvt.spec.ts", [("TC-001", "expected")])
+        smoke_fail = report("specs/move-records-smoke.spec.ts", [("TC-002", "unexpected")])
+        before = test_outcomes_from_report(bvt)
+        for file_key, titles in test_outcomes_from_report(smoke_fail).items():
+            before.setdefault(file_key, {}).update(titles)
+        smoke_pass = report("specs/move-records-smoke.spec.ts", [("TC-002", "expected")])
+        merged = merge_test_outcomes(before, smoke_pass, ["specs/move-records-smoke.spec.ts"])
+        self.assertEqual(merged["move-records-bvt.spec.ts"]["TC-001"], "passed")
+        self.assertEqual(merged["move-records-smoke.spec.ts"]["TC-002"], "passed")
 
 
 class BugReportTest(unittest.TestCase):
@@ -615,6 +688,47 @@ class BugReportTest(unittest.TestCase):
                 {"title": "Deprecated case", "deprecated": True, "severity": "Low"},
             ],
         }, [{"title": "renamed button", "file": "e2e test cases/search/search.spec.ts", "error": "locator"}])
+        self.assertEqual(bugs, [])
+
+    def test_classification_and_a_missing_fixture_are_not_product_bugs(self):
+        bugs = collect_bugs({
+            "failures": [{
+                "classification": "spec",
+                "action": "reported",
+                "test": "TC-LEX-2328-001: Embedded badge shows on an image",
+                "reason": "Environment blocker. The page was never opened.",
+            }],
+            "bugs": [],
+        }, [{
+            "title": "TC-LEX-2328-001: Embedded badge shows on an image attachment",
+            "file": "specs/lex-2328-bvt.spec.ts",
+            "error": "locator was not on the page",
+        }])
+        self.assertEqual(bugs, [])
+        self.assertEqual(collect_bugs({}, [{
+            "title": "TC-LEX-2328-002: delete stays disabled",
+            "file": "specs/lex-2328-smoke.spec.ts",
+            "error": "Error: fixture not configured: missing embeddedImage",
+        }]), [])
+
+    def test_a_gap_is_not_filed_even_when_the_healer_also_wrote_a_bug(self):
+        bugs = collect_bugs({
+            "failures": [{
+                "class": "gap",
+                "action": "removed",
+                "title": "TC-LEX-2328-011: Overview tab shows Embedded",
+                "reason": "The document drawer has no Overview tab.",
+            }],
+            "bugs": [{
+                "failure": "The document drawer has no Overview tab",
+                "affectedTests": ["TC-LEX-2328-011"],
+                "severity": "Low",
+            }],
+        }, [{
+            "title": "TC-LEX-2328-011: Overview tab shows Embedded",
+            "file": "specs/lex-2328-regression.spec.ts",
+            "error": "locator not found: Overview",
+        }])
         self.assertEqual(bugs, [])
 
     def test_unclassified_failure_still_gets_a_record(self):

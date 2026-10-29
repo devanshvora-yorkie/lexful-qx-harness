@@ -62,28 +62,56 @@ def latest_triage(folder: Path) -> tuple[dict[str, Any], int]:
     return {}, 1
 
 
+def failure_kind(item: dict[str, Any]) -> str:
+    """Healer label. The prompt says class. Models also write classification."""
+    raw = item.get("class") or item.get("classification") or item.get("kind") or ""
+    kind = str(raw).strip().lower()
+    if kind in {"spec", "bug", "timing", "gap"}:
+        return kind
+    return ""
+
+
+def is_setup_failure(text: str) -> bool:
+    """A spec that stopped because its own fixture was missing. That is not a product bug."""
+    return "fixture not configured" in text.lower()
+
+
 def collect_bugs(triage: dict[str, Any], still_failing: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
-    explicit = [item for item in (triage.get("bugs") or []) if isinstance(item, dict) and not _is_skipped(item)]
+    gap_titles, gap_ids = _gap_marks(triage)
+    explicit = [
+        item
+        for item in (triage.get("bugs") or [])
+        if isinstance(item, dict) and not _is_skipped(item) and not _covered_by_gap(item, gap_titles, gap_ids)
+    ]
     if explicit:
         return explicit
     filed: list[dict[str, Any]] = []
-    spec_titles: set[str] = set()
+    spec_titles: set[str] = set(gap_titles)
+    spec_ids: set[str] = set(gap_ids)
     for item in triage.get("failures") or []:
         if not isinstance(item, dict) or _is_skipped(item):
             continue
-        if item.get("class") == "spec":
+        kind = failure_kind(item)
+        if kind in {"spec", "gap"} or is_setup_failure(_failure_text(item)):
             spec_titles.add(str(item.get("title") or item.get("test") or ""))
+            spec_ids.update(_failure_ids(item))
             continue
-        if item.get("class") == "bug":
+        if kind == "bug":
             filed.append(item)
     if filed:
         return filed
     fallback: list[dict[str, Any]] = []
     for item in still_failing or []:
         title = str(item.get("title") or "")
-        if not title or title in spec_titles or _is_skipped(item):
-            continue
         test_id = _tc_from_title(title)
+        if (
+            not title
+            or title in spec_titles
+            or test_id in spec_ids
+            or _is_skipped(item)
+            or is_setup_failure(str(item.get("error") or ""))
+        ):
+            continue
         area = _area_from_path(str(item.get("file") or ""))
         error = str(item.get("error") or "The test failed.")
         fallback.append({
@@ -323,6 +351,41 @@ def _area_from_path(path: str) -> str:
         return "Search"
     name = Path(path).name if path else "App"
     return name or "App"
+
+
+def _failure_text(item: dict[str, Any]) -> str:
+    return " ".join(
+        str(item.get(key) or "")
+        for key in ("reason", "error", "evidence", "actual", "title", "test")
+    )
+
+
+def _failure_ids(item: dict[str, Any]) -> set[str]:
+    text = _failure_text(item)
+    affected = item.get("affectedTests")
+    if isinstance(affected, list):
+        text += " " + " ".join(str(entry) for entry in affected)
+    return {match.group(0) for match in _TC_ID.finditer(text)}
+
+
+def _gap_marks(triage: dict[str, Any]) -> tuple[set[str], set[str]]:
+    titles: set[str] = set()
+    ids: set[str] = set()
+    for item in triage.get("failures") or []:
+        if isinstance(item, dict) and failure_kind(item) == "gap":
+            titles.add(str(item.get("title") or item.get("test") or ""))
+            ids.update(_failure_ids(item))
+    return titles, ids
+
+
+def _covered_by_gap(item: dict[str, Any], titles: set[str], ids: set[str]) -> bool:
+    if failure_kind(item) == "gap":
+        return True
+    title = str(item.get("title") or item.get("failure") or item.get("test") or "")
+    if title and title in titles:
+        return True
+    found = _failure_ids(item)
+    return bool(found) and found <= ids
 
 
 def _is_skipped(item: dict[str, Any]) -> bool:

@@ -54,7 +54,7 @@ class Settings:
     playwright_timeout_seconds: int
     heal_attempts: int
     qa_url: str
-    phase1_on_start: bool
+    phase1_on_start: bool  # QA_PHASE1_ON_START: queue E2E before each ticket, not on container boot
     run_ux_audit: bool = True
 
 

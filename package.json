@@ -9,6 +9,7 @@
     "context": "node scripts/context.mjs",
     "serve": "node scripts/serve.mjs",
     "ticket": "node scripts/ticket.mjs",
+    "cancel-runs": "node scripts/cancel-runs.mjs",
     "e2e": "node scripts/ticket.mjs --phase1",
     "phase1": "node scripts/ticket.mjs --phase1",
     "specs": "node scripts/specs.mjs",

@@ -39,19 +39,21 @@ From this directory, after the container is up:
 docker compose exec harness npm run ticket -- LEX-2293
 ```
 
-That starts the run and streams the log. If E2E User Journey TCs is still running, those lines print first, then this ticket. The same lines are on the harness process (`make logs`). Preflight signs in, Explore walks live UAT, Author writes specs, and Playwright runs them. Heal patches a drifted locator. UI/UX audit runs after that only when `QA_RUN_UX_AUDIT=true`. Set `QA_RUN_UX_AUDIT=false` to stop after functional QA. `docker compose down` stops the server and keeps the run volume.
+That starts the run and streams the log. When `QA_PHASE1_ON_START=true` (default), the server queues E2E User Journey TCs first, then this ticket; the CLI prints E2E lines, then Feature Specific TCs. Set `QA_PHASE1_ON_START=false` to run the ticket only. Container start never runs E2E. Preflight signs in. One session walks live UAT, writes a spec step only after it has done that step, and Playwright runs the suite. On a failure the same session fixes the locator, rewrites the step, creates the fixture, or removes a case it never reached. UI/UX audit runs after that only when `QA_RUN_UX_AUDIT=true`. Set `QA_RUN_UX_AUDIT=false` to stop after functional QA. Before sign-off, the passing journeys are copied into the matching `e2e test cases` folder. The next E2E User Journey run executes those files. `docker compose down` stops the server and keeps the run volume.
 
-Inside this suite the steps are Explore, Author, and Heal. Those names are in `.agents/skills/lexful-autonomous-agent-qa/SKILL.md`.
+Explore, Author, Heal, and Promote are steps in that one `qa` session. Entry point: `.agents/prompts/qa.md`. Full procedure: `.agents/skills/lexful-autonomous-agent-qa/SKILL.md` (listing hints in `references/listing-exploration-hints.md`).
 
 Before the coordinator starts, the server writes `e2e-coverage.md` into the run. That file lists the cases already in `e2e test cases` for search, asset crud, and document editing. Author does not write those baselines again. New cases cover the behavior this ticket adds or changes, including a surface that is not one of those three journeys. Each new test is tagged with one type (`@positive`, `@negative`, `@edge`) and one suite (`@bvt`, `@smoke`, `@sanity`, `@regression`). There is no fixed count.
 
-A product bug that remains after Heal is written to `bugs.md` in the run folder and copied into `report.md`. A skipped or deprecated test is not filed as a bug.
+A product bug that remains after Heal is written to `bugs.md` in the run folder and copied into `report.md`. A skipped, deprecated, or gap test is not filed as a bug. A gap is a case the walk never reached.
 
 ## E2E User Journey TCs
 
-Docker queues this before any ticket when `QA_PHASE1_ON_START=true`. It runs the specs already in `e2e test cases` against UAT. No Explore, no new specs, and no Linear call. The path is one argument, quotes included, because the folder name contains a space.
+E2E runs only when you start it (`npm run e2e` / `make e2e`) or when you start a ticket with `QA_PHASE1_ON_START=true`. It runs the specs in `e2e test cases` against UAT. No Explore, no new specs, and no Linear call.
 
-On startup the container signs in, runs that suite, and writes the log under `runs/phase-1/`. The same lines are printed on the harness process, so `make logs` shows each finished test. The folder name is the UTC start time and, when the run finishes, the pass and fail counts. Follow it with:
+One worker runs the pipeline in order: E2E (when queued) completes, then Feature Specific TCs for that ticket. While another run is in progress, new runs stay **queued**; `run.log` still shows queue lines, and the CLI prints `status queued` until the worker reaches your run. `docker compose logs -f harness` shows the same lines once execution starts (`echo_run`).
+
+Sign-in and the suite run write the log under `runs/phase-1/`. The folder name is the UTC start time and, when the run finishes, the pass and fail counts. Start E2E explicitly with:
 
 ```bash
 make e2e
@@ -66,7 +68,7 @@ A failure is classified by Heal only. Explore and Author are not called, and no 
 - Spec drift is patched in the existing spec or page object: a renamed locator, a locator that matches several elements, or an existing wait that expired while that control was already on the page. The edit is written into `e2e test cases/` on this machine, which is the suite Playwright runs. The same locator is not patched again once it is listed in `e2e test cases/changes.log`. The server appends each heal to that log and re-runs the suite only when a file changed, up to 3 heals.
 - A product bug is left in the spec and recorded in `report.md` and `triage-1.json` in the run folder. It is not sent to Linear.
 
-Set `QA_PHASE1_ON_START=false` in `.env` before `docker compose up` to skip the automatic run. `npm run e2e` still starts one.
+Set `QA_PHASE1_ON_START=false` in `.env` to skip E2E when you `npm run ticket`. `npm run e2e` always queues E2E on demand.
 
 Feature Specific TCs still use Linear for the context pack. E2E User Journey TCs do not.
 
@@ -99,7 +101,7 @@ runs/tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect/
   ux-report.html        UI/UX audit report
 ```
 
-E2E User Journey TCs do not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Feature Specific TCs stay in that attempt's `specs/` folder.
+E2E User Journey TCs do not get `specs/` or `explore/`. A locator heal is written into `e2e test cases/`, not into the run folder. Feature Specific TCs stay in that attempt's `specs/` folder. The journeys copied at sign-off are listed in `promoted.json` and live under `e2e test cases/`.
 
 `runs/regression/` and `runs/LEX-*/` are links to those folders for attempts that already existed. `runs/index.json` is the list the server uses. The default Stytch session is `runs/cache/stytch/session.json`, for the account named by `STYTCH_PERSONA` (`admin` unless that value changes). Do not commit `.env` or that file.
 

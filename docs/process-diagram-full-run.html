@@ -776,7 +776,7 @@
             </div>
             <div class="loop">
               <div class="card">
-                <h3>qa-healer, only</h3>
+                <h3>qa · E2E heal only</h3>
                 <p>Spec drift — a renamed locator, a locator that matches too much, or a wait that expired while the control was already there — is patched in the E2E store. A wrong product outcome is reported. The healer does not add a test and does not hide a bug.</p>
               </div>
               <div class="card">
@@ -825,7 +825,7 @@
               <strong>qa · coordinator</strong>
               <span>reads the ticket pack and the coverage already in the E2E store</span>
               <p style="color: #c4b5fd; font-size: 0.82rem;">
-                Delegates exploration, then authoring. Returns when the plan exists. Playwright stays with the server.
+                One session: Explore, Author, Heal, and Promote. Playwright stays with the server.
               </p>
             </div>
 
@@ -838,7 +838,7 @@
             <div class="fork">
               <article class="agent explorer">
                 <div class="order">1 · every ticket</div>
-                <div class="who">qa-explorer</div>
+                <div class="who">qa</div>
                 <h3>Explore</h3>
                 <p>Walks live UAT and writes what the ticket actually does.</p>
                 <ol>
@@ -849,7 +849,7 @@
               </article>
               <article class="agent author">
                 <div class="order">2 · after the map</div>
-                <div class="who">qa-author</div>
+                <div class="who">qa</div>
                 <h3>Author</h3>
                 <p>Writes specs for the new rows. Stays off the browser.</p>
                 <ol>
@@ -860,7 +860,7 @@
               </article>
               <article class="agent healer">
                 <div class="order">3 · only after a failure</div>
-                <div class="who">qa-healer</div>
+                <div class="who">qa</div>
                 <h3>Heal</h3>
                 <p>Same idea as the journey loop, on this run’s specs only.</p>
                 <ol>
