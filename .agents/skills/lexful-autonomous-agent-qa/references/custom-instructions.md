@@ -22,3 +22,9 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
   hour. Playwright retries a failed test once. A second failure is left for the healer. Space out runs.
 - **`waitUntil: 'networkidle'` is banned** — it caused multi-minute hangs. `domcontentloaded` + an
   explicit per-page wait.
+- **Environment is not product.** A CloudFront 403 "Request blocked", a listing stuck on "Row data is loading" on
+  every attempt, and a missing `*_FIXTURE_*` env var are environment failures. Retry once, class `spec` with
+  `environment` in the reason, and never file them. Create the fixture through the API or UI instead of reading an env var.
+- **One shell command per call.** `cmd1 && cmd2` can be denied by the permission rules and ends the session. Run them separately.
+- **Text with hidden spaces.** The selection bar renders `'1 selected'` as `1selected` in the DOM. Match with `\s*`, or use `toContainText`.
+- **Token budget.** `pr-brief.md` instead of `context-pack.json`. Snapshots to files, then grep. Probe output is already short.

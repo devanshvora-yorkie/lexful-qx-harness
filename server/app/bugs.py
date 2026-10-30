@@ -50,6 +50,56 @@ def publish_bugs(
     return True
 
 
+def publish_findings(
+    folder: Path,
+    *,
+    ticket: str,
+    run_id: str,
+    url: str,
+    build: str,
+    when: str | None = None,
+) -> int:
+    """Append API and diff-check findings from api-findings.json to bugs.md.
+
+    These come from probes, not from a failed Playwright test, so they are filed
+    even when every test passed. A finding needs evidence. A triage bug that cites `finding: <id>` already covers it. `confidence` is
+    `confirmed` (reproduced twice, or contradicts the API contract) or `suspected`.
+    """
+    data = _read_json(folder / "api-findings.json")
+    triage, _ = latest_triage(folder)
+    claimed = {str(b.get("finding")) for b in triage.get("bugs") or [] if isinstance(b, dict) and b.get("finding")}
+    kept: list[dict[str, Any]] = []
+    for item in data.get("findings") or []:
+        if not isinstance(item, dict) or _is_skipped(item):
+            continue
+        if not (item.get("evidence") and item.get("expected") and item.get("actual")):
+            continue
+        confidence = str(item.get("confidence") or "suspected").strip().lower()
+        if str(item.get("id") or "") in claimed:
+            continue
+        labels = [*(item.get("labels") or []), confidence]
+        kept.append({**item, "labels": labels, "failure": _tag(item.get("failure"), confidence)})
+    if not kept:
+        return 0
+    text = render_bugs(
+        kept,
+        ticket=ticket or run_id,
+        url=url,
+        build=build or "unknown",
+        when=when or datetime.now(timezone.utc).date().isoformat(),
+        cycle="1",
+    )
+    target = folder / "bugs.md"
+    existing = target.read_text(encoding="utf-8").rstrip() if target.is_file() else ""
+    target.write_text((existing + "\n\n---\n\n" if existing else "") + text, encoding="utf-8")
+    return len(kept)
+
+
+def _tag(value: Any, confidence: str) -> str:
+    text = str(value or "API finding").strip()
+    return text if confidence == "confirmed" else f"[suspected] {text}"
+
+
 def latest_triage(folder: Path) -> tuple[dict[str, Any], int]:
     files = sorted(folder.glob("triage-*.json"))
     if files:
@@ -73,7 +123,11 @@ def failure_kind(item: dict[str, Any]) -> str:
 
 def is_setup_failure(text: str) -> bool:
     """A spec that stopped because its own fixture was missing. That is not a product bug."""
-    return "fixture not configured" in text.lower()
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in ("fixture not configured", "request blocked", "cloudfront", "403 error")
+    )
 
 
 def collect_bugs(triage: dict[str, Any], still_failing: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:

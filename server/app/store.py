@@ -363,6 +363,9 @@ qa-result.json       passed, failed, skipped, and flaky counts
 manifest.json        status, model, heal count, and timestamps
 preflight.json       sign-in, Linear, and GitHub checks
 context-pack.json    ticket, pull request, and files gathered before the agent
+pr-brief.md          the short digest of the pack that the agent reads first
+api-probes.jsonl     every API probe the agent made, with status and shape
+api-findings.json    API and diff-vs-reality findings, filed into bugs.md
 e2e-coverage.md      checked-in search, asset crud, and document editing cases already run
 FEATURE.md           what the explorer observed on UAT, and which of those cases are new
 bugs.md              product bugs for this attempt, when a failure remains

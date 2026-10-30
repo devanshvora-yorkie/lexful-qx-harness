@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
@@ -57,6 +58,93 @@ def _session_expired(log_text: str) -> bool:
 
 def _bedrock_token() -> str:
     return (os.environ.get("AWS_BEARER_TOKEN_BEDROCK") or os.environ.get("BEDROCK_API_KEY") or "").strip()
+
+
+def write_cli_config(folder: Path) -> Path | None:
+    """Point playwright-cli at the Chromium that @playwright/test installed.
+
+    The CLI bundles its own Playwright build and looks for a different Chromium
+    revision. Without this file the agent loses minutes finding the executable.
+    """
+    probe = (
+        "import { chromium } from 'playwright';"
+        "import { existsSync } from 'node:fs';"
+        "const p = chromium.executablePath();"
+        "if (!existsSync(p)) process.exit(1); console.log(p);"
+    )
+    try:
+        done = subprocess.run(
+            ["node", "--input-type=module", "-e", probe],
+            cwd=get_settings().root, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    executable = done.stdout.strip().splitlines()[-1] if done.returncode == 0 and done.stdout.strip() else ""
+    if not executable:
+        return None
+    target = folder / "explore" / "pw-cli.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"browser": {"browserName": "chromium", "launchOptions": {
+        "headless": True, "executablePath": executable}}}, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
+def prepare_source(folder: Path) -> Path | None:
+    """Keep one read-only clone of the product repo for the agent to browse.
+
+    The token is passed per command and never written to the clone's config, so
+    the agent cannot read it. Each pull request of the run is fetched as
+    refs/heads/pr-<n>. The working tree is the primary PR when it is still open,
+    otherwise main. Returns None when git or GitHub is unavailable; the agent then
+    falls back to grepping the context pack.
+    """
+    settings = get_settings()
+    pack = {}
+    try:
+        pack = json.loads((folder / "context-pack.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    org = os.environ.get("GITHUB_ORG", "Lexful-ai")
+    repo = os.environ.get("GITHUB_REPO", "docu-stack")
+    if not token:
+        return None
+    clone = settings.root / "runs" / "source" / repo
+    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    git = ["git", "-C", str(clone), "-c", f"http.extraHeader=Authorization: Basic {auth}"]
+
+    def run(args: list[str], timeout: int = 300) -> bool:
+        done = subprocess.run(git + args, capture_output=True, text=True, timeout=timeout)
+        return done.returncode == 0
+
+    try:
+        if not (clone / ".git").is_dir():
+            clone.mkdir(parents=True, exist_ok=True)
+            run(["init", "-q"]) and run(["remote", "add", "origin", f"https://github.com/{org}/{repo}.git"])
+        pulls = [p for p in pack.get("pullRequests") or [] if p.get("number")]
+        specs = ["+refs/heads/main:refs/remotes/origin/main"] + [f"+refs/pull/{p['number']}/head:refs/heads/pr-{p['number']}" for p in pulls]
+        if not run(["fetch", "-q", "--force", "origin", *specs], timeout=600):
+            return None
+        primary = next((p for p in pulls if p["number"] == pack.get("primaryPr")), None)
+        ref = f"pr-{primary['number']}" if primary and primary.get("state") == "open" else "origin/main"
+        if not run(["checkout", "-q", "-f", "--detach", ref]):
+            return None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    refs = ", ".join(f"pr-{p['number']} ({'merged' if p.get('merged') else p.get('state')})" for p in pulls)
+    (folder / "source-info.md").write_text(
+        f"Read-only clone: {_relative_to_root(clone)}\nWorking tree: {ref}\nBranches: main as origin/main; {refs or 'no PRs'}\n"
+        "Browse with Read, Grep, Glob, and git -C <clone> log|show|blame|grep|diff. Never checkout, fetch, commit, or edit.\n",
+        encoding="utf-8",
+    )
+    return clone
+
+
+def _relative_to_root(path: Path) -> str:
+    try:
+        return str(path.relative_to(get_settings().root))
+    except ValueError:
+        return str(path)
 
 
 def _opencode_env(run_dir: Path) -> dict[str, str]:

@@ -13,7 +13,9 @@ Use the model. One `qa` session owns functional QA: Explore, Author, Heal, and P
 
 `npm run e2e` runs E2E User Journey TCs on demand. That run does not call Linear. With `QA_PHASE1_ON_START=true` (default), `npm run ticket` queues E2E before the ticket; `false` skips E2E for tickets. Container start never auto-runs E2E.
 
-Stay inside this directory. Do not read `~/Downloads`, `~/Desktop`, `~/Documents`, or any other checkout. Do not clone `docu-stack`.
+`pr-brief.md` is the context pack without its patches. The server keeps a read-only clone of the product repo under `runs/source/` (PR branches fetched as `pr-<n>`, token never stored) and names it in `source-info.md`; the agent browses it with Read, Grep, Glob, and `git log|show|blame|grep|diff`, and writes `feature-map.md` before it plans tests. A backend ticket also uses the API lane: `node scripts/api-probe.mjs [--persona all] GET /v1/...` calls UAT with the saved sessions. Findings go in `api-findings.json` (each with an `id`); the server files them in `bugs.md` even when every test passes. Recreate the container after changing `.env`.
+
+Stay inside this directory. Do not read `~/Downloads`, `~/Desktop`, `~/Documents`, or any other checkout. Do not clone `docu-stack` yourself; use the read-only clone the server made.
 
 - Linear access is the named ticket plus the parent, children, and related issues on that ticket.
 - GitHub access is the pull requests that mention that ticket, and only the files in those pull requests.

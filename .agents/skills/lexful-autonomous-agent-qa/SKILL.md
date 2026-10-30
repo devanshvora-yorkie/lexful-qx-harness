@@ -14,9 +14,12 @@ One **`qa`** session owns Explore, Author, Heal, and Promote. Do not spawn subag
 
 | Step | Result |
 |------|--------|
-| Explore | `FEATURE.md` plus `explore/flow.md`. A step is written only after `playwright-cli` has done it |
-| Author | POM and specs for controls the flow recorded. A control that was not seen is a gap, not a test |
-| Heal | Fix the locator, rewrite the step to the control that was seen, create the missing fixture, or remove the case as a gap. A product bug is only a step this session already completed where the page then did the wrong thing |
+| Brief | Read `pr-brief.md`: criteria, PR text, changed file paths. Choose the lane from those paths (§1g) |
+| Understand | Browse the read-only clone, write `feature-map.md` (§1i-b). Cases come from it |
+| Explore | `FEATURE.md` plus `explore/flow.md`. A UI step is written only after `playwright-cli` has done it. An API step only after `api-probe` has returned it |
+| Probe | **API lane.** Call the changed endpoints, per persona, and compare the answer with what the diff and ticket say. Findings go to `api-findings.json` |
+| Author | POM and specs for controls the flow recorded, and API specs for contracts the probes confirmed. A control that was not seen is a gap, not a test |
+| Heal | Fix the locator, rewrite the step to the control that was seen, create the missing fixture, or remove the case as a gap. A wrong result after a completed step is a bug |
 | Promote | Copy up to three **passing** journeys into `e2e test cases` using `playwright/test-outcomes.json` |
 
 UI/UX audit is not a step in this skill. The server runs it after functional QA only when `QA_RUN_UX_AUDIT` is true. Set that to false to run QA only.
@@ -27,6 +30,7 @@ Project conventions live in `references/custom-instructions.md`.
 
 - The server has already written `runs/<run-id>/preflight.json` with `"ok": true` and a `context-pack.json` beside it
 - `appUrl` in the context pack is the live target
+- `pr-brief.md` sits beside the pack. Read it, not the pack
 - Workspace exists with target repository
 - `references/custom-instructions.md` in this skill's directory (read it at Step 0; it is not auto-loaded)
 - No Using Browser-use tool, or preview-pane. or chrome remote-debugging. use playwright-cli only.
@@ -43,7 +47,7 @@ An E2E User Journey TCs run is not a ticket. The server message says `E2E User J
 
 | Step | Action |
 |------|--------|
-| Step 0 | Read `runs/<run-id>/preflight.json` (`ok: true`) and `context-pack.json`. Do not call Linear, GitHub, or `/auth/password` yourself |
+| Step 0 | Read `runs/<run-id>/preflight.json` (`ok: true`), `pr-brief.md`, and `e2e-coverage.md`. Do not call Linear, GitHub, or `/auth/password` yourself |
 | Step 0b | Use `appUrl` from the context pack. Do not start a dev server. A 403 does not change the target |
 | Explore | Walk the live app and append each successful step to `explore/flow.md`. Write `FEATURE.md` from those steps |
 | Author | Generate the POM and the specs from the flow. Open the app when a selector is missing. Leave out any control the flow did not reach |
@@ -56,7 +60,7 @@ An E2E User Journey TCs run is not a ticket. The server message says `E2E User J
 
 ### 0. Pre-Workflow
 
-0. Read the run directory in the user message. If `preflight.json` is missing or `"ok"` is not true, stop. Do not run `scripts/preflight.mjs` and do not call Linear, GitHub, or `/auth/password`. On success, read `context-pack.json` and `e2e-coverage.md`, and nothing else from Linear or GitHub. Acceptance criteria say what to test. `e2e-coverage.md` lists the cases already run for search, asset crud, and document editing. Do not write those again. There is no minimum and no maximum number of new tests. The number is the uncovered behavior of this ticket. `pullRequests[].fileDetails` are the only product files you may use. `connectedTickets` are the only other issues. Do not clone the product repo and do not read folders outside this one. Do exploration, specs, heals, and promote in this session.
+0. Read the run directory in the user message. If `preflight.json` is missing or `"ok"` is not true, stop. Do not run `scripts/preflight.mjs` and do not call Linear, GitHub, or `/auth/password`. On success, read `pr-brief.md` and `e2e-coverage.md`. `context-pack.json` is about 1 MB of diffs: never open it whole, grep it for one file or symbol when the brief is not enough. Nothing else from Linear or GitHub. Acceptance criteria say what to test. `e2e-coverage.md` lists the cases already run for search, asset crud, and document editing. Do not write those again. There is no minimum and no maximum number of new tests. The number is the uncovered behavior of this ticket. `pullRequests[].fileDetails` are the only product files you may use. `connectedTickets` are the only other issues. Do not clone the product repo yourself and do not read folders outside this one. When `source-info.md` exists, the server has made a read-only clone under `runs/source/`; browse it as `references/oracle-from-diff.md` describes. Do exploration, specs, heals, and promote in this session.
 1. Read `references/custom-instructions.md` for project conventions and known pitfalls.
 2. Read any agent instruction files in order: `AGENTS.md`, `CLAUDE.md`, `copilot-instructions.md`, `CURSOR.md`.
 3. Read `playwright.config.ts` to understand:
@@ -84,7 +88,7 @@ You may not write `FEATURE.md` until you have navigated the app in this run and 
 
 ### 1. Explore: UI Exploration & Test Planning
 
-**1a. Explore the Application** — Preflight already installed the tools. Call `node_modules/.bin/playwright-cli`. Chromium is already at `PLAYWRIGHT_BROWSERS_PATH` (`/ms-playwright` in the container). Do not run `--help` or `--version`. Do not run `playwright install`, `install-browser`, or look for `/opt/google/chrome`. Load `runs/cache/stytch/session.json` with `state-load`, then open `appUrl`. That session is admin. When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer`, then `state-load` `runs/cache/stytch/<persona>.json`. Do not read the file and do not call `/auth/password`. After each interaction succeeds, append that one step to `explore/flow.md`. A click that fails is fixed before the next step is written. Record the path, the control, the form field, the data dependency, and the persona in `FEATURE.md`. A control this walk did not reach is a Gap in `FEATURE.md`. It is not a planned case. Before you finish the walk, delete every record this session created and append those cleanup steps to `explore/flow.md`. A gap that the ticket or its pull request requires stays in Gaps. The server keeps the run in revision while that gap is open.
+**1a. Explore the Application** — Preflight already installed the tools. Call `node_modules/.bin/playwright-cli --config=<run dir>/explore/pw-cli.json` (the server wrote that file; it points at the installed Chromium). Chromium is already at `PLAYWRIGHT_BROWSERS_PATH` (`/ms-playwright` in the container). Do not run `--help` or `--version`. Do not run `playwright install`, `install-browser`, or look for `/opt/google/chrome`. Load `runs/cache/stytch/session.json` with `state-load`, then open `appUrl`. That session is admin. When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer`, then `state-load` `runs/cache/stytch/<persona>.json`. Do not read the file and do not call `/auth/password`. After each interaction succeeds, append that one step to `explore/flow.md`. A click that fails is fixed before the next step is written. Record the path, the control, the form field, the data dependency, and the persona in `FEATURE.md`. A control this walk did not reach is a Gap in `FEATURE.md`. It is not a planned case. Before you finish the walk, delete every record this session created and append those cleanup steps to `explore/flow.md`. A gap that the ticket or its pull request requires stays in Gaps. The server keeps the run in revision while that gap is open.
 
 Track console errors, info messages, and network API calls. When an interaction triggers an API call, record the method, URL pattern, and the action in the API Endpoints section of `FEATURE.md`. Author uses that list for `page.waitForResponse`. Track API calls with `playwright-cli requests`. The `--static` flag is boolean, so `--static=false` crashes the CLI; the default already excludes static assets.
 
@@ -113,7 +117,7 @@ Analyze the API request and response and expand the scenarios from what the resp
 - URL, role-based access, data models
 - **API Endpoints section** — List all captured API calls with method, URL pattern, and which action triggers it. Include the call before and after each action so Author can wait on it
 - **Action coverage matrix** — Each behavior this ticket changes that the walk reached. Cite a covered id, or mark `[ ]` for a new case. A control the walk did not reach goes under Gaps, not in this matrix
-- Planned-cases table: Id, Type (`positive`, `negative`, `edge`), Suite (`BVT`, `Smoke`, `Sanity`, `Regression`), Persona (`admin`, `support`, or `viewer`), Title, Status (`covered` with an id from `e2e-coverage.md`, or `new`)
+- Planned-cases table: Id, Type (`positive`, `negative`, `edge`), Suite (`BVT`, `Smoke`, `Sanity`, `Regression`), Persona (`admin`, `support`, or `viewer`), Title, Oracle (where the expected result comes from: PR claim, AC line, diff, or neighboring source; see §1i-b), Status (`covered` with an id from `e2e-coverage.md`, or `new`)
 - Test coverage plan with checkboxes (`[x]`/`[ ]`) tracking which new tests are written and verified
 - Detailed selectors from a fresh snapshot
 - Execution commands
@@ -121,6 +125,51 @@ Analyze the API request and response and expand the scenarios from what the resp
 This is the single source of truth for what each module tests and its current status.
 
 **1f. Approval Gate** — When a person is driving the session, present the FEATURE.md plan and wait for approval. When the server started the run, skip the gate and continue to Author in this session. The server runs the suite after the specs exist.
+
+### 1g. Lane and personas
+
+Choose the lane from the changed file paths in `pr-brief.md`. Paths under `apps/*/src` are UI. Paths under `services/*/src` (routes, schemas, openapi) are API. Both present is `ui+api`. A ticket whose acceptance criteria name roles, permissions, or who may do what needs the persona matrix.
+
+- **ui** — the UI walk above is the whole job.
+- **api** — the PRs change services only. Do a short UI smoke (one page that shows the data) and spend the rest of the session in the API lane. A UI-only plan for a backend ticket is the failure this section exists to prevent.
+- **ui+api** — do both. Probe first (cheap), then walk the UI for what the probes showed is live.
+
+When the ticket needs the persona matrix, every probe and every UI case that depends on role runs as admin, support, and viewer (`--persona all`). Record the three answers side by side in `FEATURE.md`. Every cell is filled: probe it, or write why it cannot be probed (for example `no such control for this role`). A cell that says only `not probed` means the work is unfinished. A role that sees something another role must not is a bug candidate.
+
+### 1h. API lane
+
+Read `references/api-lane.md` when the lane includes `api`. Find the routes by grepping the pack for the added route or OpenAPI path lines in the changed files, and the error codes and limits by grepping the same patches. Summary: `node scripts/api-probe.mjs [--persona all] GET /v1/...` calls the API with the saved session and prints one compact line per call. Run each changed route at least once per persona, then probe the contract: missing and malformed input, wrong ids, limits, paging, and the error codes the brief lists. Every probe is logged to `api-probes.jsonl`.
+
+### 1i. Diff vs reality
+
+The PR diff and body say what the build should do. UAT says what it does. Compare them, claim by claim, and treat every mismatch as a finding. Do this before you plan tests.
+
+1. List the behavior claims: the PR body bullets, "refused with X on legacy", "returns Y when Z", and the titles of the tests the PR adds (grep the pack for `it(` and `test(` in the PR's test files).
+2. For each claim you can reach, probe it (API lane) or walk it (UI lane).
+3. Classify the result:
+   - **Match** — a candidate for a regression test.
+   - **Not deployed** — the route answers 404 `Route ... not found`, or the UI shows the pre-PR build. Record it once as an environment note in `FEATURE.md`. It is not a bug and not a test. Do not keep probing that PR.
+   - **Mismatch** — the endpoint exists but behaves differently from the claim (wrong status or error code, a filter that does nothing, a field that is missing, a role that gets in when the claim says refused). This is a **finding**. Never write a test that asserts the wrong behavior as correct.
+4. A finding has `expected` (quote the PR, ticket, or OpenAPI line), `actual` (status and shape from the probe), and `evidence` (the `api-probes.jsonl` line or snapshot). Reproduce it a second time before you set `confidence: "confirmed"`. With one observation, use `"suspected"`.
+
+Write all findings to `api-findings.json` as `{"findings":[{"id","area","failure","severity","severityReason","description","steps","expected","actual","rootCause","evidence","confidence"}]}`. `severity` is Critical, High, Medium, or Low. `rootCause` may say what the diff suggests ("PR #2172 adds the filter only for enforced accounts"), or `Unknown`. The server files them in `bugs.md` whether or not Playwright passes. Write the file before you hand off.
+
+Not findings: a CDN 403 "Request blocked" that clears on retry (`api-probe` retries once and tags it), a 404 for a route the diff adds but UAT does not have, a `NOT_ENABLED` answer the PR says legacy accounts get, a missing fixture.
+
+### 1i-b. Understand the feature before you plan tests
+
+A test written only from what the UI showed asserts today's behavior and can never catch a bug. Read `references/oracle-from-diff.md` and follow it: browse the read-only clone (callers, the path to the data, shared parts, neighboring rules, the authors' tests, history), write `feature-map.md`, and derive every case from a numbered behavior or risk in that map with an oracle. No oracle, no case. Then test the map's Risks as hypotheses and file a reproducible mismatch in `api-findings.json` with an `id`.
+
+### 1j. Budget
+
+The run costs tokens on every line the model reads. Keep it small:
+
+- Read the brief, not the pack. Grep, do not cat.
+- Save snapshots to files and grep them. Never print a whole snapshot.
+- One shell command per call. Do not chain with `&&` or `;`.
+- Probe output is already trimmed. Do not pipe it through more tools.
+- Stop exploring a surface once the brief's claims for it are checked. No exhaustive walks.
+- Do not re-read a file you just wrote.
 
 ### 2. Author: Test Generation
 
@@ -159,7 +208,9 @@ test.describe('LEX-3717 documents — smoke', () => {
 })
 ```
 
-**2e. Hand off** — Write `planned-specs.json` in the run directory. `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run that official suite yourself. Replaying one step with `playwright-cli` is part of writing the spec.
+**2d. API specs** — For a contract a probe confirmed (status code, error code, response keys, or a role boundary), write a Playwright `request` test, no browser: build the context with `playwright.request.newContext({ extraHTTPHeaders: { Cookie, 'X-Account-Id' } })` using the cookies from `getLexfulCookies(persona)` in `auth-helper`. Assert the status and the error code, not the whole body. Tag it like any other test. Do not write one that asserts a mismatch as correct; file that as a finding.
+
+**2e. Hand off** — Write `planned-specs.json` and `api-findings.json` (an empty `findings` array is fine) in the run directory. `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run that official suite yourself. Replaying one step with `playwright-cli` is part of writing the spec.
 
 ### 3. E2E User Journey heal
 
@@ -171,11 +222,11 @@ Write `triage.json` as `{"failures":[...],"bugs":[...]}`. Every failure appears 
 
 **spec** — the checked-in test is wrong and product behavior under test is unchanged: renamed locator, strict-mode match, or an existing wait that expired while the snapshot already shows that control. No `waitForTimeout`. No `playwright.config.ts` edits. Leave the expected outcome.
 
-**bug** — do not edit the spec: wrong loaded value, blocked request was sent, or error page from product failure.
+**bug** — do not edit the spec: wrong loaded value, blocked request was sent, or error page from product failure. Add `confidence` (`confirmed` after a second reproduction, otherwise `suspected`).
 
 **Environment:** UAT CloudFront **403 Request blocked** that clears on reload is not a product bug. Class **spec**, add navigation retry per custom-instructions, do not add to `bugs`.
 
-If you are unsure, class **bug** and do not edit. The server writes `bugs.md`. Do not run the suite.
+If you are unsure, class **bug** with `confidence: "suspected"` and do not edit. The server writes `bugs.md`. Do not run the suite.
 
 ### 4. Feature Specific Heal
 
@@ -187,9 +238,10 @@ For each failing test, replay the step, then do one of these. Stop after 3 attem
 2. The step targeted the wrong surface: a tab, a refetch, or a role's control that this session did not see. Rewrite the test to the control the walk showed, or remove the test. Class it `gap`. Say why in `triage.json`. Do not add it to `bugs`.
 3. The fixture was missing. Create it through the API or the UI and point the test at it. Class it `spec`.
 4. An existing wait expired while the snapshot already shows that control. Raise that timeout. Do not add `waitForTimeout`. Do not edit `playwright.config.ts`.
-5. This session completed the step, and the page then showed the wrong loaded value, sent a request the step requires to be blocked, or returned an error page. Class it `bug`. Do not change the expected outcome. Add one object to `bugs`. Several tests for the same defect go on that one object, with steps, expected, actual, evidence, severity, and `severityReason`.
+5. This session completed the step, or a probe returned the answer, and the result was wrong: the wrong loaded value, a request sent that the step requires to be blocked, an error page, a wrong status or error code, a role that got in or was kept out against the PR or ticket. Class it `bug`. Do not change the expected outcome. Add one object to `bugs`. If `api-findings.json` already has that defect, do not repeat it: put `"finding": "<id>"` on the bug object instead of new text. Several tests for the same defect go on that one object, with steps, expected, actual, evidence, severity, `severityReason`, and `confidence`.
+6. The environment failed, not the product: a CloudFront 403 "Request blocked" that clears on retry, a listing that stalls with placeholder rows on every attempt, or a missing fixture env var. Class it `spec`, retry navigation once, and say `environment` in the reason. Do not add it to `bugs`. If it persists on all 3 attempts, leave the test failing and say so in `triage.json`; the server will not file it.
 
-If you are unsure, class it `gap`, remove the test or rewrite it to a step you completed, and do not add a `bugs` entry. A gap is not a product bug.
+**Unsure?** Re-run the step or the probe once. Same wrong result twice: `bug`, `confidence: "confirmed"`. Wrong once, cannot reproduce: `bug`, `confidence: "suspected"`, keep the evidence. Only a control you never reached is a `gap`. A gap is not a verdict on the product, and a suspected bug is not a failure to find one.
 
 Write `triage.json` as `{"failures":[...],"bugs":[...]}`. `class` is `spec`, `gap`, or `bug`. `action` is `patched`, `removed`, or `reported`. Do not run the official suite. The server re-runs the spec files you changed. A required gap that you removed from the spec stays in `FEATURE.md` and keeps the run in revision.
 

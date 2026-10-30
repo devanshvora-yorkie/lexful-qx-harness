@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app import runners, store
-from app.bugs import failure_kind, latest_triage, publish_bugs
+from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings
 from app.coverage import write_coverage_index
 from app.logbook import Logbook, echo_run, plain
 from app.settings import get_settings
@@ -487,6 +487,11 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     book.phase("coordinator")
     covered = write_coverage_index(settings.root / "e2e test cases", folder / "e2e-coverage.md")
     book.row("server", "coverage", f"{covered} checked-in cases")
+    source = runners.prepare_source(folder)
+    book.row("server", "source", "read-only clone ready" if source else "no clone, agent greps the context pack")
+    cli_config = runners.write_cli_config(folder)
+    if cli_config:
+        book.row("server", "browser", "playwright-cli config written")
     prompt = _lead_prompt(folder, ticket, preflight)
     (folder / "prompt.md").write_text(prompt + "\n", encoding="utf-8")
     started = time.time()
@@ -832,7 +837,13 @@ def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
         "Each new test has one type tag (@positive, @negative, or @edge) and one suite tag (@bvt, @smoke, @sanity, or @regression).",
         "A test that passes by skipping the assertion does not count. Do not write a skipped or deprecated test.",
         f"Preflight is already ok: {relative}/preflight.json",
-        f"Context pack: {relative}/context-pack.json",
+        f"Read {relative}/pr-brief.md first. It is the context pack without the patches: criteria, PR text, and changed file paths.",
+        f"{relative}/source-info.md names a read-only clone of the product repo (when it exists). Browse it with Read, Grep, Glob, and git log/show/blame/grep to understand the feature before you plan tests. Follow references/oracle-from-diff.md and write {relative}/feature-map.md.",
+        f"{relative}/context-pack.json holds the full diffs (about 1 MB). Never open it whole. Grep it for one file or symbol.",
+        "Choose the lane from the changed file paths. For API code the API probe is the main way to find bugs: `node scripts/api-probe.mjs [--persona all] GET /v1/...`. Follow the API lane and Diff-vs-reality sections of the skill.",
+        f"Write API and diff findings to {relative}/api-findings.json. The server turns them into bugs.md even when every test passes.",
+        f"playwright-cli: always pass --config={relative}/explore/pw-cli.json. It points at the installed Chromium. Do not look for a browser.",
+        "Run one shell command per call. Do not chain commands with && or ;, because a chained call can be denied and ends the session.",
         "Auth cookies: runs/cache/stytch/session.json for the default persona, admin.",
         "When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer` before browsing as that user.",
         "That writes runs/cache/stytch/<persona>.json. Do not read the file. Load it with playwright-cli state-load.",
@@ -962,7 +973,7 @@ def _heal_prompt(
         "A gap is a case the walk never reached. Remove or rewrite that test and leave the reason in FEATURE.md Gaps. Do not put it in bugs.",
         "A behavior this ticket requires stays a gap on the record. Removing the test does not make the run a pass.",
         "A bug is a step this session completed where the page then did the wrong thing. Do not change that expected outcome.",
-        "If you are unsure, class it gap and do not file a bug.",
+        "If a completed step or a probe showed the wrong result and you cannot say why, file it as a bug with confidence suspected and keep the evidence. A gap is only a control you never reached.",
         "Add a bugs array to triage.json, one object per product defect. The server writes bugs.md from it.",
         "Do not put a skipped, deprecated, or gap test in bugs.",
         "Before you return, delete every record this session created.",
@@ -1193,7 +1204,7 @@ def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> 
     triage, cycle = latest_triage(folder)
     pack = _read_json(folder / "context-pack.json")
     url = str(pack.get("appUrl") or get_settings().qa_url)
-    return publish_bugs(
+    filed = publish_bugs(
         folder,
         ticket=str(row.get("ticket") or ""),
         run_id=str(row.get("id") or folder.name),
@@ -1204,6 +1215,14 @@ def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> 
         still_failing=failed_tests(_read_json(folder / "playwright" / "results.json")),
         cycle=cycle,
     )
+    probed = publish_findings(
+        folder,
+        ticket=str(row.get("ticket") or ""),
+        run_id=str(row.get("id") or folder.name),
+        url=url,
+        build=str(row.get("sha") or "unknown"),
+    )
+    return filed or probed > 0
 
 
 def _healer_hid_a_bug(folder: Path) -> list[str]:

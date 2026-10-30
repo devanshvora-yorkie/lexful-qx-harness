@@ -280,3 +280,4 @@ def internal_persona(body: PersonaBody, request: Request) -> dict[str, Any]:
     if code != 0:
         raise HTTPException(status_code=502, detail=detail or "could not sign in")
     return {"success": True, "persona": name, "line": detail}
+

@@ -10,6 +10,7 @@ import {
   writeJson,
 } from './harness-env.mjs';
 import { createCliRun, updateIndex } from './run-store.mjs';
+import { writeBrief } from './pr-brief.mjs';
 
 export async function buildContext({ ticket, pr, outDir }) {
   const errors = [];
@@ -52,6 +53,11 @@ export async function buildContext({ ticket, pr, outDir }) {
   if (!outDir) throw new Error('buildContext requires outDir');
   const file = path.join(outDir, 'context-pack.json');
   writeJson(file, pack);
+  try {
+    writeBrief(outDir);
+  } catch (err) {
+    pack.contextErrors.push({ source: 'brief', reason: 'pr_brief_failed', detail: err.message });
+  }
   return { file, pack };
 }
 
