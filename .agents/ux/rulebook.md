@@ -147,7 +147,7 @@ Rules: A2, A4, A6, B6, D5, E3, E4, plus BP-100/BP-101.
 | Old S3 (noticeable friction, task still smooth) | **New S2** | |
 | Old S4 (cosmetic/minor polish) | **New S3** | |
 
-The pattern library entries that name a severity now use this S0–S3 scale. Read any remaining "S1–S4" label elsewhere in this kit through the table above.
+Until each existing finding is individually re-reviewed, read any "S1–S4" label elsewhere in this kit through this table rather than assuming it already matches the new scale.
 
 `[RESOLVED Oct 5]` "Severity-1" in the SOW maps to the new **S0 or S1** depending on whether it's a total block or a goal-blocking issue with the feature still reachable.
 

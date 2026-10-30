@@ -56,6 +56,7 @@ class Settings:
     qa_url: str
     phase1_on_start: bool  # QA_PHASE1_ON_START: queue E2E before each ticket, not on container boot
     run_ux_audit: bool = True
+    heal_fresh_session: bool = True  # QA_HEAL_FRESH_SESSION: heals read the run files, not the Explore conversation
 
 
 def get_settings() -> Settings:
@@ -78,5 +79,6 @@ def get_settings() -> Settings:
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
         phase1_on_start=_flag("QA_PHASE1_ON_START", default=True),
         run_ux_audit=_flag("QA_RUN_UX_AUDIT", default=True),
+        heal_fresh_session=_flag("QA_HEAL_FRESH_SESSION", default=True),
     )
 

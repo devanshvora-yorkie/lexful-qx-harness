@@ -9,7 +9,7 @@
 
 meta:
   version: 0.6.0
-  source_docs: [.agents/ux/rulebook.md, .agents/ux/pattern-library.md]
+  source_docs: [Lexful_UX_Rulebook_v0.5, Lexful_Bad_UX_Pattern_Library_v0.6]
   environment: UAT only, demo/synthetic data only
   default_persona: Support        # technician role. Use Admin only for admin screens, Viewer for read-only checks
   accessibility_bar: WCAG 2.1 AA
@@ -44,7 +44,7 @@ meta:
   solution_guidance:               # used to write the Developer Implementation / Design Rationale parts of a solution (no visual mocks)
     - shadcn_hint names the implementation (shadcn/ui component); fluent_hint gives the Fluent design rationale. Use both as text in the ticket's solution, never as an image.
     - "Direction (Oct 13): shadcn/ui components with Fluent-aligned design. Authority order: Lexful Storybook and style guide, then Fluent, then shadcn defaults."
-    - Confirm component props in the official docs, and run the quick stack check first (see .agents/skills/design-system).
+    - Confirm component props in the official docs, and run the quick stack check first (see design-system).
   output_rules:
     - Every finding must cite a check id or rule ref. No reference = discard.
     - Low-confidence findings go in the report only, never to Linear.

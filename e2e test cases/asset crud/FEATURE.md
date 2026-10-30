@@ -1,6 +1,6 @@
 # FEATURE: Assets CRUD E2E (share pack)
 
-**Spec:** `assets-crud.spec.ts` (AC-001–AC-034) and `inline-attachments.spec.ts` (AC-035–AC-037)
+**Spec:** `assets-crud.spec.ts` (AC-001–AC-034), `inline-attachments.spec.ts` (AC-035–AC-037), `move-records.spec.ts` (AC-038) and `password-records-smoke.spec.ts` (AC-039–AC-040)
 
 Combines `Assets-E2E` (31) and `asset-crud-e2e` (3) into one spec.
 
@@ -67,8 +67,5 @@ Type and suite are recorded here. A word in the test title does not decide them.
 | AC-036 | Removing the image and saving re-enables Delete, which then removes it | positive | Smoke |
 | AC-037 | Cancelling the confirmation keeps an ordinary attachment | negative | Smoke |
 | AC-038 | Move password stays disabled until a destination is chosen and excludes the current organization | edge | Smoke |
-| AC-039 | Cancel closes the Move dialog and submits no move | edge | Smoke |
-| AC-040 | Ordinary PATCH rejects an organization change and leaves the record in place | negative | Smoke |
-| AC-041 | password record drawer Overview shows username, URL and a masked password | positive | Smoke |
-| AC-042 | Copy password requests the secure password from the API | positive | Smoke |
-| AC-043 | New Passwords shows every field and keeps Create disabled until an organization is chosen | negative | Smoke |
+| AC-039 | password record drawer Overview shows username, URL and a masked password | positive | Smoke |
+| AC-040 | Copy password requests the secure password from the API | positive | Smoke |

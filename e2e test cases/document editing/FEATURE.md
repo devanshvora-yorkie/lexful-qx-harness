@@ -8,7 +8,9 @@
 - **Spec files** (this folder)
   - `doceditspec.spec.ts` — TC-DOC-001 … TC-DOC-010
   - `doceditspec-2.spec.ts` — TC-DOC-011 … TC-DOC-013
-- **Page objects** (this folder): `document-pom.ts`, `assets-list-pom.ts`, `document-fixtures.ts`, `document-session.ts`
+  - `doceditspec-3.spec.ts` — TC-DOC-014 … TC-DOC-015 (code block highlighting, smoke; promoted from LEX-3800)
+  - `doceditspec-5.spec.ts` — TC-DOC-016 (Lex panel Cancel guard, regression; promoted from LEX-3518)
+- **Page objects** (this folder): `document-pom.ts`, `assets-list-pom.ts`, `document-fixtures.ts`, `document-session.ts`, `code-block-pom.ts` (code block highlighting, LEX-3800)
 - **Auth:** `../../auth-helper`. App paths are relative to `QA_ENV_URL`. Google SSO is disabled.
 
 ---
@@ -154,6 +156,9 @@ Legend: `[x]` covered by a scripted test · `[ ]` not covered (see §7).
 | TC-DOC-011 | Discard a staged rename leaves the record name unchanged | edge | Regression | Medium | `doceditspec-2.spec.ts` |
 | TC-DOC-012 | Cancel the body editor keeps the stored content | edge | Regression | Medium | `doceditspec-2.spec.ts` |
 | TC-DOC-013 | Clear an expiry date removes only the expiry | edge | Regression | Medium | `doceditspec-2.spec.ts` |
+| TC-DOC-014 | A saved PowerShell block is highlighted and labelled in the read-only document | positive | Smoke | High | `doceditspec-3.spec.ts` |
+| TC-DOC-015 | A block with no language stays plain in the read-only document | edge | Smoke | Medium | `doceditspec-3.spec.ts` |
+| TC-DOC-016 | Cancel in the Lex instruction box returns to the editor with the body unchanged | edge | Regression | Medium | `doceditspec-5.spec.ts` |
 
 ### Coverage checklist
 

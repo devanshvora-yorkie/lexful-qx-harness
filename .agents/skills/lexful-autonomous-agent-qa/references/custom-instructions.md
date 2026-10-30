@@ -28,3 +28,4 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
 - **One shell command per call.** `cmd1 && cmd2` can be denied by the permission rules and ends the session. Run them separately.
 - **Text with hidden spaces.** The selection bar renders `'1 selected'` as `1selected` in the DOM. Match with `\s*`, or use `toContainText`.
 - **Token budget.** `pr-brief.md` instead of `context-pack.json`. Snapshots to files, then grep. Probe output is already short.
+- **Batch browser steps.** One `run-code` script per flow segment returning compact JSON, one snapshot per new state (saved to a file and grepped). Every extra tool call re-reads the whole conversation.

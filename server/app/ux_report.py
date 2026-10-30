@@ -1,17 +1,16 @@
-"""Render the UX audit HTML report from the auditor's JSON."""
+"""Score the UX audit from the auditor's JSON and render ux-report.html with the kit's generator."""
 
 from __future__ import annotations
 
-import html
 import json
-import re
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATE = ROOT / ".agents" / "skills" / "ux-audit" / "audit-preview.html"
-GAUGE = {"PASS": "#3f6212", "PASS WITH ADVISORIES": "#b45309", "BLOCKING FAIL": "#9f1239"}
+GENERATOR = ROOT / "scripts" / "generate_ux_report.py"
 
 PENALTY = {"S0": 40, "S1": 25, "S2": 10, "S3": 3, "O": 0}
 SEVERITY_ORDER = ("S0", "S1", "S2", "S3", "O")
@@ -50,9 +49,7 @@ def read_scorecard(path: Path) -> dict[str, Any]:
 def score_findings(findings: list[dict[str, Any]]) -> tuple[dict[str, int], int, str]:
     counts = {key: 0 for key in SEVERITY_ORDER}
     for item in _unique_findings(findings):
-        severity = str(item.get("severity") or "O").strip().upper()
-        if severity not in counts:
-            severity = "O"
+        severity = _scored_severity(item)
         counts[severity] += 1
     deducted = sum(counts[key] * PENALTY[key] for key in SEVERITY_ORDER)
     score = max(0, 100 - deducted)
@@ -86,7 +83,24 @@ def rubric(counts: dict[str, int], score: int, verdict: str) -> str:
     )
 
 
+def _resolved(item: dict[str, Any]) -> bool:
+    return str(item.get("status") or "").strip().lower() in {"resolved", "verified fixed"}
+
+
+def _scored_severity(item: dict[str, Any]) -> str:
+    """A finding the stakeholders already fixed is verified, not scored."""
+    severity = str(item.get("severity") or "O").strip().upper()
+    if _resolved(item) or severity not in SEVERITY_ORDER:
+        return "O"
+    return severity
+
+
 def write_ux_report(folder: Path, ticket: str) -> Path | None:
+    """Score the findings, normalise the JSON, and let the kit's generator write ux-report.html.
+
+    The auditor writes only ux-findings.json and ux-scorecard.json. The generator reads
+    deductionPoints, totalDeduction, ticket and date from them.
+    """
     findings_path = folder / "ux-findings.json"
     card_path = folder / "ux-scorecard.json"
     if not findings_path.is_file() and not card_path.is_file():
@@ -97,8 +111,15 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
         counts, score, verdict = score_findings(findings)
     else:
         counts, score, verdict = _from_card(previous)
+    for item in findings:
+        item["deductionPoints"] = PENALTY[_scored_severity(item)]
+    if findings_path.is_file():
+        findings_path.write_text(json.dumps(findings, indent=2) + "\n", encoding="utf-8")
     card = {
+        "ticket": ticket or folder.name,
+        "date": _run_date(folder),
         "score": score,
+        "totalDeduction": 100 - score,
         "counts": counts,
         "verdict": verdict,
         "rubric": rubric(counts, score, verdict),
@@ -108,21 +129,12 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
         card["envNotes"] = notes
     card_path.write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
     report = folder / "ux-report.html"
-    if not _agent_html(report, verdict):
-        report.write_text(
-            render_html(
-                ticket=ticket or folder.name,
-                run_id=folder.name,
-                run_date=_run_date(folder),
-                score=score,
-                verdict=verdict,
-                counts=counts,
-                findings=_ordered(findings),
-                notes=card.get("envNotes") or [],
-            ),
-            encoding="utf-8",
-        )
-    return report
+    report.unlink(missing_ok=True)
+    try:
+        subprocess.run([sys.executable, str(GENERATOR), str(folder)], check=True, capture_output=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return report if report.is_file() else None
 
 
 def _unique_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -140,185 +152,6 @@ def _unique_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
             seen.add(key)
         unique.append(item)
     return unique
-
-
-def _agent_html(path: Path, verdict: str) -> bool:
-    """True when the auditor's HTML is a real report and states this verdict."""
-    if not path.is_file():
-        return False
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lowered = text.lower()
-    if "<html" not in lowered:
-        return False
-    if "__score__" in lowered or "__verdict__" in lowered:
-        return False
-    return _html_states_verdict(lowered, verdict)
-
-
-def _html_states_verdict(text: str, verdict: str) -> bool:
-    if verdict == "PASS WITH ADVISORIES":
-        return "pass with advisories" in text or "pass (advisory)" in text
-    if verdict == "BLOCKING FAIL":
-        return "blocking fail" in text or re.search(r"(?<!advisory-)\bfail\b", text) is not None
-    if verdict == "PASS":
-        return re.search(r"\bpass\b(?!\s+with)", text) is not None and "blocking fail" not in text and "advisory-fail" not in text
-    return verdict.lower() in text
-
-
-def _paragraphs(text: str) -> str:
-    parts = re.split(r"(?<=[A-Za-z]{2}[.!?])\s+(?=[A-Z])", text.strip())
-    return "".join(f"<p>{html.escape(part)}</p>" for part in parts if part.strip())
-
-
-def _fill(template: str, values: dict[str, str]) -> str:
-    rendered = template
-    for key in sorted(values, key=len, reverse=True):
-        rendered = rendered.replace(f"__{key}__", values[key])
-    return rendered
-
-
-def render_html(
-    *,
-    ticket: str,
-    run_id: str,
-    run_date: str,
-    score: int,
-    verdict: str,
-    counts: dict[str, int],
-    findings: list[dict[str, Any]],
-    notes: list[Any],
-) -> str:
-    numbered = list(enumerate(findings, start=1))
-    defects = [(number, item) for number, item in numbered if _severity(item) != "O"]
-    observations = [(number, item) for number, item in numbered if _severity(item) == "O"]
-    defect_cards = "\n".join(_card(item, number) for number, item in defects) or (
-        '<p class="empty">No defects on the screens this ticket touches.</p>'
-    )
-    observation_html = ""
-    if observations:
-        observation_cards = "\n".join(_card(item, number) for number, item in observations)
-        observation_html = (
-            '<section class="observations-section">'
-            "<h2>Observations &amp; Design Suggestions</h2>"
-            "<p>These work as intended. They do not change the score or the release verdict.</p>"
-            f"{observation_cards}</section>"
-        )
-    count_items = "".join(
-        f'<li class="count-{html.escape(key)}"><span>{html.escape(key)}</span><strong>{counts.get(key, 0)}</strong></li>'
-        for key in SEVERITY_ORDER
-    )
-    note_html = ""
-    if notes:
-        items = "".join(f"<li>{html.escape(str(note))}</li>" for note in notes)
-        note_html = f"<details class='notes'><summary>Run notes</summary><ul>{items}</ul></details>"
-    verdict_class = verdict.lower().replace(" ", "-")
-    template = TEMPLATE.read_text(encoding="utf-8")
-    return _fill(template, {
-        "DATE": html.escape(run_date),
-        "RUN_ID": html.escape(run_id),
-        "TARGET": html.escape(ticket),
-        "SCORE": str(score),
-        "GAUGE": GAUGE.get(verdict, "#44403c"),
-        "VERDICT": html.escape(verdict),
-        "VERDICT_CLASS": html.escape(verdict_class),
-        "COUNTS": count_items,
-        "KICKER": html.escape(_kicker(verdict)),
-        "DEFECT_INDEX": _index(defects),
-        "OBSERVATION_INDEX": _index(observations),
-        "DEFECTS": defect_cards,
-        "OBSERVATIONS": observation_html,
-        "NOTES": note_html,
-    })
-
-
-def _ordered(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rank = {key: index for index, key in enumerate(SEVERITY_ORDER)}
-    return sorted(
-        findings,
-        key=lambda item: rank.get(str(item.get("severity") or "O").strip().upper(), len(rank)),
-    )
-
-
-def _severity(item: dict[str, Any]) -> str:
-    severity = str(item.get("severity") or "O").strip().upper()
-    return severity if severity in PENALTY else "O"
-
-
-def _anchor(item: dict[str, Any], number: int) -> str:
-    raw = str(item.get("id") or f"finding-{number}")
-    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", raw).strip("-")
-    return safe or f"finding-{number}"
-
-
-def _kicker(verdict: str) -> str:
-    if verdict == "BLOCKING FAIL":
-        return "An S0 or S1 finding blocks release. Score starts at 100. S0 −40, S1 −25, S2 −10, S3 −3."
-    if verdict == "PASS WITH ADVISORIES":
-        return "No S0 or S1, so this passes with advisories. S2 and S3 do not fail the audit. Score starts at 100. S0 −40, S1 −25, S2 −10, S3 −3."
-    return "No scored findings. Score starts at 100. Observations do not change the score."
-
-
-def _index(rows: list[tuple[int, dict[str, Any]]]) -> str:
-    if not rows:
-        return '<p class="empty">None</p>'
-    return "\n".join(_index_link(item, number) for number, item in rows)
-
-
-def _index_link(item: dict[str, Any], number: int) -> str:
-    title = str(item.get("title") or item.get("issue") or "Untitled finding")
-    severity = _severity(item)
-    return (
-        f'<a href="#{html.escape(_anchor(item, number))}">'
-        f"{html.escape(severity)} · {html.escape(title)}</a>"
-    )
-
-
-def _card(item: dict[str, Any], number: int) -> str:
-    severity = _severity(item)
-    title = str(item.get("title") or item.get("issue") or "Untitled finding")
-    check = str(item.get("checkId") or item.get("id") or "")
-    lens = str(item.get("lens") or "")
-    confidence = str(item.get("confidence") or "")
-    pattern = str(item.get("relatedPattern") or "")
-    kicker = " · ".join(part for part in (check, lens, pattern, confidence) if part)
-    observed = _paragraphs(str(item.get("evidence") or ""))
-    plan = "".join(
-        _plan_part(label, text)
-        for label, text in (
-            ("What to Fix (Plain English)", str(item.get("solution") or "")),
-            ("Developer Implementation", str(item.get("implementationShadcn") or "")),
-            ("Design Rationale", str(item.get("fluentRationale") or "")),
-            ("QA references", _refs(item)),
-        )
-    )
-    return (
-        f'<article class="finding-card severity-{html.escape(severity)}" id="{html.escape(_anchor(item, number))}">'
-        f'<header class="finding-head"><span class="badge">{html.escape(severity)}</span>'
-        f'<span class="card-kicker">{html.escape(kicker)}</span></header>'
-        f'<h2 class="finding-title">{html.escape(title)}</h2>'
-        f'<section class="section-box"><h3>Observed defect</h3>'
-        f'<div class="section-box-content">{observed}</div></section>'
-        f'<section class="section-box plan"><h3>Design &amp; Remediation Plan</h3>'
-        f'<div class="section-box-content">{plan}</div></section>'
-        f"</article>"
-    )
-
-
-def _plan_part(label: str, text: str) -> str:
-    body = text.strip()
-    if not body:
-        return ""
-    return (
-        f"<p><strong>{html.escape(label)}</strong></p>"
-        f"{_paragraphs(body)}"
-    )
-
-
-def _refs(item: dict[str, Any]) -> str:
-    refs = item.get("qaRefs") or []
-    if isinstance(refs, list):
-        return ", ".join(str(ref) for ref in refs if ref)
-    return str(refs).strip()
 
 
 def _run_date(folder: Path) -> str:

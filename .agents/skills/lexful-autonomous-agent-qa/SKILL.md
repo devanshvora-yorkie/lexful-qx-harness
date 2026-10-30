@@ -10,7 +10,7 @@ tags: [qa, testing, e2e, playwright, test-generation, test-debugging, automation
 
 This skill is **Feature Specific TCs**: tests written for one ticket. It is not **E2E User Journey TCs**, the checked-in suite in `e2e test cases`. The server runs that suite on its own and calls the same **`qa`** agent for heal-only work.
 
-One **`qa`** session owns Explore, Author, Heal, and Promote. Do not spawn subagents. The walk, the specs, and the fixes stay in one thread so flow evidence is always available.
+One **`qa`** agent owns Explore, Author, Heal, and Promote. Do not spawn subagents. The run files are the memory between phases: Explore and Author write `explore/flow.md`, `FEATURE.md`, and `feature-map.md` as they go, and a Heal round starts from those files in a new session. So write them early and completely; a fact that is only in your head is lost at Heal.
 
 | Step | Result |
 |------|--------|
@@ -102,6 +102,12 @@ Track console errors, info messages, and network API calls. When an interaction 
 
 This is the reliable source of truth for `page.waitForResponse()` patterns in Author.
 
+
+**Fewer steps, same coverage (every tool call re-reads the whole conversation):**
+- Do a flow segment in one `playwright-cli run-code --filename=<script>.js`: open, interact, assert, and return a small JSON of what you need (counts, text, URL, visible states). Do not issue one command per click.
+- Snapshot once per new state, to a file, then grep it. Do not snapshot after every action. Prefer `--raw eval` that returns counts or text over a full snapshot.
+- Write `FEATURE.md` as you go: append each endpoint and selector as soon as you have it, not at the end of the walk.
+- At each key state (drawer open, empty state, error, disabled gate) save one screenshot: `playwright-cli screenshot explore/ux/<name>.png`. The UX audit reuses these instead of walking the app again.
 
 **CRITICAL: Store snapshots for later reference.** When `browser_snapshot` output is large, save it to a file in the workspace (e.g., `snapshot-{module}.txt`) so elements and structure can be referenced during test generation. If the snapshot exceeds context limits, use targeted extraction via `browser_evaluate` with JS selectors to capture only the relevant DOM.
 
@@ -230,7 +236,7 @@ If you are unsure, class **bug** with `confidence: "suspected"` and do not edit.
 
 ### 4. Feature Specific Heal
 
-The server starts this after Playwright fails, in the same session, with `playwright/results.json`, `explore/`, `FEATURE.md`, and `explore/flow.md`. Do not apply the E2E User Journey heal section above.
+The server starts this after Playwright fails, in a new session that has no memory of the walk. Your memory is the run files: read `FEATURE.md` (selectors, endpoints, gaps), `explore/flow.md`, and `feature-map.md` first, then `playwright/results.json` and the failing spec. Do not apply the E2E User Journey heal section above.
 
 For each failing test, replay the step, then do one of these. Stop after 3 attempts at that test.
 
@@ -257,13 +263,21 @@ Transient **403** during replay on UAT: treat as environment; retry navigation p
 
 ### 5. Promote, then sign off
 
-After the feature specs have run and the UX audit has finished, copy the passing journeys into `e2e test cases` before the server seals the run. Read **`playwright/test-outcomes.json`** for the final pass/fail of each test title after all heals (the server merges partial reruns). If a title is `passed`, it qualifies. Take at most three tests that **passed** in this run:
+After the feature specs have run and the UX audit has finished, the server asks you to copy **a few** passing tests into `e2e test cases`. The checked-in suite runs on every E2E run, so every test you add is paid for forever and can break the run. **The default is to promote nothing.** Read **`playwright/test-outcomes.json`** for the final pass/fail of each test title after all heals; only a `passed` title can qualify.
 
-1. The positive path that completes the new behavior end to end.
-2. The guard that would make that behavior unsafe if it regressed.
-3. The ordinary path that must keep working beside the new behavior.
+A test qualifies only if it passes **all** of these:
 
-Leave out gaps, failures, skips, tooltip-only checks, and any title already listed in `e2e-coverage.md`. Put document-editor flows in `document editing` (the next free `TC-DOC-` id), record drawers and attachments in `asset crud` (the next free `AC-` id), and search-palette flows in `search`. Import auth as `../../auth-helper`, keep cleanup, and append one inventory row per test to that folder's `FEATURE.md`. The `test()` title must match the Title cell. Write `promoted.json` in the run directory. Do not run the suite. The next E2E User Journey run picks the new files up.
+1. **It is a user journey in exactly one of search, asset crud, or document editing**: a person using the page, with the page as the thing under test. An API-only test (no page), a contract check of a new endpoint, or a check of internal state is not a journey.
+2. **It will still be true next quarter.** Not tied to this ticket's rollout: no dependence on an account mode (legacy, shadow, enforced), a feature flag, or a build that is not yet everywhere. A snapshot of today's permissions or field lists goes stale and fails later.
+3. **It is deterministic and cheap.** No AI or Lex response, no wait over about 30 seconds, no dependence on seeded names that the suite does not already use.
+4. **It is new.** Read the target folder's `FEATURE.md` and grep its specs first. If a row or test already asserts the same surface, skip it. Two variants of one guard (for example Cancel and Escape) are one test; keep the more direct one.
+5. **It cleans up after itself.** Anything it creates or moves is restored in `afterEach`.
+
+Take **at most two**, and only when each is a different behavior. When several candidates pass, prefer the one that fails loudly if the behavior regresses. Skip gaps, failures, skips, tooltip-only checks, and any title already in `e2e-coverage.md`.
+
+Put document-editor flows in `document editing` (the next `TC-DOC-` id), record drawers, attachments, and Move in `asset crud` (the next free `AC-` id, with no gaps in the numbering), and search-palette flows in `search`. Import auth as `../../auth-helper`, keep cleanup, and append one inventory row per test to that folder's `FEATURE.md`. The `test()` title must match the Title cell. Do not leave helpers in a page object that no test uses.
+
+Write `promoted.json` in the run directory: `files`, `cases` (`id`, `title`), and `skipped` (`title`, `reason`, a few words) for every passing candidate you rejected. Do not run the suite. The server loads each spec you add; one that does not load is removed and the whole promotion is reverted. Each promotion is recorded in `e2e test cases/changes.log`.
 
 ### 6. Verdict & Handoff
 

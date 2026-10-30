@@ -538,18 +538,16 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         book.phase("ui-ux audit")
         ux_prompt = _ux_audit_prompt(folder, ticket, preflight)
         (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
+        # A new session: the audit reads the run files, so it must not carry the Explore conversation.
         ux_code, ux_session_id = runners.run_opencode(
             folder,
-            session_id=session_id or None,
+            session_id=None,
             prompt=ux_prompt,
             title=f"{ticket} ux-audit",
             log_name="ux-audit.jsonl",
-            resume=bool(session_id),
             agent="ux-auditor",
         )
-        if ux_session_id:
-            store.update_run(run_id, opencodeSession=ux_session_id)
-            runners.export_session(folder, ux_session_id)
+        runners.export_session(folder, ux_session_id, "session-ux.json")
         write_ux_report(folder, ticket)
         ux_card = _read_json(folder / "ux-scorecard.json")
         ux_findings = _read_findings(folder / "ux-findings.json")
@@ -577,7 +575,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         book.row("server", "signoff", blocker[:220])
 
     if ticket and int(summary.get("passed") or 0) > 0:
-        _promote_into_suite(folder, ticket, book)
+        _promote_into_suite(run_id, folder, ticket, book)
 
     store.update_run(run_id, status=status, error=None)
     if _record_bugs(folder, store.get_run(run_id) or row, summary):
@@ -729,6 +727,9 @@ def _execute_and_heal(
         return summary
     baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
     attempts_used: dict[str, int] = {}
+    fresh_heal = not classify and get_settings().heal_fresh_session
+    if fresh_heal:
+        session_id = ""  # round 1 starts clean; later rounds resume that small session
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
         book.phase(f"heal {attempt} of {heal_attempts}")
@@ -753,9 +754,9 @@ def _execute_and_heal(
             log_name=f"heal-{attempt}.jsonl",
             resume=bool(session_id),
         )
-        if session_id:
+        if session_id and not fresh_heal:
             store.update_run(run_id, opencodeSession=session_id)
-        runners.export_session(folder, session_id)
+        runners.export_session(folder, session_id, "session-heal.json" if fresh_heal else "session.json")
         triage = _take_triage(folder, attempt)
         if classify and heal_code == 0:
             record_suite_edits(run_id, attempt, before_text, _suite_texts(), triage)
@@ -858,11 +859,16 @@ def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
     ])
 
 
-def _promote_into_suite(folder: Path, ticket: str, book: Logbook) -> None:
-    """Copy the passing journeys into the checked-in suite before the run is sealed."""
+def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -> None:
+    """Copy the passing journeys into the checked-in suite before the run is sealed.
+
+    The suite is snapshotted first. A promotion that fails, or that adds a spec Playwright
+    cannot load, is reverted so it never breaks the next E2E run. Every promotion is logged.
+    """
     book.phase("promote")
     prompt = _promote_prompt(folder, ticket)
     (folder / "promote-prompt.md").write_text(prompt + "\n", encoding="utf-8")
+    before = _suite_files()
     code, _session = runners.run_opencode(
         folder,
         session_id=None,
@@ -872,9 +878,25 @@ def _promote_into_suite(folder: Path, ticket: str, book: Logbook) -> None:
     )
     promoted = _read_json(folder / "promoted.json")
     cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
+    after = _suite_files()
+    reverted = ""
     if code != 0:
-        book.row("server", "promote", _opencode_failure(folder, "promote.jsonl", code))
+        reverted = _opencode_failure(folder, "promote.jsonl", code)
+    else:
+        touched = sorted(
+            f"e2e test cases/{name}"
+            for name in after
+            if name.endswith(".spec.ts") and before.get(name) != after[name]
+        )
+        loadable, detail = runners.list_specs(touched)
+        if not loadable:
+            reverted = f"a promoted spec does not load: {detail}"
+    if reverted:
+        _restore_suite(before)
+        record_promotion(run_id, ticket, before, before, {**promoted, "cases": []}, reverted=reverted)
+        book.row("server", "promote", f"reverted  {reverted}"[:240])
         return
+    record_promotion(run_id, ticket, before, after, promoted)
     if not cases:
         book.row("server", "promote", "no new journey copied")
         return
@@ -892,16 +914,17 @@ def _promote_prompt(folder: Path, ticket: str) -> str:
         f"Coverage already in the suite: {relative}/e2e-coverage.md",
         "Checked-in suite: `e2e test cases/`.",
         "Follow the Promote step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
-        "Copy at most three tests that passed in this run: the positive path that completes the new behavior, the guard that keeps it safe, and the ordinary path that must keep working.",
-        "Skip gaps, failures, skips, tooltip-only checks, and any title already listed in e2e-coverage.md.",
+        "The default is to promote nothing. Promote at most two tests, only when each passes every test in the Promote step of the skill (one user journey, no ticket or account-mode dependence, no AI response, not a duplicate).",
+        "Before you add a test, read the target folder's FEATURE.md and grep its specs. If a row or test already asserts the same surface, skip it. Two variants of one guard are one test.",
         "Document-editor flows go in `e2e test cases/document editing` with the next TC-DOC id.",
-        "Record drawers and attachments go in `e2e test cases/asset crud` with the next free AC- id.",
+        "Record drawers, attachments and Move go in `e2e test cases/asset crud` with the next free AC- id (no gaps in the numbering).",
         "Search-palette flows go in `e2e test cases/search`.",
         "Import auth as `../../auth-helper`. Keep the POM beside the spec. Keep afterEach cleanup.",
         "The test() title must match the FEATURE.md Title cell exactly, with no id prefix.",
         "Append one inventory row per new test to that folder's FEATURE.md.",
-        f"Write {relative}/promoted.json as {{\"files\":[...],\"cases\":[{{\"id\":\"...\",\"title\":\"...\"}}]}}.",
-        "If nothing qualifies, write promoted.json with empty files and cases.",
+        f"Write {relative}/promoted.json as {{\"files\":[...],\"cases\":[{{\"id\":\"...\",\"title\":\"...\"}}],\"skipped\":[{{\"title\":\"...\",\"reason\":\"...\"}}]}}. Put every passing candidate you rejected in skipped, with the reason in a few words.",
+        "If nothing qualifies, write promoted.json with empty files and cases, and list the candidates in skipped.",
+        "The server loads every spec you add. A spec that does not load is removed and the promotion is reverted.",
         "Do not run Playwright. Do not edit specs that were already in the suite. Do not change playwright.config.ts.",
     ])
 
@@ -930,16 +953,16 @@ def _ux_audit_prompt(
         f"UI/UX audit for ticket: {ticket}",
         f"Run directory: {relative}",
         f"App URL: {preflight.get('appUrl') or 'the appUrl in the context pack'}",
-        f"Context pack: {relative}/context-pack.json",
-        f"Feature map and explored routes: {relative}/FEATURE.md",
-        f"Exploration snapshots: {relative}/explore/",
-        f"Triage notes and healed locators: {relative}/triage.json",
-        "Follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md.",
-        "Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md, .agents/ux/checks.yaml, .agents/ux/traceability.md, and .agents/ux/audit-preview-reference.html.",
-        "The HTML file is a visual reference. Do not copy its example findings.",
+        "This is a new session. The run files are your only memory of the functional walk.",
+        f"Read first: {relative}/feature-map.md, {relative}/FEATURE.md, {relative}/triage.json, and the screenshots in {relative}/explore/ux/. Use {relative}/context-pack.json only for the acceptance criteria (grep it, do not open it whole).",
+        f"Earlier runs of this ticket: list runs/tickets/{ticket}/ and read each ux-findings.json, for the Resolved protocol in the audit gate skill.",
+        "Follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. The prompt is .agents/prompts/ux-auditor.md.",
+        "Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md, .agents/ux/traceability.md. From .agents/ux/checks.yaml grep the check ids for the journey (SRCH-, CRUD-, DOC-, A11Y-) instead of reading the whole file.",
+        "Do not read .agents/ux/audit-preview-reference.html. It is a layout reference for the server's generator, not for you.",
         "Working UI passes. QA-expected behavior is at most an Observation (O).",
         "S2 and S3 do not fail the audit. With no S0 or S1, the verdict is PASS WITH ADVISORIES. Only S0 or S1 is BLOCKING FAIL.",
-        f"Write ux-report.html, ux-findings.json, and ux-scorecard.json into {relative}/.",
+        f"Write only ux-findings.json (a JSON array) and ux-scorecard.json into {relative}/. Do NOT write ux-report.html or ux-report.md: the server scores the findings and renders the report from the JSON.",
+        f"Every Observation and Resolved item needs a screenshot path under {relative}/explore/ux/ or {relative}/ux-evidence/. Reuse the Explore screenshots before you capture new ones.",
         "Do not write test specs and do not edit product code.",
     ])
 
@@ -965,7 +988,7 @@ def _heal_prompt(
         f"Playwright results: {relative}/playwright/results.json",
         f"Playwright log: {relative}/playwright/output.log",
         f"Specs: {listed}",
-        "Follow the Feature Specific Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. Stay in this session.",
+        f"Follow the Feature Specific Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You have no memory of the walk: the run files are your memory. Read {relative}/FEATURE.md (selectors, endpoints, gaps), {relative}/explore/flow.md, and {relative}/feature-map.md first, then the failing spec.",
         "Do not apply the E2E User Journey heal section.",
         f"Exploration: {relative}/explore/ and {relative}/FEATURE.md and {relative}/explore/flow.md.",
         "Replay each failing test below. Fix the locator, rewrite the step to a control this session saw, create the missing fixture, or remove the test.",
@@ -1095,6 +1118,65 @@ def _suite_texts() -> dict[str, str]:
     return {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8") for path in _suite_sources()}
 
 
+def _suite_files(root: Path | None = None) -> dict[str, str]:
+    """Every spec, page object, and FEATURE.md in the checked-in suite, by path."""
+    base = root or _suite_root()
+    if not base.is_dir():
+        return {}
+    return {
+        path.relative_to(base).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(base.rglob("*"))
+        if path.is_file() and path.suffix in {".ts", ".js", ".md"}
+    }
+
+
+def _restore_suite(before: dict[str, str], root: Path | None = None) -> None:
+    """Put the suite back exactly as `before`: drop files a failed promotion added, rewrite files it changed."""
+    base = root or _suite_root()
+    for name, text in _suite_files(base).items():
+        if name not in before:
+            (base / name).unlink()
+        elif before[name] != text:
+            (base / name).write_text(before[name], encoding="utf-8")
+    for name, text in before.items():
+        if not (base / name).exists():
+            (base / name).parent.mkdir(parents=True, exist_ok=True)
+            (base / name).write_text(text, encoding="utf-8")
+
+
+def record_promotion(
+    run_id: str,
+    ticket: str,
+    before: dict[str, str],
+    after: dict[str, str],
+    promoted: dict[str, Any],
+    *,
+    reverted: str = "",
+    log_path: Path | None = None,
+) -> None:
+    """Append what a ticket run added to the suite, so changes.log shows every change and not only heals."""
+    added = sorted(name for name in after if name not in before)
+    changed = sorted(name for name in after if name in before and after[name] != before[name])
+    cases = [c for c in promoted.get("cases") or [] if isinstance(c, dict)]
+    skipped = [c for c in promoted.get("skipped") or [] if isinstance(c, dict)]
+    if not (added or changed or cases or skipped or reverted):
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [f"{stamp}  {run_id}  promote from {ticket}"]
+    if added:
+        lines.append("  added: " + ", ".join(f"e2e test cases/{name}" for name in added))
+    if changed:
+        lines.append("  changed: " + ", ".join(f"e2e test cases/{name}" for name in changed))
+    lines.extend(f"  - added / {c.get('id', '')}: {c.get('title', '')}".rstrip() for c in cases)
+    lines.extend(f"  - skipped: {c.get('title', '')} — {c.get('reason', '')}".rstrip(" —") for c in skipped)
+    if reverted:
+        lines.append(f"  - reverted, the suite is unchanged: {reverted}")
+    target = log_path or (_suite_root() / "changes.log")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n\n")
+
+
 def record_suite_edits(
     run_id: str,
     attempt: int,
@@ -1144,23 +1226,26 @@ def record_suite_edits(
 
 
 def _triage_notes(triage: dict[str, Any]) -> list[str]:
+    """One line per kind of failure. Tests that share a reason are listed together, not repeated."""
     failures = triage.get("failures")
     if not isinstance(failures, list):
         return []
-    notes: list[str] = []
+    groups: dict[tuple[str, str, str], list[str]] = {}
     for item in failures:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or item.get("test") or "failure")
         kind = failure_kind(item) or "note"
-        action = str(item.get("action") or "")
         reason = " ".join(str(item.get("reason") or "").split())
         if len(reason) > 240:
             reason = reason[:240] + "..."
-        note = f"{kind} / {action}: {title}" if action else f"{kind}: {title}"
-        if reason:
-            note = f"{note} — {reason}"
-        notes.append(note)
+        groups.setdefault((kind, str(item.get("action") or ""), reason), []).append(title)
+    notes: list[str] = []
+    for (kind, action, reason), titles in groups.items():
+        head = f"{kind} / {action}" if action else kind
+        shown = "; ".join(titles[:3]) + (f"; +{len(titles) - 3} more" if len(titles) > 3 else "")
+        label = f"{head} ({len(titles)} tests): {shown}" if len(titles) > 1 else f"{head}: {shown}"
+        notes.append(f"{label} — {reason}" if reason else label)
     return notes
 
 
@@ -1358,6 +1443,48 @@ def _read_findings(path: Path) -> list[dict[str, Any]]:
     return []
 
 
+_PHASE_OF_LOG = (
+    ("agent", "Explore + Author"),
+    ("heal", "Heal"),
+    ("ux-audit", "UX audit"),
+    ("promote", "Promote"),
+)
+
+
+def phase_costs(folder: Path) -> dict[str, dict[str, float]]:
+    """Per phase steps, output tokens, cache-read tokens, and cost, from the OpenCode logs of this run."""
+    phases: dict[str, dict[str, float]] = {}
+    for log in sorted((folder / "opencode").glob("*.jsonl")):
+        label = next((name for prefix, name in _PHASE_OF_LOG if log.stem.startswith(prefix)), log.stem)
+        row = phases.setdefault(label, {"steps": 0, "output": 0, "cacheRead": 0, "cost": 0.0})
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                part = json.loads(line).get("part") or {}
+            except ValueError:
+                continue
+            if part.get("type") != "step-finish":
+                continue
+            tokens = part.get("tokens") or {}
+            row["steps"] += 1
+            row["output"] += tokens.get("output") or 0
+            row["cacheRead"] += (tokens.get("cache") or {}).get("read") or 0
+            row["cost"] += part.get("cost") or 0
+    return phases
+
+
+def _cost_section(folder: Path) -> list[str]:
+    phases = phase_costs(folder)
+    if not phases:
+        return []
+    (folder / "cost.json").write_text(json.dumps(phases, indent=2) + "\n", encoding="utf-8")
+    total = sum(row["cost"] for row in phases.values())
+    lines = ["## Cost", "", "| Phase | Steps | Output tokens | Cache-read tokens | Cost |", "|---|---|---|---|---|"]
+    for label, row in phases.items():
+        lines.append(f"| {label} | {int(row['steps'])} | {int(row['output']):,} | {int(row['cacheRead']):,} | ${row['cost']:.2f} |")
+    lines.extend([f"| **Total** | | | | **${total:.2f}** |", ""])
+    return lines
+
+
 def _ux_report_section(folder: Path) -> list[str]:
     card = _read_json(folder / "ux-scorecard.json")
     if not card and not (folder / "ux-report.html").is_file():
@@ -1432,6 +1559,9 @@ def _write_report(
     ux_section = _ux_report_section(folder)
     if ux_section:
         lines.extend(ux_section)
+    cost_section = _cost_section(folder)
+    if cost_section:
+        lines.extend(cost_section)
     promoted = _promoted_section(folder)
     if promoted:
         lines.extend(promoted)

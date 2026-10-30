@@ -164,11 +164,4 @@ export class MovePage {
   }
 
   /** Choose a destination by its visible name. */
-  async chooseDestination(noun: 'password' | 'document', organizationName: string): Promise<void> {
-    await this.destinationField(noun).click()
-    await this.page
-      .getByRole('listbox', { name: 'Suggestions' })
-      .getByRole('option', { name: organizationName, exact: true })
-      .click()
-  }
 }

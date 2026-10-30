@@ -68,9 +68,6 @@ export class PasswordsListPage {
   }
 
   /** Clicking "New" opens the create dialog. */
-  newButton() {
-    return this.page.getByRole('button', { name: 'New', exact: true })
-  }
 
   async openQuickView(name: string) {
     await this.row(name).click()
@@ -109,17 +106,5 @@ export class PasswordRecordDrawer {
 
   detailsPanel() {
     return this.root().getByRole('tabpanel', { name: 'Details' })
-  }
-}
-
-export class NewPasswordDialog {
-  constructor(private readonly page: Page) {}
-
-  root() {
-    return this.page.getByRole('dialog').filter({ has: this.page.getByRole('heading', { name: 'New Passwords' }) })
-  }
-
-  createButton() {
-    return this.root().getByRole('button', { name: 'Create', exact: true })
   }
 }

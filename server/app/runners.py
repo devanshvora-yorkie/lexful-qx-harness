@@ -411,7 +411,7 @@ def export_children(run_dir: Path, children: list[dict[str, Any]], book: Logbook
         book.row("server", "error", f"could not export {agent} {session_id}")
 
 
-def export_session(run_dir: Path, session_id: str) -> None:
+def export_session(run_dir: Path, session_id: str, name: str = "session.json") -> None:
     if not session_id:
         return
     settings = get_settings()
@@ -424,7 +424,7 @@ def export_session(run_dir: Path, session_id: str) -> None:
         timeout=120,
         check=False,
     )
-    target = run_dir / "opencode" / "session.json"
+    target = run_dir / "opencode" / name
     if result.returncode == 0 and result.stdout.strip():
         target.write_text(result.stdout, encoding="utf-8")
         return
@@ -579,6 +579,23 @@ def _stream_playwright(process: subprocess.Popen[bytes], master: int, handle: An
         if text and not _dot_progress(text):
             book.row("playwright", "test", text[:220])
     return timed_out
+
+
+def list_specs(specs: list[str]) -> tuple[bool, str]:
+    """Load specs without running them. Catches bad imports and syntax before a spec joins the suite."""
+    if not specs:
+        return True, ""
+    try:
+        done = subprocess.run(
+            ["node_modules/.bin/playwright", "test", "--list", *specs],
+            cwd=get_settings().root, capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return False, str(err)[:200]
+    if done.returncode == 0:
+        return True, ""
+    lines = [line.strip() for line in (done.stderr or done.stdout).splitlines() if line.strip()]
+    return False, (lines[0] if lines else "playwright could not load the specs")[:240]
 
 
 def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:

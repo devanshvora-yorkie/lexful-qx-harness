@@ -146,7 +146,7 @@
       "mode": "subagent",
       "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
       "description": "Audits the ticket journey with the Lexful UX audit gate and writes the HTML report.",
-      "system": "Read .agents/prompts/ux-auditor.md and follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. Use playwright-cli state-load runs/cache/stytch/session.json. Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md, .agents/ux/checks.yaml, .agents/ux/traceability.md, and .agents/ux/audit-preview-reference.html. Write ux-report.html, ux-findings.json, and ux-scorecard.json in the run directory. S2 and S3 are PASS WITH ADVISORIES.",
+      "system": "Read .agents/prompts/ux-auditor.md and follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. Use playwright-cli state-load runs/cache/stytch/session.json. Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md and .agents/ux/traceability.md; grep .agents/ux/checks.yaml for the journey's check ids. Do not read .agents/ux/audit-preview-reference.html. Write ux-findings.json and ux-scorecard.json in the run directory. The server writes ux-report.html. S2 and S3 are PASS WITH ADVISORIES.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },

@@ -17,3 +17,4 @@ __pycache__/
 .DS_Store
 *.log
 *.zip
+!e2e test cases/changes.log

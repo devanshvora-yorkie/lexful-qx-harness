@@ -19,6 +19,7 @@ services:
       QA_PHASE1_ON_START: ${QA_PHASE1_ON_START:-true}
       # UI/UX audit. Set QA_RUN_UX_AUDIT=false to run functional QA only.
       QA_RUN_UX_AUDIT: ${QA_RUN_UX_AUDIT:-true}
+      QA_HEAL_FRESH_SESSION: ${QA_HEAL_FRESH_SESSION:-true}
     volumes:
       - ./opencode.jsonc:/opt/lexful-qa-opencode/opencode.jsonc:ro
       - ./scripts:/opt/lexful-qa-opencode/scripts:ro

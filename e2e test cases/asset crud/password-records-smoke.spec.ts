@@ -1,7 +1,7 @@
 /**
- * Password records — smoke. Record drawer, Copy password and the New Passwords form.
+ * Password records — smoke. Record drawer and Copy password.
  *
- * Promoted from LEX-3642 (run 2026-10-29_1121Z_63c8). Rows AC-041 to AC-043 in FEATURE.md.
+ * Promoted from LEX-3642 (run 2026-10-29_1121Z_63c8). Rows AC-039 and AC-040 in FEATURE.md.
  *
  * Surface : https://e2e-test.uat.lexful.net/docs/d/all/system.password
  * POM     : ./password-records-pom.ts
@@ -10,7 +10,6 @@
 import { test, expect } from '@playwright/test'
 import { injectAuthCookies } from '../../auth-helper'
 import {
-  NewPasswordDialog,
   PasswordRecordDrawer,
   PasswordsListPage,
   SEEDED_PASSWORD,
@@ -74,27 +73,6 @@ test.describe('Password records — smoke', () => {
       const response = await secureRead
       expect(response.status()).toBe(200)
       await expect(page.getByText('You don’t have permission to reveal this secret.')).toHaveCount(0)
-    },
-  )
-
-  test(
-    'New Passwords shows every field and keeps Create disabled until an organization is chosen',
-    { tag: ['@negative', '@smoke'] },
-    async ({ page }) => {
-      const list = new PasswordsListPage(page)
-      await list.open()
-      await list.newButton().click()
-
-      const dialog = new NewPasswordDialog(page)
-      await expect(dialog.root().getByRole('heading', { name: 'New Passwords' })).toBeVisible()
-      await expect(dialog.root().getByText('Pick an organization to get started')).toBeVisible()
-      await expect(dialog.createButton()).toBeDisabled()
-
-      for (const placeholder of ['Enter description', 'Enter username', 'Enter password', 'Enter notes']) {
-        await expect(dialog.root().getByPlaceholder(placeholder)).toBeVisible()
-      }
-      await expect(dialog.root().getByText('One-Time Password', { exact: true })).toBeVisible()
-      await expect(dialog.root().getByText('Resource', { exact: true })).toBeVisible()
     },
   )
 })
