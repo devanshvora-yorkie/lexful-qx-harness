@@ -237,11 +237,11 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
         ux_code, ux_session_id = runners.run_opencode(
             folder,
-            session_id=session_id or None,
+            session_id=None,
             prompt=ux_prompt,
             title=f"{ticket} ux-audit",
             log_name="ux-audit.jsonl",
-            resume=bool(session_id),
+            resume=False,
             agent="ux-auditor",
         )
         if ux_session_id:
