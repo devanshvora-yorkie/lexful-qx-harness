@@ -899,35 +899,70 @@
     .badge-status {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
+      gap: 6px;
+      padding: 4px 12px;
       border-radius: 9999px;
       font-size: 0.75rem;
-      font-weight: 600;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      text-transform: uppercase;
+      font-family: var(--font-sans);
     }
 
     .status-pass {
-      background: rgba(16, 185, 129, 0.15);
+      background: rgba(16, 185, 129, 0.16);
       color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
+      border: 1px solid rgba(16, 185, 129, 0.38);
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.12);
     }
 
-    .status-warning {
-      background: rgba(245, 158, 11, 0.15);
+    .status-warning, .status-defect {
+      background: rgba(245, 158, 11, 0.16);
       color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.3);
+      border: 1px solid rgba(245, 158, 11, 0.38);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.12);
     }
 
-    .status-info {
-      background: rgba(99, 102, 241, 0.15);
-      color: #a5b4fc;
-      border: 1px solid rgba(99, 102, 241, 0.3);
+    .status-note, .status-obs {
+      background: rgba(139, 92, 246, 0.16);
+      color: #c084fc;
+      border: 1px solid rgba(139, 92, 246, 0.38);
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.12);
     }
 
-    .status-note {
-      background: rgba(148, 163, 184, 0.12);
-      color: #cbd5e1;
-      border: 1px solid rgba(148, 163, 184, 0.25);
+    .status-danger, .status-blocker {
+      background: rgba(244, 63, 94, 0.18);
+      color: #f43f5e;
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.12);
+    }
+
+    /* AC Findings Inline Row (Single Horizontal Line) */
+    .ac-findings-inline {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow-x: auto;
+      padding: 4px 0;
+      scrollbar-width: thin;
+    }
+
+    .ac-finding-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      flex-shrink: 0;
     }
 
     /* Code & Diff styling */
@@ -1200,12 +1235,12 @@
         UX Observations &amp; Verification (O)
         <span class="tab-count">2</span>
       </button>
-      <button class="tab-btn" onclick="switchTab('tab-criteria', this)">
+      <button class="tab-btn" onclick="switchTab('tab-ac', this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         Acceptance Criteria Matrix
         <span class="tab-count">7</span>
       </button>
-      <button class="tab-btn" onclick="switchTab('tab-checks', this)">
+      <button class="tab-btn" onclick="switchTab('tab-criteria', this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Evaluated Checks Matrix
         <span class="tab-count">18</span>
@@ -1458,52 +1493,78 @@
     </div>
 
     <!-- TAB 3: ACCEPTANCE CRITERIA MATRIX -->
-    <div id="tab-criteria" class="tab-pane">
+    <div id="tab-ac" class="tab-pane">
+      <div style="margin-bottom:18px;">
+        <h3 style="font-family:var(--font-display);font-size:1.25rem;color:#fff;margin-bottom:4px;">Acceptance Criteria Matrix</h3>
+        <p style="font-size:0.85rem;color:var(--text-muted);">Evaluation of ticket acceptance criteria against observed UI behavior and audit findings.</p>
+      </div>
       <div class="data-table-card">
         <div class="table-responsive">
           <table>
             <thead>
               <tr>
-                <th style="width:25%">Acceptance Criterion</th>
-                <th style="width:15%">Result Status</th>
-                <th style="width:60%">Verification Evidence &amp; Technical Notes</th>
+                <th style="width:100px;">AC Item</th>
+                <th style="width:40%;">Requirement / Scope</th>
+                <th style="width:35%;">Associated Audit Finding(s)</th>
+                <th style="width:15%;text-align:center;">UX Status</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td><strong>Reveal save with protected fields unchanged</strong></td>
-                <td><span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> PASS</span></td>
-                <td>The PATCH payload carries no <code style="font-family:var(--font-mono)">properties</code> key on <code style="font-family:var(--font-mono)">additional_urls</code>; after restore, properties, references, name, and display_name match the baseline (verified in <code style="font-family:var(--font-mono)">explore/50</code> vs <code style="font-family:var(--font-mono)">explore/09</code>).</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);white-space:nowrap;">AC1</td>
+                <td style="color:#e2e8f0;font-size:0.88rem;">Reveal save with protected fields unchanged; top-level asset display name fallback.</td>
+                <td>
+                  <div class="ac-findings-inline">
+                    <span class="ac-finding-pill badge-s3">UX-LEX3717-01 (S3)</span>
+                  </div>
+                </td>
+                <td style="text-align:center;white-space:nowrap;">
+                  <span class="badge-status status-warning"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Advisory Finding</span>
+                </td>
               </tr>
               <tr>
-                <td><strong>Object-array sub-property labels and enum values</strong></td>
-                <td><span class="badge-status status-pass">PASS (API Verified)</span></td>
-                <td>Enum values and display names are preserved in API bodies (Contacts <code style="font-family:var(--font-mono)">contact_methods.type</code>: 8 enum values; Configurations <code style="font-family:var(--font-mono)">interfaces.port</code> integer, <code style="font-family:var(--font-mono)">primary</code> boolean). Held note: inspector hides sub-properties for locked system fields.</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);white-space:nowrap;">AC2</td>
+                <td style="color:#e2e8f0;font-size:0.88rem;">Object-array sub-property labels and enum values preserved in payload.</td>
+                <td>
+                  <div class="ac-findings-inline">
+                    <span class="ac-finding-pill badge-s3">UX-LEX3717-02 (S3)</span>
+                  </div>
+                </td>
+                <td style="text-align:center;white-space:nowrap;">
+                  <span class="badge-status status-warning"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Advisory Finding</span>
+                </td>
               </tr>
               <tr>
-                <td><strong>Partial-save behavior</strong></td>
-                <td><span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> PASS</span></td>
-                <td>Settings-only save changes only the UI toggle; unchanged protected schema definitions are sent verbatim without alteration, satisfying partial-save integrity requirements.</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);white-space:nowrap;">AC3</td>
+                <td style="color:#e2e8f0;font-size:0.88rem;">Partial-save behavior mutates only dirtied controls without touching protected schema definitions.</td>
+                <td>
+                  <div class="ac-findings-inline">
+                    <span class="ac-finding-pill badge-obs">UX-LEX3717-03 (O)</span>
+                  </div>
+                </td>
+                <td style="text-align:center;white-space:nowrap;">
+                  <span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Verified / Pass</span>
+                </td>
               </tr>
               <tr>
-                <td><strong>Corporate Lease 'New field' display name</strong></td>
-                <td><span class="badge-status status-warning">Real S3 (Defect)</span></td>
-                <td>Identified as UX-LEX3717-01. PR #1986 addressed fallback inside <code style="font-family:var(--font-mono)">arrayObjectPropertiesTable.tsx</code> for sub-properties; top-level asset fields require identical fallback.</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);white-space:nowrap;">AC4</td>
+                <td style="color:#e2e8f0;font-size:0.88rem;">Header truncate overflow resolved with CSS wrap and tooltip.</td>
+                <td>
+                  <div class="ac-findings-inline">
+                    <span class="ac-finding-pill badge-resolved">UX-LEX3717-04 (Resolved)</span>
+                  </div>
+                </td>
+                <td style="text-align:center;white-space:nowrap;">
+                  <span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Verified / Pass</span>
+                </td>
               </tr>
               <tr>
-                <td><strong>Protected field visual notices</strong></td>
-                <td><span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> PASS</span></td>
-                <td>"System field definition is fixed. Display settings are editable." confirmed present in inspector. Name and type controls properly disabled.</td>
-              </tr>
-              <tr>
-                <td><strong>Primitive arrays (number, integer, boolean)</strong></td>
-                <td><span class="badge-status status-note">UAT Gap (Note)</span></td>
-                <td>Not verified on live UAT as test tenant environment contains only string array <code style="font-family:var(--font-mono)">additional_urls</code>. Unit and Chromium spec suite cover other primitives.</td>
-              </tr>
-              <tr>
-                <td><strong>Reference validation rules preservation</strong></td>
-                <td><span class="badge-status status-note">UAT Gap (Note)</span></td>
-                <td>No active reference in UAT instance possesses custom validation rules. Handled safely in TypeScript mapper with <code style="font-family:var(--font-mono)">validation_rules?: ...</code>.</td>
+                <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);white-space:nowrap;">AC5</td>
+                <td style="color:#e2e8f0;font-size:0.88rem;">System field visual notice present; definition and type controls locked.</td>
+                <td><span style="color:var(--text-dim);font-size:0.8rem;">No defects logged</span></td>
+                <td style="text-align:center;white-space:nowrap;">
+                  <span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Verified / Pass</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1512,7 +1573,7 @@
     </div>
 
     <!-- TAB 4: EVALUATED CHECKS MATRIX -->
-    <div id="tab-checks" class="tab-pane">
+    <div id="tab-criteria" class="tab-pane">
       <div style="margin-bottom:18px;">
         <h3 style="font-family:var(--font-display);font-size:1.25rem;color:#fff;margin-bottom:4px;">Evaluated UX Checks</h3>
         <p style="font-size:0.85rem;color:var(--text-muted);">Checks from <code>lexful-ux-checks.yaml</code> evaluated during this journey.</p>

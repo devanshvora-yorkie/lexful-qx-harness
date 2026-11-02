@@ -247,7 +247,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         if ux_session_id:
             store.update_run(run_id, opencodeSession=ux_session_id)
             runners.export_session(folder, ux_session_id)
-        if (folder / "ux-findings.json").is_file():
+        if (folder / "ux-findings.json").is_file() or (folder / "ux-scorecard.json").is_file():
             try:
                 import subprocess
                 subprocess.run(["python3", "scripts/generate_ux_report.py", str(folder)], check=False)

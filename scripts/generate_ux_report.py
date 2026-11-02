@@ -4,7 +4,7 @@ Generate a self-contained, interactive HTML UX Audit Preview Report (ux-report.h
 modeled after .agents/ux/templates/audit-preview-reference.html.
 
 Layout features:
-- Exactly 3 top summary cards: Findings by Severity (1st), Total Deductions (2nd), Design Stack (3rd), equally filling space.
+- Exactly 4 top summary cards: Defects (S0–S3) (1st), UX Observations (2nd), Total Deductions (3rd), Design Stack (shadCN + Fluent UI) (4th), equally filling space without text wrapping.
 - Exactly 4 interactive tabs: UI/UX Defects (S0-S3), UX Observations & Verification (O), Acceptance Criteria Matrix, Evaluated Checks Matrix, equally filling 25% width.
 - Defect cards: Show ONLY Severity level, Pattern, Pillar (replacing Lens), and AC tags. Remove all other tags.
 - Expected vs. Actual: Clearly highlighted in dedicated emerald and rose callout boxes for instant readability.
