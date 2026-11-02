@@ -313,14 +313,20 @@
     /* Stats Grid */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 16px;
       margin-top: 24px;
       padding-top: 24px;
       border-top: 1px solid var(--border-subtle);
     }
 
-    @media (max-width: 850px) {
+    @media (max-width: 1024px) {
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    @media (max-width: 600px) {
       .stats-grid {
         grid-template-columns: 1fr;
       }
@@ -352,9 +358,16 @@
 
     .stat-value {
       font-family: var(--font-display);
-      font-size: 1.4rem;
+      font-size: 1.25rem;
       font-weight: 700;
       color: #fff;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 1150px) {
+      .stat-value {
+        font-size: 1.1rem;
+      }
     }
 
     .stat-sub {
@@ -714,9 +727,55 @@
 
     .finding-body-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 24px;
-      margin-top: 16px;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+      gap: 16px;
+      margin-top: 14px;
+      align-items: stretch;
+    }
+
+    .finding-screenshot-box {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .finding-screenshot-box .finding-image-preview {
+      margin-top: 0;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--border-subtle);
+      overflow: hidden;
+      position: relative;
+      cursor: pointer;
+      min-height: 240px;
+    }
+
+    .finding-screenshot-box .finding-image-preview img {
+      width: 100%;
+      height: 100%;
+      max-height: 460px;
+      object-fit: contain;
+      display: block;
+      transition: transform 0.25s ease;
+    }
+
+    .finding-screenshot-box .finding-image-preview:hover img {
+      transform: scale(1.02);
+    }
+
+    .evidence-filename {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-weight: 400;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
     }
 
     @media (max-width: 900px) {
@@ -1076,23 +1135,34 @@
 
       <!-- Quick Metrics Grid -->
       <div class="stats-grid">
-        <!-- Card 1: Findings by Severity -->
+        <!-- Card 1: Defects (S0–S3) -->
         <div class="stat-item">
           <div class="stat-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            Findings by Severity
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Defects (S0&ndash;S3)
           </div>
           <div class="stat-value">
             <span style="color:#ef4444">S0 0</span> &middot;
             <span style="color:#f97316">S1 0</span> &middot;
             <span style="color:#eab308">S2 0</span> &middot;
-            <span style="color:#38bdf8">S3 2</span> &middot;
-            <span style="color:#c084fc">O 2</span>
+            <span style="color:#38bdf8">S3 2</span>
           </div>
-          <div class="stat-sub">Resolved: 0 &bull; 2 Scored Defect(s)</div>
+          <div class="stat-sub">2 Scored Defect(s) &bull; 0 Resolved</div>
         </div>
 
-        <!-- Card 2: Total Deductions -->
+        <!-- Card 2: UX Observations -->
+        <div class="stat-item">
+          <div class="stat-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            UX Observations
+          </div>
+          <div class="stat-value" style="color:#c084fc;">
+            2 Recorded
+          </div>
+          <div class="stat-sub">Non-scoring &bull; Verified journeys</div>
+        </div>
+
+        <!-- Card 3: Total Deductions -->
         <div class="stat-item">
           <div class="stat-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
@@ -1104,16 +1174,16 @@
           <div class="stat-sub">2 defect(s) applied &bull; Advisory only</div>
         </div>
 
-        <!-- Card 3: Design Stack -->
+        <!-- Card 4: Design Stack -->
         <div class="stat-item">
           <div class="stat-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             Design Stack
           </div>
-          <div class="stat-value" style="font-size:1.15rem;color:#818cf8;line-height:1.4;">
-            shadcn/ui + Radix + Tailwind
+          <div class="stat-value" style="color:#818cf8;font-size:1.35rem;">
+            shadCN + Fluent UI
           </div>
-          <div class="stat-sub">Fluent-aligned visual language</div>
+          <div class="stat-sub">Fluent-aligned design system</div>
         </div>
       </div>
     </section>

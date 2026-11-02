@@ -1,7 +1,7 @@
 ---
 name: lexful-ux-audit-gate
 description: "Use when auditing a live Lexful UAT journey (search, asset CRUD, document editing) for UX quality — flow, clarity, style-guide consistency, accessibility, navigation. Produces an interactive, self-contained HTML audit report."
-version: 0.23.0
+version: 0.24.0
 status: "DRAFT — unsigned. HTML Output Mode Active."
 config:
   output_mode: html_preview
@@ -117,7 +117,10 @@ The report must work as a local HTML file without a build step. Inline the repor
    - **Acceptance Criteria Matrix:** Structured table evaluating each ticket acceptance criterion (`AC1`, `AC2`, etc.) against observed UI behavior, linked findings, and UX verification status (`Verified / Pass`, `Advisory Finding`, or `Blocking Issue`).
    - **Evaluated Checks Matrix:** Table of evaluated UX checks from `lexful-ux-checks.yaml` with compliance results.
    - *Removed tabs:* `Visual Evidence & Lightbox` (gallery tab removed; lightbox modal retained on inline card thumbnails), `Scoring & Deduction Ledger`, and `Healer Review (H1–H6)` are omitted to streamline review.
-5. **Finding & observation card layout (Decluttered tag minimalism):**
+5. **Finding & observation card layout (Side-by-side evidence & tag minimalism):**
+   - **Side-by-Side Evidence Screenshot:** The finding body is divided into two responsive side-by-side columns:
+     - *Left column:* Observed defect/behavior description, Expected Behavior (emerald callout), Observed Actual (rose callout), and Reproduction Steps.
+     - *Right column:* Evidence screenshot preview container with image filename, rounded glass styling, zoom hover, and modal click-to-lightbox overlay.
    Each card must visibly feature:
    - Header with ID, severity badge (`.badge-s0` to `.badge-s3`, `.badge-obs`, or `.badge-resolved`), and a prominent right-aligned **Deduction Points Pill** highlighted with color ranges:
      - `0 pts Deduction`: Green (`#34d399`, bg `rgba(16,185,129,0.12)`)
@@ -177,6 +180,7 @@ Implement working, keyboard-accessible:
 - Recommendations are advisory. The AI does not modify product data. Use UAT and synthetic/demo data only; read-only by default; credentials must never appear in prompts, reports, or screenshots. A named human reviewer signs off.
 
 ## Changelog
+- **v0.24.0 — 2026-11-02:** Standardized LEX-3757 preview design across all reports: separated S0–S3 defects and UX Observations into distinct top summary cards to eliminate line wrapping; fixed Design Stack card to `shadCN + Fluent UI`; positioned evidence screenshots side-by-side with defect descriptions and Expected/Actual callouts.
 - **v0.23.0 — 2026-11-02:** Streamlined HTML report layout: condensed to 3 summary cards with Findings by Severity first; streamlined to 4 equal-width tabs (Defects, Observations, AC Matrix, Checks Matrix); removed evidence, ledger, and healer tabs; enforced card tag minimalism (only Severity, Pattern, Pillar, AC); added highlighted Expected vs Actual callouts and range-colored deduction pills.
 - **v0.22.0 — 2026-10-29:** Introduced Ticket Re-Run Resolution Verification Protocol: when re-running on a ticket, check prior findings; if stakeholders resolved the defect, verify on live UAT with a screenshot, mark `status: "Resolved"`, do NOT re-detect as a defect, and apply 0 score deductions; added `Resolved` status filter and badge.
 - **v0.21.0 — 2026-10-29:** Mandated live evidence screenshots (`.png`) for all UX observations (`O`); required explicit `screenshot` path and caption in finding/observation schema; required inline `.finding-image-preview` screenshot thumbnails within every observation card on `ux-report.html` with click-to-lightbox support.

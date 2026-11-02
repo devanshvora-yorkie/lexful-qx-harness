@@ -250,18 +250,13 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
                     target_img = image_lookup[clean_name]
                     break
 
+    img_uri = None
+    img_rel = None
+    img_title = None
     if target_img:
         img_uri = target_img["uri"]
         img_rel = target_img.get("rel_path") or target_img.get("name") or "evidence-screenshot.png"
         img_title = caption_text or target_img.get("title") or title
-        inline_image_html = f"""
-            <div class="finding-image-preview" onclick="openLightbox('{img_uri}', '{escape(img_title)} ({escape(img_rel)})')">
-              <img src="{img_uri}" alt="{escape(img_title)}" loading="lazy">
-              <div class="image-overlay">
-                <span>{escape(img_rel)}</span>
-                <span>Click to view full resolution ⤢</span>
-              </div>
-            </div>"""
 
     resolution_banner = ""
     if f.get("resolutionNote"):
@@ -280,6 +275,73 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
     # Search data string
     search_terms = f"{fid} {title} {sev} {status} {' '.join(pattern_ids)} {' '.join(valid_acs)}".lower()
 
+    # Build Side-by-Side Body Grid (Evidence Screenshot placed side-by-side with defect details)
+    if target_img and img_uri:
+        repro_section = f"""
+              <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);">
+                <div style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  Reproduction Steps &amp; Context
+                </div>
+                <ol style="padding-left:18px;margin:0;font-size:0.85rem;color:var(--text-muted);line-height:1.5;">{repro_html}</ol>
+              </div>""" if (repro and repro != ["Refer to exploration snapshots."]) else ""
+
+        body_grid_html = f"""
+        <div class="finding-body-grid">
+          <div class="section-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {box1_title}
+            </div>
+            <div class="section-box-content">
+              <ul style="padding-left:18px;margin-bottom:12px;">{ev_html}</ul>
+              {expected_actual_html}
+              {resolution_banner}
+              {repro_section}
+            </div>
+          </div>
+
+          <div class="section-box finding-screenshot-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              Evidence Screenshot
+              <span class="evidence-filename" title="{escape(img_rel)}">{escape(img_rel)}</span>
+            </div>
+            <div class="finding-image-preview" onclick="openLightbox('{img_uri}', '{escape(img_title)} ({escape(img_rel)})')">
+              <img src="{img_uri}" alt="{escape(img_title)}" loading="lazy">
+              <div class="image-overlay">
+                <span>{escape(img_rel)}</span>
+                <span>Click to view full resolution ⤢</span>
+              </div>
+            </div>
+          </div>
+        </div>"""
+    else:
+        body_grid_html = f"""
+        <div class="finding-body-grid">
+          <div class="section-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              {box1_title}
+            </div>
+            <div class="section-box-content">
+              <ul style="padding-left:18px;margin-bottom:12px;">{ev_html}</ul>
+              {expected_actual_html}
+              {resolution_banner}
+            </div>
+          </div>
+
+          <div class="section-box">
+            <div class="section-box-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              {box2_title}
+            </div>
+            <div class="section-box-content">
+              <ol style="padding-left:18px;margin-bottom:12px;">{repro_html}</ol>
+            </div>
+          </div>
+        </div>"""
+
     return f"""
       <article class="finding-card {card_class}" data-severity="{sev}" data-status="{status}" data-search="{escape(search_terms)}">
         <div class="finding-header">
@@ -296,30 +358,7 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
         <h3 class="finding-title">{title}</h3>
         {journey_html}
 
-        <div class="finding-body-grid">
-          <div class="section-box">
-            <div class="section-box-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {box1_title}
-            </div>
-            <div class="section-box-content">
-              <ul style="padding-left:18px;margin-bottom:12px;">{ev_html}</ul>
-              {expected_actual_html}
-              {resolution_banner}
-            </div>
-            {inline_image_html}
-          </div>
-
-          <div class="section-box">
-            <div class="section-box-title">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              {box2_title}
-            </div>
-            <div class="section-box-content">
-              <ol style="padding-left:18px;margin-bottom:12px;">{repro_html}</ol>
-            </div>
-          </div>
-        </div>
+        {body_grid_html}
 
         <!-- Recommended Solutions & Design Guidance -->
         <div class="guidance-grid">
@@ -887,17 +926,23 @@ def main():
       margin-top: 3px;
     }}
 
-    /* Exactly 3 Summary Cards - Equally Divided (33.333% each) */
+    /* Exactly 4 Summary Cards - Equally Divided (25% each) */
     .stats-grid {{
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 16px;
       margin-top: 24px;
       border-top: 1px solid rgba(255, 255, 255, 0.08);
       padding-top: 24px;
     }}
 
-    @media (max-width: 850px) {{
+    @media (max-width: 1024px) {{
+      .stats-grid {{
+        grid-template-columns: repeat(2, 1fr);
+      }}
+    }}
+
+    @media (max-width: 600px) {{
       .stats-grid {{
         grid-template-columns: 1fr;
       }}
@@ -923,9 +968,16 @@ def main():
 
     .stat-value {{
       font-family: var(--font-display);
-      font-size: 1.35rem;
+      font-size: 1.25rem;
       font-weight: 700;
       margin-bottom: 4px;
+      white-space: nowrap;
+    }}
+
+    @media (max-width: 1150px) {{
+      .stat-value {{
+        font-size: 1.1rem;
+      }}
     }}
 
     .stat-sub {{
@@ -1197,9 +1249,61 @@ def main():
 
     .finding-body-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
       gap: 16px;
       margin-top: 14px;
+      align-items: stretch;
+    }}
+
+    @media (max-width: 900px) {{
+      .finding-body-grid {{
+        grid-template-columns: 1fr;
+      }}
+    }}
+
+    .finding-screenshot-box {{
+      display: flex;
+      flex-direction: column;
+    }}
+
+    .finding-screenshot-box .finding-image-preview {{
+      margin-top: 0;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--border-subtle);
+      overflow: hidden;
+      position: relative;
+      cursor: pointer;
+      min-height: 240px;
+    }}
+
+    .finding-screenshot-box .finding-image-preview img {{
+      width: 100%;
+      height: 100%;
+      max-height: 460px;
+      object-fit: contain;
+      display: block;
+      transition: transform 0.25s ease;
+    }}
+
+    .finding-screenshot-box .finding-image-preview:hover img {{
+      transform: scale(1.02);
+    }}
+
+    .evidence-filename {{
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      font-weight: 400;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
     }}
 
     .section-box {{
@@ -1492,25 +1596,36 @@ def main():
         </div>
       </div>
 
-      <!-- Exactly 3 Summary Cards: Findings by Severity (1st), Total Deductions (2nd), Design Stack (3rd) -->
+      <!-- Exactly 4 Summary Cards: Defects (S0-S3), UX Observations, Total Deductions, Design Stack -->
       <div class="stats-grid">
-        <!-- Card 1: Findings by Severity -->
+        <!-- Card 1: Defects (S0–S3) -->
         <div class="stat-item">
           <div class="stat-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            Findings by Severity
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Defects (S0&ndash;S3)
           </div>
           <div class="stat-value">
             <span style="color:#ef4444">S0 {counts.get('S0', 0)}</span> &middot;
             <span style="color:#f97316">S1 {counts.get('S1', 0)}</span> &middot;
             <span style="color:#eab308">S2 {counts.get('S2', 0)}</span> &middot;
-            <span style="color:#38bdf8">S3 {counts.get('S3', len(defects))}</span> &middot;
-            <span style="color:#c084fc">O {len(observations)}</span>
+            <span style="color:#38bdf8">S3 {counts.get('S3', len(defects))}</span>
           </div>
-          <div class="stat-sub">Resolved: {counts.get('Resolved', 0)} &bull; {len(defects)} Scored Defect(s)</div>
+          <div class="stat-sub">{len(defects)} Scored Defect(s) &bull; {counts.get('Resolved', 0)} Resolved</div>
         </div>
 
-        <!-- Card 2: Total Deductions -->
+        <!-- Card 2: UX Observations -->
+        <div class="stat-item">
+          <div class="stat-label">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            UX Observations
+          </div>
+          <div class="stat-value" style="color:#c084fc;">
+            {len(observations)} Recorded
+          </div>
+          <div class="stat-sub">Non-scoring &bull; Verified journeys</div>
+        </div>
+
+        <!-- Card 3: Total Deductions -->
         <div class="stat-item">
           <div class="stat-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
@@ -1522,16 +1637,16 @@ def main():
           <div class="stat-sub">{len(defects)} defect(s) applied &bull; Advisory only</div>
         </div>
 
-        <!-- Card 3: Design Stack -->
+        <!-- Card 4: Design Stack -->
         <div class="stat-item">
           <div class="stat-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             Design Stack
           </div>
-          <div class="stat-value" style="font-size:1.15rem;color:#818cf8;line-height:1.4;">
-            shadcn/ui + Radix + Tailwind
+          <div class="stat-value" style="color:#818cf8;font-size:1.35rem;">
+            shadCN + Fluent UI
           </div>
-          <div class="stat-sub">Fluent-aligned visual language</div>
+          <div class="stat-sub">Fluent-aligned design system</div>
         </div>
       </div>
     </section>
