@@ -566,11 +566,11 @@ def main():
             has_s2_s3 = any(f.get("severity") in ["S2", "S3"] for f in matched_findings)
             
             if has_s0_s1:
-                ac_status = '<span class="badge-pill" style="background:rgba(244,63,94,0.18);color:#f43f5e;border:1px solid rgba(244,63,94,0.35);">Blocking Issue</span>'
+                ac_status = '<span class="badge-status status-danger"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Blocking Issue</span>'
             elif has_s2_s3:
-                ac_status = '<span class="badge-pill badge-amber">Advisory Finding</span>'
+                ac_status = '<span class="badge-status status-warning"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Advisory Finding</span>'
             else:
-                ac_status = '<span class="badge-pill badge-emerald">Verified / Pass</span>'
+                ac_status = '<span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Verified / Pass</span>'
                 
             f_links = []
             for mf in matched_findings:
@@ -651,11 +651,11 @@ def main():
             result = c.get("result", "Pass / Compliant")
             
             if "DEFECT" in status or "S0" in status or "S1" in status or "S2" in status or "S3" in status:
-                badge_html = f'<span class="badge-status status-warning" style="white-space:nowrap;">{escape(status)}</span>'
+                badge_html = f'<span class="badge-status status-defect"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg> {escape(status)}</span>'
             elif "OBSERVATION" in status or "NOTE" in status:
-                badge_html = f'<span class="badge-status status-note" style="white-space:nowrap;">{escape(status)}</span>'
+                badge_html = f'<span class="badge-status status-note"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> {escape(status)}</span>'
             else:
-                badge_html = '<span class="badge-status status-pass" style="white-space:nowrap;">PASS</span>'
+                badge_html = '<span class="badge-status status-pass"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> PASS</span>'
                 
             title_part = f' &mdash; <span style="color:#cbd5e1;font-weight:400;">{escape(title)}</span>' if title else ""
             
@@ -1479,6 +1479,49 @@ def main():
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
       gap: 16px;
+    }}
+
+    /* Status Badge Tags for Tables & Matrices */
+    .badge-status {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      text-transform: uppercase;
+      font-family: var(--font-sans);
+    }}
+
+    .status-pass {{
+      background: rgba(16, 185, 129, 0.16);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.38);
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.12);
+    }}
+
+    .status-warning, .status-defect {{
+      background: rgba(245, 158, 11, 0.16);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.38);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.12);
+    }}
+
+    .status-note, .status-obs {{
+      background: rgba(139, 92, 246, 0.16);
+      color: #c084fc;
+      border: 1px solid rgba(139, 92, 246, 0.38);
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.12);
+    }}
+
+    .status-danger, .status-blocker {{
+      background: rgba(244, 63, 94, 0.18);
+      color: #f43f5e;
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.12);
     }}
 
     /* AC Findings Inline Row (Single Horizontal Line) */
