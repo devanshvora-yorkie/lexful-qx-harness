@@ -104,49 +104,42 @@ Generate a **complete, valid, interactive HTML report (`ux-report.html`)** for e
 The report must work as a local HTML file without a build step. Inline the report CSS and JavaScript. Do not require a server-side runtime. External font loading may be retained as a progressive enhancement, with sensible system-font fallbacks. Escape all dynamic strings before inserting them into HTML. Do not embed credentials, tokens, private tenant data, or unnecessary personal data.
 
 ### Required page structure
-1. **Top navigation / run metadata:** kit/audit name, run ID, timestamp, target/environment, journey, audit status and QA status if available.
-2. **Hero / executive summary:** concise scope and summary, release verdict, score gauge, and explanation that S2/S3 are non-blocking.
-3. **Metric cards (Exactly 3 cards — equally divided 33.3% width layout):**
-   - **Card 1: FINDINGS BY SEVERITY (first card):** Counts by severity (`S0`, `S1`, `S2`, `S3`, `O`), verified resolved count, and total defect summary.
-   - **Card 2: TOTAL DEDUCTIONS (second card):** Total deducted points (`-{pts}` or `0 pts`), count of scored findings, and non-blocking advisory note.
-   - **Card 3: DESIGN STACK (third card):** Detected stack (`shadcn/ui + Radix + Tailwind`) and Fluent-aligned visual language indicator.
-   - *Removed cards:* To declutter the summary, `FINAL SCORE`, `HEAL REVIEW (H1–H6)`, `PLAYWRIGHT SUITE (NOT UX)`, `EVIDENCE COVERAGE`, and `CONFIDENCE` cards are omitted.
-4. **Interactive tabs (Exactly 4 tabs — equally divided 25% width layout):**
-   - **UI/UX Defects (S0–S3):** A dedicated section strictly for active S0–S3 defect findings, featuring severity filter pills (`All Defects`, `S0`, `S1`, `S2`, `S3`), search input, and defect finding cards. If 0 defects exist, render an explicit positive empty state.
-   - **UX Observations & Verification (O):** A separate, dedicated section for all Observation (`O`) and `Resolved` items (positive verifications, intended behaviors, stakeholder resolutions, design suggestions, or items held for review). Includes an informational callout banner emphasizing that observations carry **0 deduction points** and **zero release-blocking impact**, plus status filter pills (`All Observations`, `Reported`, `Resolved`, `Held for review`).
-   - **Acceptance Criteria Matrix:** Structured table evaluating each ticket acceptance criterion (`AC1`, `AC2`, etc.) against observed UI behavior, linked findings, and UX verification status (`Verified / Pass`, `Advisory Finding`, or `Blocking Issue`).
-   - **Evaluated Checks Matrix:** Table of evaluated UX checks from `lexful-ux-checks.yaml` with compliance results.
-   - *Removed tabs:* `Visual Evidence & Lightbox` (gallery tab removed; lightbox modal retained on inline card thumbnails), `Scoring & Deduction Ledger`, and `Healer Review (H1–H6)` are omitted to streamline review.
-5. **Finding & observation card layout (Side-by-side evidence & tag minimalism):**
-   - **Side-by-Side Evidence Screenshot:** The finding body is divided into two responsive side-by-side columns:
-     - *Left column:* Observed defect/behavior description, Expected Behavior (emerald callout), Observed Actual (rose callout), and Reproduction Steps.
-     - *Right column:* Evidence screenshot preview container with image filename, rounded glass styling, zoom hover, and modal click-to-lightbox overlay.
-   Each card must visibly feature:
-   - Header with ID, severity badge (`.badge-s0` to `.badge-s3`, `.badge-obs`, or `.badge-resolved`), and a prominent right-aligned **Deduction Points Pill** highlighted with color ranges:
-     - `0 pts Deduction`: Green (`#34d399`, bg `rgba(16,185,129,0.12)`)
-     - `1–5 pts Deduction`: Amber/Yellow (`#fbbf24`, bg `rgba(245,158,11,0.15)`)
-     - `6–15 pts Deduction`: Orange (`#fb923c`, bg `rgba(251,146,60,0.16)`)
-     - `16–30 pts Deduction`: Rose/Red (`#f43f5e`, bg `rgba(244,63,94,0.18)`)
-     - `31+ pts Deduction`: Crimson/Blocker (`#fda4af`, bg `rgba(225,29,72,0.28)`)
-   - **Strict tag minimalism:** Show ONLY:
-     1. `Severity level` (e.g. `Severity: S3`)
-     2. `Bad UX Pattern` (e.g. `.tag-pattern` `Pattern: BP-63`)
-     3. `Pillar` (e.g. `.tag-pillar` `Pillar: Clarity & trust` — replaces the previous "Lens" wording)
-     4. `AC Tag` (e.g. `.tag-ac` `AC: AC1-d`)
-     - *All other tags (`Confidence`, `Status`, `QA Trace`, `Rule/CheckId`, `Design Stack`) are removed from card tags to eliminate visual noise.*
-   - **Highlighted Expected vs. Actual callouts:**
-     - `.callout-expected`: Emerald/green bordered box with uppercase `EXPECTED BEHAVIOR` header.
-     - `.callout-actual`: Rose/red bordered box with uppercase `OBSERVED ACTUAL` header.
-     - Separates expected criteria from observed bugs with maximum visual contrast and readability.
-   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion. Supports interactive zoom in/out/fit controls, click-to-zoom (175%), and mousewheel zooming.
-   - `Reproduction steps` and `Recommended resolution / design direction`.
-   - **Sectioned Recommended Solutions:** Structured into distinct actionable parts:
-     1. `Target Goal & UX Direction` (clear plain-English fix objective)
-     2. `Developer Action & Code Changes` (specific code steps, attributes, handlers, and acceptance criteria)
-     3. `shadcn/ui + Radix Implementation` (Radix primitives, Tailwind classes, and shadcn component wrappers)
-     4. `Fluent UI Alignment & A11y Standards` (design tokens, accessible names, and focus indicators)
-   - **Empty Tab Valid Reason States:** If any tab has 0 output items (e.g. 0 defects, 0 observations, or unpopulated AC matrix), it MUST render an explicit `.empty-state-card` explaining the exact valid reason (e.g., "The upstream Linear ticket does not define formal acceptance criteria checklist items") and evaluation context instead of an empty or confusing table.
-6. **Footer:** Report generation timestamp, ticket ID, engine metadata, and reviewer sign-off notice.
+1. **Top navigation / run metadata:** brand logo/text, run ID, target/environment, ticket key and PR number, UX score badge pill (`UX SCORE: {score}/100`), and QA status badge pill.
+2. **Hero / executive summary & Ticket Block (`.ticket-block`):**
+   - Concise executive journey summary, release verdict, and SVG score gauge (circumference 264, calibrated dash offset).
+   - **Ticket-Specific Block (`.ticket-block`):** Mandated at the beginning of the hero area for every ticket:
+     - `<h4>Ticket as filed</h4>`: the core problem statement or user need as originally filed.
+     - `<p><strong style="color:#cbd5e1;">Scope.</strong> {scope_statement}</p>`: explicit boundaries and component scope.
+     - `<h4>Acceptance</h4>`: bulleted list of acceptance criteria (`<li><strong style="color:#cbd5e1;">AC1</strong> &mdash; ...</li>`).
+     - `<h4>Validation claimed in the ticket</h4>`: author test claims (e.g., Chromium browser tests, TypeScript, ESLint, live UAT smoke status).
+3. **Summary Metric Cards (Exactly 4 cards — equally divided 25% width layout):**
+   - **Card 1: DEFECTS (S0–S3):** Counts by severity (`S0`, `S1`, `S2`, `S3`), scored count, and in-scope vs pre-existing count (`{N} scored • {X} in scope, {Y} pre-existing`).
+   - **Card 2: UX OBSERVATIONS:** Count of recorded non-scoring observations (`{N} recorded • Non-scoring • verified journeys`).
+   - **Card 3: TOTAL DEDUCTIONS:** Deducted points (`−{pts} pts` or `0 pts`) with deduction breakdown (`S2 −10, S3 −3 each • non-blocking`).
+   - **Card 4: DESIGN STACK:** Fixed to `shadCN + Fluent UI` (`Fluent-aligned design system`).
+4. **Run Integrity Grid (`.integrity` — 3-column card grid):**
+   Positioned directly beneath the 4 summary cards:
+   - **Run integrity:** `<strong>X of 18</strong> checks in the matrix were exercised on this journey &mdash; <strong>P pass</strong>, <strong>O observation</strong>, <strong>D defect</strong>. The remaining <strong>N</strong> are marked N/A and excluded from the verdict.`
+   - **Verdict basis:** `One verdict applies to this report: <strong>VERDICT</strong>. No S0 or S1 defect was found, so nothing blocks release. Deductions total <strong>−X</strong> from 100 = <strong>SCORE</strong>.`
+   - **Still open:** Scope items unverified and validation steps outstanding (e.g., live UAT smoke) that must close before ticket completion.
+5. **Interactive tabs (Exactly 4 tabs — equally divided 25% width layout):**
+   - **UI/UX Defects (S0–S3):** Dedicated section for active S0–S3 defect findings, featuring severity filter pills (`All Defects`, `S0`, `S1`, `S2`, `S3`), search input, and defect finding cards. If 0 defects exist, render an explicit positive empty state.
+   - **UX Observations (O):** Dedicated section for all Observation (`O`) and `Resolved` items. Features status filter pills (`All Observations`, `Reported`, `Resolved`, `Held for review`) and advisory subtext.
+   - **Acceptance Criteria & Scope Matrix:** Structured table evaluating each ticket acceptance criterion (`AC1`, `AC2`...), scope statement (`S1`, `S2`...), and validation claim (`V`) against observed UI behavior, inline finding pills (`.ac-findings-inline`), and status badges (`VERIFIED`, `PARTIAL`, `OUTSTANDING`, `ADVISORY FINDING`, `BLOCKING ISSUE`).
+   - **Evaluated UX Checks Matrix:** Complete 18-rule audit table from `lexful-ux-checks.yaml` with check IDs (`.chk-id`), names (`.chk-name`), pillars (`.chk-pillar`), status tags (`PASS`, `OBSERVATION`, `DEFECT (S2/S3)`, `N/A`), and observation notes (`.chk-note`).
+6. **Finding & observation card layout (Side-by-side evidence, tag minimalism & click-to-zoom):**
+   - **Header:** Finding ID, severity badge (`.badge-s0` to `.badge-s3`, `.badge-obs`), UX pattern tag (`.tag-pattern`), UX pillar tag (`.tag-pillar`), scope tag (`.tag-scope.tag-in` "In scope" or `.tag-scope.tag-pre` "Pre-existing"), and right-aligned deduction points pill (`.deduction-pill.ded-range-{0..4}`).
+   - **Journey / Scope note (`.finding-journey`):** Contextual scope note explaining whether the defect belongs to the current PR or predates it.
+   - **Side-by-Side Finding Body Grid (`.finding-body-grid`):**
+     - *Left box (`.section-box`):* `Observed Defect & Evidence` with Expected Behavior (`.callout-expected`), Observed Actual (`.callout-actual`), optional Split/Evidence Note (`.evidence-note`), and bulleted Evidence list (`.evidence-list-label`).
+     - *Right box (`.section-box.finding-screenshot-box`):* Evidence Screenshot preview (`.finding-image-preview`) with evidence filename, overlay label, and click-to-open lightbox.
+   - **Interactive Lightbox Modal with Zoom:** Clicking any evidence thumbnail opens the full-resolution modal. Clicking the image inside the lightbox toggles interactive zoom (1.6x) with `cursor: zoom-in` and `cursor: zoom-out`.
+   - **Sectioned Guidance Grid (`.guidance-grid`):**
+     - `.section-box.res-box` (`Recommended Resolution`, green border): Contains structured `.res-block` items for `What to change`, `Developer`, and `Design`.
+     - `.section-box.shadcn-box` (`shadcn/ui Implementation`, indigo border): Radix primitives and Tailwind styling.
+     - `.section-box.fluent-box` (`Fluent Design Alignment`, cyan border): Fluent UI design system alignment.
+   - **Empty Tab Valid Reason States:** If any tab has 0 output items, it MUST render an explicit `.empty-state-card` explaining the valid reason and guidance.
+7. **Footer:** Ticket ID, run label, engine metadata, and reviewer notice.
 
 ### Recommended solutions and design-system adaptations
 - Recommendations must be concrete, feasible, and proportional to severity.
