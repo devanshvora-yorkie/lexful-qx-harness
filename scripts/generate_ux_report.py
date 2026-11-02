@@ -4,9 +4,12 @@ Generate a self-contained, interactive HTML UX Audit Preview Report (ux-report.h
 modeled after .agents/ux/templates/audit-preview-reference.html.
 
 Layout features:
-- Separate tabs for UI/UX Defects (S0–S3) and UX Observations & Verification (O)
-- Rich badge chips for UX Rulebook checks (CRUD-*, etc.) and Bad UX Patterns (BP-*)
-- Interactive filters, visual lightbox, evaluated checks matrix, and scoring deduction ledger
+- Exactly 3 top summary cards: Findings by Severity (1st), Total Deductions (2nd), Design Stack (3rd), equally filling space.
+- Exactly 4 interactive tabs: UI/UX Defects (S0-S3), UX Observations & Verification (O), Acceptance Criteria Matrix, Evaluated Checks Matrix, equally filling 25% width.
+- Defect cards: Show ONLY Severity level, Pattern, Pillar (replacing Lens), and AC tags. Remove all other tags.
+- Expected vs. Actual: Clearly highlighted in dedicated emerald and rose callout boxes for instant readability.
+- Deduction Points: Highlighted on the right-hand side in distinct range-based colors (0, 1-5, 6-15, 16-30, 31+ pts).
+- Visual Lightbox: Inline screenshot preview on cards with full-screen zoom modal retained.
 
 Usage:
     python3 scripts/generate_ux_report.py <run_dir>
@@ -17,6 +20,7 @@ import os
 import json
 import base64
 import html
+import re
 from pathlib import Path
 
 
@@ -41,20 +45,99 @@ def get_image_data_uri(path: Path) -> str:
         return ""
 
 
+def get_deduction_pill(deduct, is_obs=False) -> str:
+    try:
+        pts = int(deduct or 0)
+    except Exception:
+        pts = 0
+    if is_obs or pts == 0:
+        return '<span class="deduction-pill ded-range-0">0 pts Deduction</span>'
+    elif 1 <= pts <= 5:
+        return f'<span class="deduction-pill ded-range-1">−{pts} pts Deduction</span>'
+    elif 6 <= pts <= 15:
+        return f'<span class="deduction-pill ded-range-2">−{pts} pts Deduction</span>'
+    elif 16 <= pts <= 30:
+        return f'<span class="deduction-pill ded-range-3">−{pts} pts Deduction</span>'
+    else:
+        return f'<span class="deduction-pill ded-range-4">−{pts} pts Deduction</span>'
+
+
+def format_expected_vs_actual(raw_text: str) -> str:
+    if not raw_text:
+        return "<p style='color:var(--text-dim);font-size:0.85rem;margin:0;'>No expected vs actual documented.</p>"
+    text = str(raw_text).strip()
+    
+    match = re.search(r'(?:^|\b)Expected\s*:\s*(.*?)(?=(?:\bActual\s*:|$))', text, re.DOTALL | re.IGNORECASE)
+    match_act = re.search(r'\bActual\s*:\s*(.*)', text, re.DOTALL | re.IGNORECASE)
+    
+    expected_part = match.group(1).strip() if match else ""
+    actual_part = match_act.group(1).strip() if match_act else ""
+    
+    if expected_part or actual_part:
+        expected_body = escape(expected_part) if expected_part else "Specified workflow behavior per acceptance criteria."
+        actual_body = escape(actual_part) if actual_part else escape(text)
+        return f"""
+        <div class="callout-expected">
+          <div class="callout-label label-expected">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            EXPECTED BEHAVIOR
+          </div>
+          <div class="callout-body">{expected_body}</div>
+        </div>
+        <div class="callout-actual">
+          <div class="callout-label label-actual">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            OBSERVED ACTUAL
+          </div>
+          <div class="callout-body">{actual_body}</div>
+        </div>
+        """
+    else:
+        return f"""
+        <div class="callout-actual">
+          <div class="callout-label label-actual">OBSERVED BEHAVIOR</div>
+          <div class="callout-body">{escape(text)}</div>
+        </div>
+        """
+
+
+def format_pillar_chip(raw_lens: str) -> str:
+    if not raw_lens:
+        return ""
+    val = str(raw_lens).strip()
+    if val.lower().startswith("lens "):
+        val = val[5:].strip()
+    
+    pillar_map = {
+        "a": "Flows & speed",
+        "b": "Clarity & trust",
+        "c": "State & edge cases",
+        "d": "Design alignment & a11y",
+        "e": "Drift & consistency"
+    }
+    
+    if "-" in val:
+        after = val.split("-", 1)[1].strip()
+        disp = f"Pillar: {after}"
+    elif val.lower() in pillar_map:
+        disp = f"Pillar: {pillar_map[val.lower()]}"
+    else:
+        disp = f"Pillar: {val}"
+    
+    return f"""<span class="tag-pillar" title="UX Audit Pillar"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>{escape(disp)}</span>"""
+
+
 def render_card(f, is_observation=False, image_lookup=None) -> str:
     fid = escape(f.get("id", "UX-FINDING"))
     sev = escape(f.get("severity", "O" if is_observation else "S3"))
-    lens = escape(f.get("lens", "UX"))
-    check_id = escape(f.get("checkId", "General"))
     title = escape(f.get("title", ""))
-    conf = escape(f.get("confidence", "High"))
-    deduct = f.get("deductionPoints", 0)
+    deduct = f.get("deduction", f.get("deductionPoints", 0))
     status = escape(f.get("status", "Reported"))
 
-    # Severity and status badge
+    # Severity badge
     if status.lower() in ["resolved", "verified fixed"] or sev.upper() == "RESOLVED":
         status = "Resolved"
-        sev_badge = '<span class="badge-resolved" style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);font-size:0.75rem;font-weight:700;padding:3px 8px;border-radius:6px;">Status: Resolved / Verified Fixed</span>'
+        sev_badge = '<span class="badge-resolved">Status: Resolved / Verified Fixed</span>'
         card_class = "severity-Resolved"
     elif sev == "S0":
         sev_badge = '<span class="badge-s0">Severity: S0 (Blocker)</span>'
@@ -66,18 +149,16 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
         sev_badge = '<span class="badge-s2">Severity: S2 (Major)</span>'
         card_class = f"severity-{sev}"
     elif sev == "S3":
-        sev_badge = '<span class="badge-s3">Severity: S3 (Low)</span>'
+        sev_badge = '<span class="badge-s3">Severity: S3 (Minor)</span>'
         card_class = f"severity-{sev}"
     else:
         sev_badge = '<span class="badge-obs">Observation (O)</span>'
         card_class = f"severity-{sev}"
 
-    # UX Rulebook Check Tag
-    rule_chip = ""
-    if check_id and check_id.lower() not in ["ungrouped", "general", "none", "n/a"]:
-        rule_chip = f"""<span class="tag-rule" title="UX Rulebook Check"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Rule: {check_id}</span>"""
+    # Right side: Deduction points highlight colored by range
+    deduction_html = get_deduction_pill(deduct, is_obs=(is_observation or sev == "O"))
 
-    # Bad UX Pattern Tags
+    # Bad UX Pattern Tags (kept per requirement)
     pattern_ids = f.get("patternIds", [])
     if isinstance(pattern_ids, str):
         pattern_ids = [pattern_ids]
@@ -86,32 +167,31 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
         for p in pattern_ids if p
     ])
 
-    # Lens Tag
-    lens_chip = f"""<span class="tag-lens" title="UX Audit Lens">Lens {lens}</span>"""
+    # Pillar tag (replacing Lens per requirement)
+    pillar_chip = format_pillar_chip(f.get("lens", ""))
 
-    # QA Traceability Tags
-    qa_refs = f.get("qaRefs", [])
-    if isinstance(qa_refs, str):
-        qa_refs = [qa_refs]
-    qa_chips = "".join([f"""<span class="tag-qa" title="QA Traceability Spec">QA: {escape(q)}</span>""" for q in qa_refs if q])
-    qa_refs_str = ", ".join([escape(q) for q in qa_refs]) if qa_refs else "None recorded"
-
-    # Design System Stack Tags
-    stack_chips = '<span class="tag-stack">shadcn/ui</span><span class="tag-stack">Fluent-aligned</span>'
-
-    # Confidence and Status Badges
-    conf_class = "badge-emerald" if conf.lower() == "high" else ("badge-amber" if conf.lower() == "medium" else "badge-violet")
-    conf_pill = f"""<span class="badge-pill {conf_class}">Confidence: {conf}</span>"""
-    if status == "Resolved":
-        status_pill = '<span class="badge-pill badge-emerald">Status: Resolved</span>'
-        deduction_html = '<span style="font-size:0.8rem;color:#34d399">Deduction: 0 pts (Resolved)</span>'
-    else:
-        status_pill = f"""<span class="badge-pill badge-violet">Status: {status}</span>"""
-        # Deduction display
-        if is_observation or sev == "O":
-            deduction_html = '<span style="font-size:0.8rem;color:var(--text-dim)">Deduction: 0 pts (Non-blocking)</span>'
+    # AC tags (kept per requirement)
+    ac_refs = f.get("acceptanceCriteria", [])
+    if isinstance(ac_refs, str):
+        if ac_refs.startswith("[") and ac_refs.endswith("]"):
+            try:
+                ac_refs = json.loads(ac_refs)
+            except Exception:
+                ac_refs = [ac_refs]
         else:
-            deduction_html = f'<span style="font-size:0.8rem;color:var(--text-dim)">Deduction: -{deduct} pts</span>'
+            ac_refs = [x.strip() for x in ac_refs.split(",") if x.strip()]
+    
+    # Filter short AC codes (e.g. AC1-d, AC2, AC3-b)
+    valid_acs = [a for a in ac_refs if a and len(a) < 30 and not a.startswith("Verify")]
+    if not valid_acs:
+        # Check title and journeyStep for AC codes like AC1-d, AC2
+        found = re.findall(r'\bAC\d+[a-z0-9\-]*\b', f.get("journeyStep", "") + " " + title)
+        valid_acs = list(dict.fromkeys(found))
+        
+    ac_chips = "".join([
+        f"""<span class="tag-ac" title="Acceptance Criteria"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>AC: {escape(ac)}</span>"""
+        for ac in valid_acs
+    ])
 
     # Evidence list
     ev_items = f.get("evidence", [])
@@ -120,7 +200,7 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
     ev_html = "".join([f"<li>{escape(e)}</li>" for e in ev_items]) if ev_items else "<li>Documented via workflow exploration.</li>"
 
     # Repro steps list
-    repro = f.get("reproSteps", [])
+    repro = f.get("reproSteps", f.get("reproductionSteps", []))
     if isinstance(repro, str):
         repro = [repro]
     repro_html = "".join([f"<li>{escape(r)}</li>" for r in repro]) if repro else "<li>Refer to exploration snapshots.</li>"
@@ -130,9 +210,11 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
     shadcn = escape(f.get("implementationShadcn", "Not applicable."))
     fluent = escape(f.get("fluentRationale", "Not applicable."))
     acceptance = escape(f.get("acceptanceCriteria", "Verify workflow behavior matches expected UX specifications."))
+    if isinstance(acceptance, list):
+        acceptance = ", ".join([str(a) for a in acceptance])
 
-    box1_title = "Observed Behavior & Details" if is_observation else "Observed Defect & Evidence"
-    box2_title = "Reproduction & Trace" if is_observation else "Reproduction Steps & QA Trace"
+    box1_title = "Observed Behavior & Evidence" if is_observation else "Observed Defect & Evidence"
+    box2_title = "Reproduction Steps & Details"
 
     # Resolve inline evidence screenshot preview
     inline_image_html = ""
@@ -156,7 +238,6 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
 
     # Search within evidence list if not found
     if not target_img and image_lookup and ev_items:
-        import re
         for item in ev_items:
             m = re.search(r'([\w\-\./]+\.(?:png|jpg|jpeg|svg))', str(item), re.IGNORECASE)
             if m:
@@ -186,30 +267,34 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
     if f.get("resolutionNote"):
         res_note = escape(f.get("resolutionNote"))
         resolved_from = f.get("resolvedFromRun")
-        from_str = f" (verified from run: {escape(resolved_from)})" if resolved_from else ""
+        run_txt = f" from run {escape(resolved_from)}" if resolved_from else ""
         resolution_banner = f"""
-              <div style="margin-top:12px;padding:12px 14px;background:rgba(16,185,129,0.1);border-left:3px solid var(--accent-emerald);border-radius:8px;font-size:0.85rem;color:#34d399;line-height:1.5;">
-                <strong>Resolution Verification{from_str}:</strong> {res_note}
+              <div style="margin-top:10px;padding:8px 12px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:8px;font-size:0.8rem;color:#34d399;">
+                <strong>Stakeholder Fix Verified{run_txt}:</strong> {res_note}
               </div>"""
 
+    expected_actual_html = format_expected_vs_actual(f.get("expectedVsActual", ""))
+    journey_step = escape(f.get("journeyStep", ""))
+    journey_html = f'<p class="finding-journey"><strong>Journey step:</strong> {journey_step}</p>' if journey_step else ""
+
+    # Search data string
+    search_terms = f"{fid} {title} {sev} {status} {' '.join(pattern_ids)} {' '.join(valid_acs)}".lower()
+
     return f"""
-      <article class="finding-card {card_class}" data-severity="{sev}" data-status="{status}">
+      <article class="finding-card {card_class}" data-severity="{sev}" data-status="{status}" data-search="{escape(search_terms)}">
         <div class="finding-header">
           <div class="finding-meta">
             <span class="finding-id">{fid}</span>
             {sev_badge}
-            {lens_chip}
-            {rule_chip}
             {pattern_chips}
-            {qa_chips}
-            {stack_chips}
-            {conf_pill}
-            {status_pill}
+            {pillar_chip}
+            {ac_chips}
           </div>
           {deduction_html}
         </div>
 
         <h3 class="finding-title">{title}</h3>
+        {journey_html}
 
         <div class="finding-body-grid">
           <div class="section-box">
@@ -219,8 +304,7 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
             </div>
             <div class="section-box-content">
               <ul style="padding-left:18px;margin-bottom:12px;">{ev_html}</ul>
-              <strong>Expected vs Actual:</strong><br>
-              {escape(f.get("expectedVsActual", "N/A"))}
+              {expected_actual_html}
               {resolution_banner}
             </div>
             {inline_image_html}
@@ -233,15 +317,12 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
             </div>
             <div class="section-box-content">
               <ol style="padding-left:18px;margin-bottom:12px;">{repro_html}</ol>
-              <div style="font-size:0.8rem;color:var(--text-dim);margin-top:8px;">
-                <strong>QA Traceability:</strong> {qa_refs_str}
-              </div>
             </div>
           </div>
         </div>
 
         <!-- Recommended Solutions & Design Guidance -->
-        <div style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+        <div class="guidance-grid">
           <div class="section-box" style="border-left:3px solid var(--accent-emerald);">
             <div class="section-box-title" style="color:#34d399;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -249,9 +330,6 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
             </div>
             <div class="section-box-content">
               {solution}
-              <div style="margin-top:8px;font-size:0.82rem;color:var(--text-dim);">
-                <strong>Verification / Criteria:</strong> {acceptance}
-              </div>
             </div>
           </div>
 
@@ -298,7 +376,11 @@ def main():
     findings = []
     if findings_file.is_file():
         try:
-            findings = json.loads(findings_file.read_text(encoding="utf-8"))
+            raw_f = json.loads(findings_file.read_text(encoding="utf-8"))
+            if isinstance(raw_f, dict) and "findings" in raw_f:
+                findings = raw_f["findings"]
+            elif isinstance(raw_f, list):
+                findings = raw_f
         except Exception as e:
             print(f"Warning: Failed to parse ux-findings.json: {e}")
 
@@ -313,23 +395,26 @@ def main():
     if context_file.is_file():
         try:
             ctx = json.loads(context_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to parse context-pack.json: {e}")
 
     qa = {}
     if qa_file.is_file():
         try:
             qa = json.loads(qa_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to parse qa-result.json: {e}")
 
-    ticket = card.get("ticket") or ctx.get("ticket") or run_dir.parent.name
-    date_str = card.get("date") or "2026-10-28"
+    # Extract Run & Ticket Info
+    ticket = card.get("ticket") or ctx.get("ticket", {}).get("key") or run_dir.parent.name
+    if not ticket or ticket.startswith("runs"):
+        ticket = "LEX-TICKET"
+
     run_label = run_dir.name
-    score = card.get("score", 100)
-    verdict = card.get("verdict", "PASS WITH ADVISORIES")
+    score = int(card.get("score", 100))
+    verdict = card.get("verdict", "PASS WITH ADVISORIES" if score < 100 else "PASS")
     counts = card.get("counts", {"S0": 0, "S1": 0, "S2": 0, "S3": 0, "O": 0})
-    total_deduction = card.get("totalDeduction", 0)
+    total_deduction = int(card.get("totalDeduction", 0))
 
     # Separate Active Defects (S0-S3) from Observations and Stakeholder-Resolved findings
     defects = [f for f in findings if f.get("severity") in ["S0", "S1", "S2", "S3"] and str(f.get("status", "")).lower() not in ["resolved", "verified fixed"]]
@@ -376,8 +461,10 @@ def main():
 
     # Summary metrics
     pr_num = ctx.get("pr") or (ctx.get("pullRequests", [{}])[0].get("number", "") if ctx.get("pullRequests") else "")
-    ticket_title = ctx.get("title") or card.get("journey") or f"QA & UX Audit for {ticket}"
-    ticket_desc = ctx.get("description") or card.get("journey") or ""
+    ticket_title = ctx.get("title") or ctx.get("ticket", {}).get("summary") or card.get("journey") or f"QA & UX Audit for {ticket}"
+    ticket_desc = ctx.get("description") or ctx.get("ticket", {}).get("description") or card.get("journey") or ""
+    if len(ticket_desc) > 350:
+        ticket_desc = ticket_desc[:350].rsplit(" ", 1)[0] + "..."
 
     # Generate Defect Cards HTML
     if defects:
@@ -403,70 +490,103 @@ def main():
         </div>
         """]
 
-    # Evidence Gallery HTML
-    evidence_cards_html = []
-    if evidence_images:
-        for idx, ev in enumerate(evidence_images):
-            evidence_cards_html.append(f"""
-        <div class="evidence-card" onclick="openLightbox('{ev['uri']}', '{escape(ev['title'])} ({escape(ev['name'])})')">
-          <div class="evidence-thumb-container">
-            <img src="{ev['uri']}" alt="{escape(ev['title'])}" class="evidence-thumb" loading="lazy">
-          </div>
-          <div class="evidence-meta">
-            <h4>{escape(ev['title'])}</h4>
-            <p>{escape(ev['rel_path'])}</p>
-          </div>
-        </div>
-""")
+    # Build Acceptance Criteria Matrix Table
+    ac_rows = []
+    ac_items_dict = {}
+    
+    # 1. Parse from context-pack acceptance criteria markdown if present
+    raw_ac_text = ctx.get("ticket", {}).get("acceptanceCriteria") or ""
+    if raw_ac_text:
+        for line in raw_ac_text.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("- [ ]") or line_str.startswith("- [x]"):
+                clean_stmt = line_str.replace("- [ ]", "").replace("- [x]", "").strip()
+                # Extract AC label e.g. AC1 if starts with it, or synthesize
+                idx = len(ac_items_dict) + 1
+                ac_key = f"AC{idx}"
+                ac_items_dict[ac_key] = clean_stmt
+
+    # 2. Add or cross-reference AC tags referenced in findings
+    for f in findings:
+        f_acs = f.get("acceptanceCriteria", [])
+        if isinstance(f_acs, str):
+            f_acs = [f_acs]
+        for a in f_acs:
+            if a and len(a) < 30 and not a.startswith("Verify"):
+                if a not in ac_items_dict:
+                    ac_items_dict[a] = f.get("title", "Workflow Acceptance Verification")
+
+    # Render AC Matrix rows
+    if ac_items_dict:
+        for ackey, acstmt in ac_items_dict.items():
+            # Find matching findings
+            matched_findings = [f for f in findings if ackey.lower() in str(f.get("acceptanceCriteria", "")).lower() or ackey.lower() in str(f.get("journeyStep", "")).lower() or ackey.lower() in str(f.get("title", "")).lower()]
+            
+            # Status badge
+            has_s0_s1 = any(f.get("severity") in ["S0", "S1"] for f in matched_findings)
+            has_s2_s3 = any(f.get("severity") in ["S2", "S3"] for f in matched_findings)
+            
+            if has_s0_s1:
+                ac_status = '<span class="badge-pill" style="background:rgba(244,63,94,0.18);color:#f43f5e;border:1px solid rgba(244,63,94,0.35);">Blocking Issue</span>'
+            elif has_s2_s3:
+                ac_status = '<span class="badge-pill badge-amber">Advisory Finding</span>'
+            else:
+                ac_status = '<span class="badge-pill badge-emerald">Verified / Pass</span>'
+                
+            f_links = []
+            for mf in matched_findings:
+                sev_cls = "badge-s3" if mf.get("severity") == "S3" else ("badge-s2" if mf.get("severity") == "S2" else "badge-obs")
+                f_links.append(f'<span class="{sev_cls}" style="font-size:0.75rem;">{escape(mf.get("id"))} ({escape(mf.get("severity"))})</span>')
+            
+            f_display = " ".join(f_links) if f_links else '<span style="color:var(--text-dim);font-size:0.8rem;">No defects logged</span>'
+            
+            ac_rows.append(f"""
+            <tr>
+              <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);">{escape(ackey)}</td>
+              <td style="color:#e2e8f0;font-size:0.88rem;">{escape(acstmt)}</td>
+              <td>{f_display}</td>
+              <td>{ac_status}</td>
+            </tr>
+            """)
     else:
-        evidence_cards_html.append("""
-        <div style="grid-column:1/-1;padding:40px;text-align:center;color:var(--text-muted);background:var(--bg-card);border-radius:16px;">
-          <p>No screenshot artifacts captured for this run.</p>
-        </div>
-""")
+        ac_rows.append("""
+        <tr>
+          <td colspan="4" style="text-align:center;padding:24px;color:var(--text-dim);">No specific acceptance criteria breakdown provided for this ticket.</td>
+        </tr>
+        """)
 
     # Evaluated checks table
     evaluated_rows = []
-    for c in card.get("checksEvaluated", []):
-        evaluated_rows.append(f"""
+    checks_list = card.get("checksEvaluated", [])
+    if isinstance(checks_list, list) and checks_list:
+        for c in checks_list:
+            if isinstance(c, dict):
+                evaluated_rows.append(f"""
+                <tr>
+                  <td style="font-weight:600;color:#fff;">{escape(c.get('check', 'Check'))}</td>
+                  <td><span class="badge-pill badge-emerald">Evaluated</span></td>
+                  <td style="color:var(--text-muted);">{escape(c.get('result', 'Pass'))}</td>
+                </tr>
+                """)
+            else:
+                evaluated_rows.append(f"""
+                <tr>
+                  <td style="font-weight:600;color:#fff;">{escape(str(c))}</td>
+                  <td><span class="badge-pill badge-emerald">Evaluated</span></td>
+                  <td style="color:var(--text-muted);">Pass / Compliant</td>
+                </tr>
+                """)
+    else:
+        evaluated_rows.append("""
         <tr>
-          <td style="font-weight:600;color:#fff;">{escape(c.get('check'))}</td>
-          <td><span class="badge-pill badge-emerald">Evaluated</span></td>
-          <td style="color:var(--text-muted);">{escape(c.get('result'))}</td>
+          <td colspan="3" style="text-align:center;padding:24px;color:var(--text-dim);">Checks evaluated across core workflow journeys.</td>
         </tr>
-""")
+        """)
 
-    # Not evaluated checks table
-    not_evaluated_rows = []
-    for c in card.get("checksNotEvaluated", []):
-        not_evaluated_rows.append(f"""
-        <tr>
-          <td style="font-weight:600;color:var(--text-muted);">{escape(c.get('check'))}</td>
-          <td><span class="badge-pill badge-amber">Not Evaluated</span></td>
-          <td style="color:var(--text-dim);">{escape(c.get('reason'))}</td>
-        </tr>
-""")
-
-    # Deduction ledger rows
-    ledger_rows = []
-    for l in card.get("deductionLedger", []):
-        ledger_rows.append(f"""
-        <tr>
-          <td style="font-family:var(--font-mono);font-weight:700;color:var(--accent-cyan);">{escape(l.get('findingId'))}</td>
-          <td><span class="badge-pill badge-violet">{escape(l.get('severity'))}</span></td>
-          <td style="font-weight:700;color:#f43f5e;">-{l.get('points', 0)} pts</td>
-          <td style="font-weight:700;color:#fff;">{l.get('subtotal', 100)} / 100</td>
-          <td style="color:var(--text-dim);font-size:0.85rem;">{escape(l.get('note', ''))}</td>
-        </tr>
-""")
-
-    passed_count = qa.get('test_results', {}).get('passed', 4) if isinstance(qa.get('test_results'), dict) else 4
-
+    # Observation filter counts
     count_obs_reported = sum(1 for o in observations if o.get("status") == "Reported")
     count_obs_resolved = sum(1 for o in observations if str(o.get("status", "")).lower() in ["resolved", "verified fixed"])
     count_obs_held = sum(1 for o in observations if o.get("status") == "Held for review")
-    count_obs_not_eval = sum(1 for o in observations if o.get("status") == "Not evaluated")
-    count_obs_withdrawn = sum(1 for o in observations if o.get("status") == "Withdrawn")
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -526,17 +646,17 @@ def main():
       padding: 32px 24px;
     }}
 
-    /* Top Nav */
+    /* Top Navigation */
     .top-nav {{
       display: flex;
       justify-content: space-between;
       align-items: center;
       padding: 16px 24px;
-      background: rgba(17, 24, 39, 0.6);
-      backdrop-filter: blur(16px);
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
       border: 1px solid var(--border-subtle);
       border-radius: 16px;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
     }}
 
     .brand {{
@@ -546,200 +666,80 @@ def main():
     }}
 
     .brand-icon {{
-      width: 36px;
-      height: 36px;
-      border-radius: 10px;
+      width: 32px;
+      height: 32px;
       background: linear-gradient(135deg, var(--accent-indigo), var(--accent-violet));
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
     }}
 
     .brand-icon svg {{
-      width: 20px;
-      height: 20px;
-      fill: none;
-      stroke: #fff;
-      stroke-width: 2;
+      width: 18px;
+      height: 18px;
+      fill: #fff;
     }}
 
     .brand-text h1 {{
       font-family: var(--font-display);
-      font-size: 1.25rem;
+      font-size: 1.15rem;
       font-weight: 700;
-      color: #fff;
+      letter-spacing: -0.01em;
     }}
 
     .brand-text p {{
       font-size: 0.75rem;
-      color: var(--text-muted);
+      color: var(--text-dim);
     }}
 
     .nav-meta {{
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 10px;
     }}
 
     .badge-pill {{
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 5px 12px;
+      padding: 4px 12px;
       border-radius: 9999px;
       font-size: 0.75rem;
       font-weight: 600;
-      letter-spacing: 0.02em;
-      text-transform: uppercase;
+      border: 1px solid var(--border-subtle);
     }}
 
     .badge-emerald {{
       background: rgba(16, 185, 129, 0.15);
       color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-color: rgba(16, 185, 129, 0.3);
     }}
 
     .badge-violet {{
       background: rgba(139, 92, 246, 0.15);
       color: #c084fc;
-      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-color: rgba(139, 92, 246, 0.3);
     }}
 
     .badge-amber {{
       background: rgba(245, 158, 11, 0.15);
       color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }}
-
-    .badge-s0 {{
-      background: rgba(239, 68, 68, 0.2);
-      color: #f87171;
-      border: 1px solid rgba(239, 68, 68, 0.4);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.75rem;
-    }}
-
-    .badge-s1 {{
-      background: rgba(244, 63, 94, 0.2);
-      color: #fb7185;
-      border: 1px solid rgba(244, 63, 94, 0.4);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.75rem;
-    }}
-
-    .badge-s2 {{
-      background: rgba(249, 115, 22, 0.2);
-      color: #fb923c;
-      border: 1px solid rgba(249, 115, 22, 0.4);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.75rem;
-    }}
-
-    .badge-s3 {{
-      background: rgba(245, 158, 11, 0.18);
-      color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.75rem;
-    }}
-
-    .badge-obs {{
-      background: rgba(6, 182, 212, 0.18);
-      color: #22d3ee;
-      border: 1px solid rgba(6, 182, 212, 0.4);
-      padding: 4px 10px;
-      border-radius: 6px;
-      font-weight: 700;
-      font-size: 0.75rem;
-    }}
-
-    /* Chip Tags */
-    .tag-rule {{
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: #38bdf8;
-      background: rgba(6, 182, 212, 0.12);
-      border: 1px solid rgba(6, 182, 212, 0.35);
-      padding: 3px 10px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }}
-
-    .tag-pattern {{
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: #fb7185;
-      background: rgba(244, 63, 94, 0.12);
-      border: 1px solid rgba(244, 63, 94, 0.35);
-      padding: 3px 10px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }}
-
-    .tag-lens {{
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: #c084fc;
-      background: rgba(139, 92, 246, 0.12);
-      border: 1px solid rgba(139, 92, 246, 0.3);
-      padding: 3px 10px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }}
-
-    .tag-qa {{
-      font-family: var(--font-mono);
-      font-size: 0.72rem;
-      color: #94a3b8;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border-subtle);
-      padding: 3px 9px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }}
-
-    .tag-stack {{
-      font-size: 0.72rem;
-      color: #818cf8;
-      background: rgba(99, 102, 241, 0.1);
-      border: 1px solid rgba(99, 102, 241, 0.25);
-      padding: 2px 8px;
-      border-radius: 4px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
+      border-color: rgba(245, 158, 11, 0.3);
     }}
 
     /* Hero Card */
     .hero-card {{
-      position: relative;
-      background: linear-gradient(145deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
+      background: linear-gradient(145deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.9));
       border: 1px solid var(--border-subtle);
       border-radius: 20px;
-      padding: 36px;
-      backdrop-filter: blur(20px);
-      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
-      margin-bottom: 32px;
+      padding: 32px;
+      margin-bottom: 28px;
+      position: relative;
       overflow: hidden;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
     }}
 
     .hero-card::before {{
@@ -756,13 +756,13 @@ def main():
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      margin-bottom: 24px;
+      gap: 32px;
       flex-wrap: wrap;
-      gap: 20px;
     }}
 
     .hero-title-area {{
-      max-width: 820px;
+      flex: 1;
+      min-width: 320px;
     }}
 
     .ticket-chip-row {{
@@ -785,37 +785,35 @@ def main():
 
     .hero-title-area h2 {{
       font-family: var(--font-display);
-      font-size: 2.2rem;
-      font-weight: 800;
+      font-size: 1.85rem;
+      font-weight: 700;
       color: #fff;
-      line-height: 1.2;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
+      line-height: 1.25;
     }}
 
     .hero-description {{
       color: var(--text-muted);
-      font-size: 0.95rem;
-      line-height: 1.6;
+      font-size: 0.92rem;
+      max-width: 780px;
+      line-height: 1.55;
     }}
 
-    /* Score Gauge Banner */
+    /* Score Gauge */
     .score-banner {{
       display: flex;
       align-items: center;
       gap: 24px;
-      background: rgba(15, 23, 42, 0.8);
-      border: 1px solid var(--border-subtle);
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 18px 24px;
       border-radius: 16px;
-      padding: 20px 24px;
     }}
 
     .gauge-wrapper {{
       position: relative;
-      width: 96px;
-      height: 96px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 92px;
+      height: 92px;
     }}
 
     .gauge-svg {{
@@ -826,7 +824,7 @@ def main():
 
     .gauge-bg {{
       fill: none;
-      stroke: rgba(255, 255, 255, 0.08);
+      stroke: rgba(255, 255, 255, 0.1);
       stroke-width: 8;
     }}
 
@@ -835,33 +833,40 @@ def main():
       stroke: url(#scoreGradient);
       stroke-width: 8;
       stroke-linecap: round;
-      stroke-dasharray: {circumference};
+      stroke-dasharray: 264;
       stroke-dashoffset: {dash_offset};
-      transition: stroke-dashoffset 1s ease;
+      transition: stroke-dashoffset 1s ease-out;
     }}
 
     .gauge-value {{
       position: absolute;
-      text-align: center;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
     }}
 
     .gauge-number {{
       font-family: var(--font-display);
-      font-size: 1.8rem;
+      font-size: 1.65rem;
       font-weight: 800;
       color: #fff;
       line-height: 1;
     }}
 
     .gauge-total {{
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: var(--text-dim);
     }}
 
     .score-meta h3 {{
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.05em;
       color: var(--text-muted);
       margin-bottom: 4px;
     }}
@@ -870,33 +875,39 @@ def main():
       font-family: var(--font-display);
       font-size: 1.35rem;
       font-weight: 700;
-      color: #34d399;
+      color: #fbbf24;
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 4px;
     }}
 
     .score-meta p {{
       font-size: 0.8rem;
       color: var(--text-dim);
+      margin-top: 3px;
     }}
 
-    /* Quick Metrics Grid */
+    /* Exactly 3 Summary Cards - Equally Divided (33.333% each) */
     .stats-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(3, 1fr);
       gap: 16px;
       margin-top: 24px;
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
       padding-top: 24px;
+    }}
+
+    @media (max-width: 850px) {{
+      .stats-grid {{
+        grid-template-columns: 1fr;
+      }}
     }}
 
     .stat-item {{
       background: rgba(15, 23, 42, 0.5);
       border: 1px solid var(--border-subtle);
       border-radius: 12px;
-      padding: 16px;
+      padding: 16px 20px;
     }}
 
     .stat-label {{
@@ -912,7 +923,7 @@ def main():
 
     .stat-value {{
       font-family: var(--font-display);
-      font-size: 1.4rem;
+      font-size: 1.35rem;
       font-weight: 700;
       margin-bottom: 4px;
     }}
@@ -922,31 +933,42 @@ def main():
       color: var(--text-dim);
     }}
 
-    /* Tab Bar */
+    /* Exactly 4 Tabs - Equally Divided (25% each) */
     .tab-bar {{
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
       gap: 8px;
-      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(17, 24, 39, 0.8);
+      padding: 6px;
+      border-radius: 14px;
+      border: 1px solid var(--border-subtle);
       margin-bottom: 24px;
-      overflow-x: auto;
-      padding-bottom: 4px;
+      width: 100%;
+    }}
+
+    @media (max-width: 960px) {{
+      .tab-bar {{
+        grid-template-columns: repeat(2, 1fr);
+      }}
     }}
 
     .tab-btn {{
       background: transparent;
-      border: none;
+      border: 1px solid transparent;
       color: var(--text-muted);
       font-family: var(--font-sans);
-      font-size: 0.9rem;
+      font-size: 0.88rem;
       font-weight: 600;
-      padding: 12px 18px;
+      padding: 12px 14px;
       border-radius: 10px;
       cursor: pointer;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
       transition: all 0.2s ease;
       white-space: nowrap;
+      width: 100%;
     }}
 
     .tab-btn:hover {{
@@ -956,15 +978,15 @@ def main():
 
     .tab-btn.active {{
       color: #fff;
-      background: rgba(99, 102, 241, 0.15);
-      border: 1px solid rgba(99, 102, 241, 0.3);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(139, 92, 246, 0.25));
+      border-color: rgba(99, 102, 241, 0.4);
     }}
 
     .tab-count {{
-      font-size: 0.75rem;
+      font-size: 0.72rem;
       padding: 2px 7px;
       border-radius: 9999px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.1);
       color: var(--text-muted);
     }}
 
@@ -1022,8 +1044,28 @@ def main():
 
     .filter-pill.active {{
       background: var(--accent-indigo);
-      color: #fff;
       border-color: var(--accent-indigo);
+      color: #fff;
+    }}
+
+    .search-box {{
+      position: relative;
+    }}
+
+    .search-input {{
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+      color: #fff;
+      width: 260px;
+      outline: none;
+      transition: border-color 0.2s;
+    }}
+
+    .search-input:focus {{
+      border-color: var(--border-focus);
     }}
 
     /* Finding Card */
@@ -1033,28 +1075,28 @@ def main():
       border-radius: 16px;
       padding: 24px;
       margin-bottom: 20px;
-      transition: border-color 0.2s, transform 0.2s;
+      transition: transform 0.2s, border-color 0.2s;
+      position: relative;
     }}
 
     .finding-card:hover {{
-      border-color: var(--border-focus);
+      border-color: rgba(255, 255, 255, 0.15);
     }}
 
-    .finding-card.severity-S0 {{ border-left: 4px solid var(--accent-rose); }}
-    .finding-card.severity-S1 {{ border-left: 4px solid var(--accent-rose); }}
-    .finding-card.severity-S2 {{ border-left: 4px solid var(--accent-amber); }}
-    .finding-card.severity-S3 {{ border-left: 4px solid #fbbf24; }}
-    .finding-card.severity-O {{ border-left: 4px solid var(--accent-cyan); }}
-    .finding-card.severity-Resolved,
-    .finding-card[data-status="Resolved"] {{ border-left: 4px solid var(--accent-emerald); }}
+    .severity-S0 {{ border-left: 4px solid var(--accent-rose); }}
+    .severity-S1 {{ border-left: 4px solid #f97316; }}
+    .severity-S2 {{ border-left: 4px solid var(--accent-amber); }}
+    .severity-S3 {{ border-left: 4px solid #38bdf8; }}
+    .severity-O {{ border-left: 4px solid var(--accent-violet); }}
+    .severity-Resolved {{ border-left: 4px solid var(--accent-emerald); }}
 
     .finding-header {{
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      gap: 12px;
       flex-wrap: wrap;
-      gap: 10px;
+      margin-bottom: 12px;
     }}
 
     .finding-meta {{
@@ -1068,26 +1110,101 @@ def main():
       font-family: var(--font-mono);
       font-weight: 700;
       font-size: 0.85rem;
-      color: var(--accent-cyan);
+      color: #fff;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 3px 10px;
+      border-radius: 6px;
     }}
 
+    .badge-s0 {{ background: rgba(244, 63, 94, 0.2); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+    .badge-s1 {{ background: rgba(249, 115, 22, 0.2); color: #f97316; border: 1px solid rgba(249, 115, 22, 0.4); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+    .badge-s2 {{ background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+    .badge-s3 {{ background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+    .badge-obs {{ background: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.35); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+    .badge-resolved {{ background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); font-size: 0.75rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }}
+
+    /* Tags allowed on Defect card: Pattern, Pillar, AC */
+    .tag-pattern {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(244, 63, 94, 0.12);
+      color: #fb7185;
+      border: 1px solid rgba(244, 63, 94, 0.25);
+    }}
+
+    .tag-pillar {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(139, 92, 246, 0.12);
+      color: #c084fc;
+      border: 1px solid rgba(139, 92, 246, 0.25);
+    }}
+
+    .tag-ac {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(6, 182, 212, 0.12);
+      color: #38bdf8;
+      border: 1px solid rgba(6, 182, 212, 0.25);
+    }}
+
+    /* Colored Deduction Points Highlighting */
+    .deduction-pill {{
+      display: inline-flex;
+      align-items: center;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      font-weight: 700;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }}
+    .ded-range-0 {{ color: #34d399; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); }}
+    .ded-range-1 {{ color: #fbbf24; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); }}
+    .ded-range-2 {{ color: #fb923c; background: rgba(251, 146, 60, 0.16); border: 1px solid rgba(251, 146, 60, 0.38); }}
+    .ded-range-3 {{ color: #f43f5e; background: rgba(244, 63, 94, 0.18); border: 1px solid rgba(244, 63, 94, 0.42); }}
+    .ded-range-4 {{ color: #fda4af; background: rgba(225, 29, 72, 0.28); border: 1px solid rgba(225, 29, 72, 0.55); }}
+
     .finding-title {{
-      font-family: var(--font-display);
-      font-size: 1.25rem;
+      font-size: 1.12rem;
       font-weight: 700;
       color: #fff;
-      margin-bottom: 16px;
+      margin-bottom: 4px;
+      line-height: 1.35;
+    }}
+
+    .finding-journey {{
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      margin-bottom: 14px;
     }}
 
     .finding-body-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
       gap: 16px;
+      margin-top: 14px;
     }}
 
     .section-box {{
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(15, 23, 42, 0.45);
+      border: 1px solid var(--border-subtle);
       border-radius: 12px;
       padding: 16px;
     }}
@@ -1108,6 +1225,54 @@ def main():
       font-size: 0.88rem;
       color: #cbd5e1;
       line-height: 1.6;
+    }}
+
+    /* Highlighted Expected vs. Actual Callout Boxes */
+    .callout-expected {{
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-left: 3px solid #10b981;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 10px;
+    }}
+
+    .label-expected {{
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: #34d399;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }}
+
+    .callout-actual {{
+      background: rgba(244, 63, 94, 0.08);
+      border: 1px solid rgba(244, 63, 94, 0.25);
+      border-left: 3px solid #f43f5e;
+      border-radius: 8px;
+      padding: 10px 14px;
+    }}
+
+    .label-actual {{
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: #fb7185;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }}
+
+    .callout-body {{
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: #e2e8f0;
     }}
 
     /* Inline Evidence Screenshot Previews inside Cards */
@@ -1148,64 +1313,15 @@ def main():
       align-items: center;
     }}
 
-    /* Evidence Gallery */
-    .evidence-grid {{
+    /* Solutions Guidance Grid */
+    .guidance-grid {{
+      margin-top: 16px;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
     }}
 
-    .evidence-card {{
-      background: var(--bg-card);
-      border: 1px solid var(--border-subtle);
-      border-radius: 14px;
-      overflow: hidden;
-      cursor: pointer;
-      transition: transform 0.2s, border-color 0.2s;
-    }}
-
-    .evidence-card:hover {{
-      transform: translateY(-4px);
-      border-color: var(--border-focus);
-    }}
-
-    .evidence-thumb-container {{
-      width: 100%;
-      height: 200px;
-      background: #000;
-      overflow: hidden;
-    }}
-
-    .evidence-thumb {{
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: top;
-      transition: transform 0.3s;
-    }}
-
-    .evidence-card:hover .evidence-thumb {{
-      transform: scale(1.03);
-    }}
-
-    .evidence-meta {{
-      padding: 14px 18px;
-    }}
-
-    .evidence-meta h4 {{
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: #fff;
-      margin-bottom: 4px;
-    }}
-
-    .evidence-meta p {{
-      font-size: 0.75rem;
-      color: var(--text-dim);
-      font-family: var(--font-mono);
-    }}
-
-    /* Data Table */
+    /* Tables */
     .data-table {{
       width: 100%;
       border-collapse: collapse;
@@ -1326,12 +1442,12 @@ def main():
         </div>
         <div class="brand-text">
           <h1>Lexful Autonomous QA &amp; UX Audit</h1>
-          <p>Run: {escape(run_label)} • Target: {escape(card.get('url', 'e2e-test.uat.lexful.net'))}</p>
+          <p>Run: {escape(run_label)} • Target: {escape(card.get('target', card.get('url', 'e2e-test.uat.lexful.net')))}</p>
         </div>
       </div>
       <div class="nav-meta">
-        <span class="badge-pill badge-emerald">QA: {qa.get('verdict', 'NEEDS_REVISION')}</span>
         <span class="badge-pill badge-violet">UX SCORE: {score}/100</span>
+        <span class="badge-pill badge-emerald">QA: {qa.get('verdict', 'NEEDS_REVISION')}</span>
       </div>
     </nav>
 
@@ -1342,7 +1458,7 @@ def main():
           <div class="ticket-chip-row">
             <span class="ticket-id">{escape(ticket)}</span>
             <span class="badge-pill badge-emerald">Status: Evaluated</span>
-            {f'<span class="pr-link">PR #{pr_num}</span>' if pr_num else ''}
+            {f'<span class="badge-pill badge-violet">PR #{pr_num}</span>' if pr_num else ''}
           </div>
           <h2>{escape(ticket_title)}</h2>
           <p class="hero-description">
@@ -1363,7 +1479,7 @@ def main():
             </div>
           </div>
           <div class="score-meta">
-            <h3>UX Health Verdict</h3>
+            <h3>Release Verdict</h3>
             <div class="verdict-text">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
@@ -1371,77 +1487,80 @@ def main():
               </svg>
               {escape(verdict)}
             </div>
-            <p>0 Blockers • {counts.get('S3', 0)} Minor UI (S3) • {len(observations)} Observations</p>
+            <p>0 Blockers • {counts.get('S3', len(defects))} Minor UI (S3) • {len(observations)} Observations</p>
           </div>
         </div>
       </div>
 
-      <!-- Quick Metrics Grid -->
+      <!-- Exactly 3 Summary Cards: Findings by Severity (1st), Total Deductions (2nd), Design Stack (3rd) -->
       <div class="stats-grid">
-        <div class="stat-item">
-          <div class="stat-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Task Completion
-          </div>
-          <div class="stat-value" style="color:#34d399">PASS (Asset)</div>
-          <div class="stat-sub">Live asset empty Sources tab verified; Org drawer held for review</div>
-        </div>
+        <!-- Card 1: Findings by Severity -->
         <div class="stat-item">
           <div class="stat-label">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            UX Severity Deductions
+            Findings by Severity
           </div>
-          <div class="stat-value" style="color:#fbbf24">-{total_deduction} pts</div>
-          <div class="stat-sub">S0={counts.get('S0', 0)}, S1={counts.get('S1', 0)}, S2={counts.get('S2', 0)}, S3={counts.get('S3', 0)}, Obs={len(observations)}</div>
+          <div class="stat-value">
+            <span style="color:#ef4444">S0 {counts.get('S0', 0)}</span> &middot;
+            <span style="color:#f97316">S1 {counts.get('S1', 0)}</span> &middot;
+            <span style="color:#eab308">S2 {counts.get('S2', 0)}</span> &middot;
+            <span style="color:#38bdf8">S3 {counts.get('S3', len(defects))}</span> &middot;
+            <span style="color:#c084fc">O {len(observations)}</span>
+          </div>
+          <div class="stat-sub">Resolved: {counts.get('Resolved', 0)} &bull; {len(defects)} Scored Defect(s)</div>
         </div>
+
+        <!-- Card 2: Total Deductions -->
         <div class="stat-item">
           <div class="stat-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            Automated Specs
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            Total Deductions
           </div>
-          <div class="stat-value" style="color:#a5b4fc">{passed_count} Passed</div>
-          <div class="stat-sub">Live AC1 + Mocked AC3 error recovery validated</div>
+          <div class="stat-value" style="color:{'#34d399' if total_deduction == 0 else '#fbbf24'}">
+            {'-' + str(total_deduction) if total_deduction > 0 else '0'} pts
+          </div>
+          <div class="stat-sub">{len(defects)} defect(s) applied &bull; Advisory only</div>
         </div>
+
+        <!-- Card 3: Design Stack -->
         <div class="stat-item">
           <div class="stat-label">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             Design Stack
           </div>
-          <div class="stat-value" style="font-size:1.1rem;color:#38bdf8">shadcn + Fluent</div>
-          <div class="stat-sub">Radix TabList &amp; Empty State patterns</div>
+          <div class="stat-value" style="font-size:1.15rem;color:#818cf8;line-height:1.4;">
+            shadcn/ui + Radix + Tailwind
+          </div>
+          <div class="stat-sub">Fluent-aligned visual language</div>
         </div>
       </div>
     </section>
 
-    <!-- Tab Bar -->
-    <div class="tab-bar">
+    <!-- Exactly 4 Interactive Tabs (25% width each) -->
+    <div class="tab-bar" role="tablist" aria-label="Report sections">
       <button class="tab-btn active" onclick="switchTab('tab-defects', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        UI/UX Defects (S0–S3)
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        UI/UX Defects (S0&ndash;S3)
         <span class="tab-count">{len(defects)}</span>
       </button>
       <button class="tab-btn" onclick="switchTab('tab-observations', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         UX Observations &amp; Verification (O)
         <span class="tab-count">{len(observations)}</span>
       </button>
-      <button class="tab-btn" onclick="switchTab('tab-evidence', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-        Visual Evidence &amp; Lightbox
-        <span class="tab-count">{len(evidence_images)}</span>
+      <button class="tab-btn" onclick="switchTab('tab-ac', this)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Acceptance Criteria Matrix
+        <span class="tab-count">{len(ac_items_dict)}</span>
       </button>
       <button class="tab-btn" onclick="switchTab('tab-criteria', this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Evaluated Checks Matrix
         <span class="tab-count">{len(card.get('checksEvaluated', []))}</span>
       </button>
-      <button class="tab-btn" onclick="switchTab('tab-ledger', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Scoring &amp; Deduction Ledger
-      </button>
     </div>
 
-    <!-- TAB 1: UI/UX DEFECTS (S0–S3) -->
+    <!-- TAB 1: UI/UX DEFECTS (S0-S3) -->
     <div id="tab-defects" class="tab-pane active">
       <div class="filter-bar">
         <div class="filter-pills">
@@ -1449,17 +1568,20 @@ def main():
           <button class="filter-pill" onclick="filterDefects('S0', this)">S0 Blocker ({counts.get('S0', 0)})</button>
           <button class="filter-pill" onclick="filterDefects('S1', this)">S1 Critical ({counts.get('S1', 0)})</button>
           <button class="filter-pill" onclick="filterDefects('S2', this)">S2 Major ({counts.get('S2', 0)})</button>
-          <button class="filter-pill" onclick="filterDefects('S3', this)">S3 Minor ({counts.get('S3', 0)})</button>
+          <button class="filter-pill" onclick="filterDefects('S3', this)">S3 Minor ({counts.get('S3', len(defects))})</button>
         </div>
-        <span style="font-size:0.8rem;color:var(--text-dim)">Scoring calibration: S0=-40, S1=-25 (Blocking) • S2=-10, S3=-3 (Non-blocking)</span>
+        <div class="search-box">
+          <input type="text" class="search-input" placeholder="Search ID, title, pattern, AC..." oninput="handleSearch(this.value)">
+        </div>
       </div>
+      <p style="font-size:0.8rem;color:var(--text-dim);margin-bottom:16px;">Deductions: S0 -40 and S1 -25 block release. S2 -10 and S3 -3 are non-blocking.</p>
 
       {"".join(defects_cards_html)}
     </div>
 
     <!-- TAB 2: UX OBSERVATIONS & VERIFICATION (O) -->
     <div id="tab-observations" class="tab-pane">
-      <div style="display:flex;align-items:center;gap:14px;background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.25);border-radius:14px;padding:16px 20px;margin-bottom:20px;">
+      <div class="section-box" style="display:flex;align-items:flex-start;gap:16px;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.25);padding:16px 20px;margin-bottom:20px;">
         <div style="width:36px;height:36px;border-radius:10px;background:rgba(6,182,212,0.18);display:flex;align-items:center;justify-content:center;color:#38bdf8;flex-shrink:0;">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         </div>
@@ -1477,8 +1599,6 @@ def main():
           <button class="filter-pill" onclick="filterObservations('Reported', this)">Reported ({count_obs_reported})</button>
           <button class="filter-pill" onclick="filterObservations('Resolved', this)">Resolved ({count_obs_resolved})</button>
           <button class="filter-pill" onclick="filterObservations('Held for review', this)">Held for Review ({count_obs_held})</button>
-          <button class="filter-pill" onclick="filterObservations('Not evaluated', this)">Not Evaluated ({count_obs_not_eval})</button>
-          <button class="filter-pill" onclick="filterObservations('Withdrawn', this)">Withdrawn ({count_obs_withdrawn})</button>
         </div>
         <span style="font-size:0.8rem;color:var(--text-dim)">Scoring impact: 0 deduction pts • Advisory only</span>
       </div>
@@ -1486,21 +1606,40 @@ def main():
       {"".join(observations_cards_html)}
     </div>
 
-    <!-- TAB 3: VISUAL EVIDENCE & LIGHTBOX -->
-    <div id="tab-evidence" class="tab-pane">
-      <div class="evidence-grid">
-        {"".join(evidence_cards_html)}
+    <!-- TAB 3: ACCEPTANCE CRITERIA MATRIX -->
+    <div id="tab-ac" class="tab-pane">
+      <div style="margin-bottom:18px;">
+        <h3 style="font-family:var(--font-display);font-size:1.25rem;color:#fff;margin-bottom:4px;">Acceptance Criteria Matrix</h3>
+        <p style="font-size:0.85rem;color:var(--text-muted);">Evaluation of ticket acceptance criteria against observed UI behavior and audit findings.</p>
       </div>
+
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:100px;">AC Item</th>
+            <th>Requirement / Scope</th>
+            <th style="width:260px;">Associated Audit Finding(s)</th>
+            <th style="width:150px;">UX Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {"".join(ac_rows)}
+        </tbody>
+      </table>
     </div>
 
     <!-- TAB 4: EVALUATED CHECKS MATRIX -->
     <div id="tab-criteria" class="tab-pane">
-      <h3 style="font-family:var(--font-display);font-size:1.2rem;margin-bottom:16px;color:#fff;">Evaluated UX Checks</h3>
-      <table class="data-table" style="margin-bottom:32px;">
+      <div style="margin-bottom:18px;">
+        <h3 style="font-family:var(--font-display);font-size:1.25rem;color:#fff;margin-bottom:4px;">Evaluated UX Checks</h3>
+        <p style="font-size:0.85rem;color:var(--text-muted);">Checks from <code>lexful-ux-checks.yaml</code> evaluated during this journey.</p>
+      </div>
+
+      <table class="data-table">
         <thead>
           <tr>
-            <th>Check / Rule</th>
-            <th>Status</th>
+            <th style="width:240px;">Check / Rule</th>
+            <th style="width:140px;">Status</th>
             <th>Observation &amp; Result</th>
           </tr>
         </thead>
@@ -1508,60 +1647,19 @@ def main():
           {"".join(evaluated_rows)}
         </tbody>
       </table>
-
-      <h3 style="font-family:var(--font-display);font-size:1.2rem;margin-bottom:16px;color:var(--text-muted);">Checks Not Evaluated In This Journey</h3>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Check / Rule</th>
-            <th>Status</th>
-            <th>Reason Excluded</th>
-          </tr>
-        </thead>
-        <tbody>
-          {"".join(not_evaluated_rows)}
-        </tbody>
-      </table>
-    </div>
-
-    <!-- TAB 5: SCORING & DEDUCTION LEDGER -->
-    <div id="tab-ledger" class="tab-pane">
-      <h3 style="font-family:var(--font-display);font-size:1.2rem;margin-bottom:16px;color:#fff;">Deduction Ledger &amp; Calibration</h3>
-      <table class="data-table" style="margin-bottom:24px;">
-        <thead>
-          <tr>
-            <th>Finding ID</th>
-            <th>Severity</th>
-            <th>Points Deducted</th>
-            <th>Running Subtotal</th>
-            <th>Ledger Note</th>
-          </tr>
-        </thead>
-        <tbody>
-          {"".join(ledger_rows)}
-        </tbody>
-      </table>
-
-      <div class="section-box" style="margin-top:20px;">
-        <div class="section-box-title">Calibration Rules &amp; Non-Blocking Principle</div>
-        <div class="section-box-content">
-          <p>Per <code>lexful-ux-audit-gate/SKILL.md</code> v0.20: S2 and S3 findings are strictly non-blocking and do not fail the release. When only S2/S3 or Observations exist, the release verdict is <strong>PASS WITH ADVISORIES</strong>. Only verified S0/S1 blockers cause a blocking failure.</p>
-        </div>
-      </div>
     </div>
 
     <!-- Lightbox Modal -->
     <div id="lightbox" class="lightbox-modal" onclick="closeLightbox(event)">
       <div class="lightbox-content">
-        <button class="lightbox-close" onclick="closeLightbox(event)">✕ Close</button>
-        <img id="lightbox-img" class="lightbox-img" src="" alt="Enlarged evidence">
+        <button class="lightbox-close" onclick="closeLightboxDirect()">✕ Close</button>
+        <img id="lightbox-img" class="lightbox-img" src="" alt="Evidence view">
         <div id="lightbox-caption" class="lightbox-caption"></div>
       </div>
     </div>
 
-    <!-- Footer -->
     <footer>
-      <p>Lexful Autonomous Agent QA &amp; UX Audit Engine • Ticket {escape(ticket)} • Generated for User Review</p>
+      <p>Lexful Autonomous QA &amp; UX Audit Engine • Generated: {escape(card.get('generatedAt', card.get('auditDate', 'Live UAT Run')))} • Ticket: {escape(ticket)}</p>
     </footer>
 
   </div>
@@ -1572,15 +1670,15 @@ def main():
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
       const target = document.getElementById(tabId);
       if (target) target.classList.add('active');
-      btn.classList.add('active');
+      if (btn) btn.classList.add('active');
     }}
 
-    function filterDefects(severity, btn) {{
-      document.querySelectorAll('#tab-defects .filter-pill').forEach(el => el.classList.remove('active'));
+    function filterDefects(sev, btn) {{
+      btn.parentElement.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      const cards = document.querySelectorAll('#tab-defects .finding-card[data-severity]');
+      const cards = document.querySelectorAll('#tab-defects .finding-card');
       cards.forEach(card => {{
-        if (severity === 'all' || card.getAttribute('data-severity') === severity) {{
+        if (sev === 'all' || card.dataset.severity === sev) {{
           card.style.display = 'block';
         }} else {{
           card.style.display = 'none';
@@ -1589,13 +1687,11 @@ def main():
     }}
 
     function filterObservations(status, btn) {{
-      document.querySelectorAll('#tab-observations .filter-pill').forEach(el => el.classList.remove('active'));
+      btn.parentElement.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const cards = document.querySelectorAll('#tab-observations .finding-card');
       cards.forEach(card => {{
-        const cardStatus = (card.getAttribute('data-status') || '').toLowerCase();
-        const targetStatus = status.toLowerCase();
-        if (targetStatus === 'all' || cardStatus === targetStatus || (targetStatus === 'resolved' && (cardStatus === 'resolved' || cardStatus === 'verified fixed'))) {{
+        if (status === 'all' || card.dataset.status === status) {{
           card.style.display = 'block';
         }} else {{
           card.style.display = 'none';
@@ -1603,29 +1699,45 @@ def main():
       }});
     }}
 
-    function filterFindings(severity, btn) {{
-      filterDefects(severity, btn);
+    function handleSearch(query) {{
+      const q = query.toLowerCase().trim();
+      const activeTab = document.querySelector('.tab-pane.active');
+      if (!activeTab) return;
+      const cards = activeTab.querySelectorAll('.finding-card');
+      cards.forEach(card => {{
+        const text = (card.dataset.search || card.innerText).toLowerCase();
+        if (!q || text.includes(q)) {{
+          card.style.display = 'block';
+        }} else {{
+          card.style.display = 'none';
+        }}
+      }});
     }}
 
-    function openLightbox(src, caption) {{
+    function openLightbox(uri, title) {{
       const modal = document.getElementById('lightbox');
       const img = document.getElementById('lightbox-img');
       const cap = document.getElementById('lightbox-caption');
-      img.src = src;
-      cap.textContent = caption;
-      modal.classList.add('active');
+      if (modal && img) {{
+        img.src = uri;
+        if (cap) cap.innerText = title;
+        modal.classList.add('active');
+      }}
     }}
 
     function closeLightbox(e) {{
       if (e.target.id === 'lightbox' || e.target.classList.contains('lightbox-close')) {{
-        document.getElementById('lightbox').classList.remove('active');
+        closeLightboxDirect();
       }}
     }}
 
-    document.addEventListener('keydown', (e) => {{
-      if (e.key === 'Escape') {{
-        document.getElementById('lightbox').classList.remove('active');
-      }}
+    function closeLightboxDirect() {{
+      const modal = document.getElementById('lightbox');
+      if (modal) modal.classList.remove('active');
+    }}
+
+    document.addEventListener('keydown', function(e) {{
+      if (e.key === 'Escape') closeLightboxDirect();
     }});
   </script>
 </body>

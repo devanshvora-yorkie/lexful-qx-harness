@@ -35,7 +35,11 @@ Your mission is to perform a thorough UI/UX quality audit of the journey and scr
    - For recommendations, apply `.agents/skills/fluent-ui-design-system/SKILL.md`. Recommend shadcn/ui components with Fluent design rules (action hierarchy, 4px spacing ramp, typography scale, single primary action). If a prior recommendation was adopted by stakeholders, mark it Adopted / Resolved.
 8. **Interactive HTML Report (`ux-report.html`)**:
    - Generate a complete, self-contained, interactive HTML report (`ux-report.html`) modeled after `.agents/ux/templates/audit-preview-reference.html`.
-   - Embed real findings, scorecard metrics, verdict, severity filters, tabs, tags, and shadcn/Fluent recommendations.
+   - **Top Summary Cards**: Exactly 3 cards equally divided — Findings by Severity (1st card), Total Deductions (2nd card), and Design Stack (3rd card). Omit Final Score, Heal Review, Playwright Suite, Evidence Coverage, and Confidence cards.
+   - **Tabs**: Exactly 4 tabs taking equal 25% width — UI/UX Defects (S0–S3), UX Observations & Verification (O), Acceptance Criteria Matrix, and Evaluated Checks Matrix. Omit Visual Evidence & Lightbox tab, Scoring Deduction Ledger tab, and Healer Review tab.
+   - **Defect Card Tag Minimalism**: Display ONLY Severity level, Pattern (`BP-*`), Pillar (`Pillar: <Name>` replacing "Lens"), and AC tags (`AC: <id>`). Remove Confidence, Status, Rule, QA, and Stack tags from card headers.
+   - **Highlight Expected vs. Actual**: Render Expected and Actual behaviors in dedicated colored callout boxes (`.callout-expected` in emerald, `.callout-actual` in rose) for instant readability.
+   - **Range-Colored Deduction Pills**: Highlight right-aligned deduction points in distinct colors based on point ranges (0 pts green, 1–5 pts amber, 6–15 pts orange, 16–30 pts rose, 31+ pts crimson).
    - **Inline Evidence Previews**: Every observation card, resolved card, and defect card MUST embed an interactive evidence screenshot thumbnail (`.finding-image-preview`) with click-to-lightbox support so users can visually check and verify the observed state directly in the card. Inline CSS and JS; do not require external runtime.
 
 ### Outputs in the Run Directory
