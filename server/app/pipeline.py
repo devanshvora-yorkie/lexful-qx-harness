@@ -1211,14 +1211,83 @@ def _run_affected_cases(run_id: str, folder: Path, book: Logbook) -> list[str]:
     _check_cancel(run_id)
     failing = failed_tests(_read_json(folder / "affected" / "playwright" / "results.json"))
     book.row("playwright", "affected", _counts(result["summary"]))
-    line = f"{len(cases)} run, {len(failing)} failed"
+    notes: dict[str, str] = {}
+    healed = 0
+    if failing and get_settings().heal_attempts > 0:
+        healed, failing, notes = _heal_affected_cases(run_id, folder, book, files, grep)
+    line = f"{len(cases)} run, {len(failing)} failed" + (f", {healed} fixed by heal" if healed else "")
     run_summary.get(run_id).note("affected", line)
     _end(run_id, "affected E2E cases", "ok" if not failing else "failed", line)
     by_title = {case.title: case.id for case in cases}
     return [
-        f"affected E2E case failed, possible regression from this ticket: {by_title.get(item['title'], '')} {item['title']} — {item['error'][:120]}".strip()
+        f"affected E2E case still failing after heal: {by_title.get(item['title'], '')} {item['title']} — {item['error'][:120]}"
+        f"{' | ' + notes[item['title']] if notes.get(item['title']) else ''}".strip()
         for item in failing
     ]
+
+
+def _heal_affected_cases(
+    run_id: str, folder: Path, book: Logbook, files: list[str], grep: str,
+) -> tuple[int, list[dict[str, str]], dict[str, str]]:
+    """A checked-in case that fails beside a ticket is outdated until shown otherwise, as in the E2E run.
+
+    A fresh qa session may edit the suite in place (changes.log records it), then the cases run again.
+    Returns (cases fixed, cases still failing, the healer's reason per case).
+    """
+    report = folder / "affected" / "playwright" / "results.json"
+    first = failed_tests(_read_json(report))
+    still = first
+    notes: dict[str, str] = {}
+    session = ""
+    rounds = min(2, get_settings().heal_attempts)
+    for attempt in range(1, rounds + 1):
+        _begin(run_id, book, f"affected heal {attempt} of {rounds}")
+        store.update_run(run_id, status="heal")
+        listed = "\n".join(f"- {item['title']}  ({_short_file(item['file'])})  {item['error']}".rstrip() for item in still[:20])
+        prompt = _message(
+            "affected-heal", folder,
+            "Suite: checked-in E2E cases that ran beside this ticket",
+            f"Heal attempt {attempt} of {rounds}",
+            f"Specs: {', '.join(files)}",
+            f"Browser session name: {_browser_name(folder, 'heal')}",
+            "Playwright report: affected/playwright/results.json",
+            "Write triage to: affected/triage.json",
+            "Failures:",
+            listed,
+        )
+        (folder / f"affected-heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
+        before_text = _suite_texts()
+        before = _suite_revision()
+        (folder / "affected" / "triage.json").unlink(missing_ok=True)
+        code, session = runners.run_opencode(
+            folder, session_id=session or None, prompt=prompt, title=f"checked-in affected heal {attempt}",
+            log_name=f"affected-heal-{attempt}.jsonl", resume=bool(session), agent=SUITE_AGENT,
+        )
+        _check_cancel(run_id)
+        triage = _read_triage(folder / "affected" / "triage.json")
+        for item in triage.get("failures") or []:
+            if isinstance(item, dict):
+                key = str(item.get("title") or item.get("test") or "")
+                if key and item.get("reason"):
+                    notes[key] = f"heal: {failure_kind(item) or 'note'}: {str(item['reason'])[:160]}"
+        if code != 0:
+            _end(run_id, None, "failed", _opencode_failure(folder, f"affected-heal-{attempt}.jsonl", code))
+            break
+        record_suite_edits(run_id, attempt, before_text, _suite_texts(), triage)
+        changed = suite_files_changed(before, _suite_revision())
+        if not changed:
+            _end(run_id, None, "ok", "no spec file changed")
+            break
+        book.row("server", "heal", f"affected: patched {', '.join(changed)}"[:240])
+        _begin(run_id, book, f"affected after heal {attempt}")
+        result = runners.run_playwright(folder, files, out_dir=folder / "affected", grep=grep)
+        _check_cancel(run_id)
+        book.row("playwright", "affected", _counts(result["summary"]))
+        still = failed_tests(_read_json(report))
+        _end(run_id, None, "ok", _counts(result["summary"]))
+        if not still:
+            break
+    return max(0, len(first) - len(still)), still, notes
 
 
 def _verify_findings(
@@ -1763,8 +1832,23 @@ def _healer_hid_a_bug(folder: Path) -> list[str]:
     return lines
 
 
+def patched_but_failing(folder: Path) -> list[str]:
+    """Cases the last heal called patched that the final Playwright report still fails: the patch did not work."""
+    failing = {item["title"] for item in failed_tests(_read_json(folder / "playwright" / "results.json"))}
+    triages = sorted(folder.glob("triage-*.json"))
+    last = _read_triage(triages[-1]) if triages else {}
+    out: list[str] = []
+    for item in last.get("failures") or []:
+        if not isinstance(item, dict) or str(item.get("action") or "").lower() != "patched":
+            continue
+        title = str(item.get("title") or item.get("test") or "")
+        if title in failing and title not in out:
+            out.append(title)
+    return [f"healer patched this case but it still fails, so the patch did not work: {title}" for title in out]
+
+
 def _phase1_issues(folder: Path, summary: dict[str, int]) -> list[str]:
-    issues = _healer_hid_a_bug(folder)
+    issues = _healer_hid_a_bug(folder) + patched_but_failing(folder)
     if (
         summary.get("failed", 0) == 0
         and summary.get("skipped", 0) == 0

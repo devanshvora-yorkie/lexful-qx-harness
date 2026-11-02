@@ -208,3 +208,368 @@ The server appends one entry per heal and one per promotion from a ticket run (w
   - skipped: TC-LEX-3696-003: Search normalizes case, spaces and underscores to printer-check — not passed (flaky in playwright/test-outcomes.json)
   - skipped: TC-LEX-3696-010: Support and viewer are redirected from the new page and cannot change the editor icon — not passed (flaky in playwright/test-outcomes.json)
 
+2026-11-02T11:26:12Z  regression-20261102T110513Z-49ea  heal 1
+  files: e2e test cases/asset crud/assets-crud.spec.ts
+  - spec / patched: toolbar buttons are visible — Fixture missing: AAA-SRV-001 does not exist in UAT (servers search for AAA returns 0 items). The spec now creates its own server through the API when the listing first opens and archives it in afterAll. Some attempts also hit a CloudFront 4...
+  - spec / patched: open row detail drawer and verify — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server created via API. Also a CloudFront 403 on the Servers listing in some attempts (environment).
+  - spec / patched: detail drawer has all 8 tabs — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server created via API. The CloudFront 403 on the listing in this attempt is environment.
+  - spec / patched: details tab shows editable fields — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server carries role Domain Controller, IP 10.27.10.20, OS IpsumLinux 22.04, which the assertions use.
+  - spec / patched (6 tests): overview tab shows linked items; bulk action buttons appear when rows selected; bulk Actions button is present when rows are selected; +3 more — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server created via API. CloudFront 403 on the listing in some attempts is environment.
+  - spec / patched: search is case-insensitive — Fixture missing. Search now uses the seeded name and its lowercase form. CloudFront 403 on the listing in some attempts is environment.
+  - spec / patched (9 tests): clear selection resets selection count (Filters and Search); deselecting one row after select-all decreases count; clear selection resets selection count (Bulk Actions — Row Selection); +6 more — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server created via API.
+  - spec / patched: Details tab shows all editable fields — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server carries the Role, IP and OS values the assertions read.
+  - spec / patched: Details tab shows additional fields — Fixture missing (AAA-SRV-001 absent in UAT). Seeded server created via API with Platform Physical and warranty 2027. The expectation 'AAA Aliquip Backup' is unchanged and the seed does not set a backup plan, so this test can still fail on t...
+  - spec / reported: TC-DOC-001: Create a document with a name, an organization and body content — environment: CloudFront 403 'Request blocked' on /docs/d/all/system.document on every attempt (gotoApp retried 3 times). No product step reached. No change: a longer cooldown needs waitForTimeout, which E2E heal forbids.
+  - spec / reported (7 tests): TC-DOC-002: Rename a document from the record drawer; TC-DOC-003: Edit the document body and save the change; TC-DOC-004: Apply bold formatting to the document body; +4 more — environment: CloudFront 403 on the documents listing on every attempt. No product step reached.
+  - spec / reported: TC-DOC-008: Archive a document from the record drawer — environment: CloudFront 403 on the documents listing on every attempt, before the create step. The earlier product defect (Documents total does not increase after create, changes.log 2026-10-26 onward) was not reached and is not re-filed he...
+  - spec / reported: TC-DOC-010: Creating with an empty document name is rejected — environment: CloudFront 403 on the documents listing on every attempt, before the submit step. The earlier product defect (POST sent with an empty name, changes.log 2026-10-26 onward) was not reached and is not re-filed here.
+
+--- e2e test cases/asset crud/assets-crud.spec.ts
++++ e2e test cases/asset crud/assets-crud.spec.ts
+@@ -20,9 +20,33 @@
+ const SERVERS_URL = '/docs/d/all/servers';
+ const ASSETS_URL = '/docs/assets';
+-const SEEDED_SERVER = 'AAA-SRV-001';
+-
+-async function openServersListing(page: import('@playwright/test').Page) {
+-  await injectAuthCookies(page.context());
+-  await page.goto('about:blank');
++const API_BASE = process.env.STYTCH_API_URL || 'https://api.uat.lexful.net';
++// The seeded server is created through the API the first time the listing opens, and archived in afterAll.
++// It carries the field values the Server Detail Drawer tests assert on.
++const SEEDED_SERVER = `E2E-Seed-SRV-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
++const SEED_ORGANIZATION_ID = '01a0ee54-00c2-7054-ae8b-a4cb9e1b7d8b'; // E2E Demo
++let seedAccountId = '';
++let seedServerId = '';
++
++test.afterAll(async ({ playwright }) => {
++  if (!seedServerId) return;
++  const cookies = await getLexfulCookies();
++  const api = await playwright.request.newContext({
++    extraHTTPHeaders: {
++      Cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; '),
++      'X-Account-Id': seedAccountId,
++    },
++  });
++  try {
++    const response = await api.delete(`${API_BASE}/v1/assets/servers/${seedServerId}`);
++    if (response.status() !== 204 && response.status() !== 404) {
++      throw new Error(`Could not archive seeded server ${seedServerId}: HTTP ${response.status()}`);
++    }
++  } finally {
++    seedServerId = '';
++    await api.dispose();
++  }
++});
++
++async function gotoServersListing(page: import('@playwright/test').Page) {
+   // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
+   for (let attempt = 1; attempt <= 3; attempt++) {
+@@ -32,4 +56,41 @@
+       (await page.getByText('Request blocked').isVisible().catch(() => false));
+     if (!blocked) break;
++  }
++}
++
++async function createSeedServer(page: import('@playwright/test').Page) {
++  if (!seedAccountId) throw new Error('No X-Account-Id captured from the servers listing');
++  const response = await page.request.post(`${API_BASE}/v1/assets/servers`, {
++    headers: { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId },
++    data: {
++      name: SEEDED_SERVER,
++      organization_id: SEED_ORGANIZATION_ID,
++      role: 'Domain Controller',
++      ip_address: '10.27.10.20',
++      operating_system: 'IpsumLinux 22.04',
++      platform: 'Physical',
++      warranty_expiration: '2027-03-01',
++      visibility: 'inherit',
++    },
++  });
++  if (!response.ok()) {
++    throw new Error(`Create seeded server failed HTTP ${response.status()}: ${await response.text()}`);
++  }
++  seedServerId = ((await response.json()) as { id: string }).id;
++}
++
++async function openServersListing(page: import('@playwright/test').Page) {
++  await injectAuthCookies(page.context());
++  await page.goto('about:blank');
++  page.on('request', (request) => {
++    const id = request.headers()['x-account-id'];
++    if (id) seedAccountId = id;
++  });
++  await gotoServersListing(page);
++  if (!seedServerId) {
++    await expect(page.getByRole('heading', { name: 'Servers', level: 1 })).toBeVisible({ timeout: 15000 });
++    await createSeedServer(page);
++    // The grid only shows the seed after a fresh load.
++    await gotoServersListing(page);
+   }
+   const listing = new ServersListingPOM(page);
+@@ -360,5 +421,5 @@
+     await pom.searchBox().clear();
+     await page.waitForTimeout(1000);
+-    await pom.searchBox().fill('aaa-srv-001');
++    await pom.searchBox().fill(SEEDED_SERVER.toLowerCase());
+     await page.waitForTimeout(1500);
+     await expect(pom.rowByName(SEEDED_SERVER)).toBeVisible({ timeout: 5000 });
+
+2026-11-02T12:02:17Z  regression-20261102T110513Z-49ea  heal 2
+  files: e2e test cases/asset crud/assets-crud.spec.ts, e2e test cases/document editing/doceditspec.spec.ts
+  - spec / patched: toolbar buttons are visible — Heal 1 seeded one server through the API. It sat outside the rendered rows of the virtualized grid, so the row wait timed out (seed present, not rendered). Heal 2: two seeds now share one prefix; each describe searches on the prefix (showSe...
+  - spec / patched: open row detail drawer and verify — Same grid-visibility fault as 'toolbar buttons are visible'. Fixed by the shared-prefix search in showSeeds.
+  - spec / patched (13 tests): detail drawer has all 8 tabs; overview tab shows linked items; clear selection resets selection count (Filters and Search); +10 more — Same grid-visibility fault. Fixed by showSeeds.
+  - spec / patched: details tab shows editable fields — Same grid-visibility fault. Fixed by showSeeds. Expectations unchanged.
+  - spec / patched: search is case-insensitive — Same grid-visibility fault. Fixed by showSeeds before the case-insensitive searches run.
+  - spec / patched: bulk action buttons appear when rows selected — beforeEach hit the 30 s hook timeout waiting for the seed row (grid virtualization). Fixed by showSeeds, which waits 15 s inside the hook budget.
+  - spec / patched: deselecting one row after select-all decreases count — Needs more than one row. Two seeds now match the prefix, so select-all has two rows to count. Assertions unchanged.
+  - spec / patched: multiple rows can be selected — Needs two rows. The two seeds now match the prefix. Fixed by showSeeds.
+  - spec / patched: Details tab shows all editable fields — Same grid-visibility fault. Fixed by showSeeds. Seed carries the Role, IP and OS the assertions read.
+  - spec / patched: Details tab shows additional fields — Same grid-visibility fault. Fixed by showSeeds. The expectation 'AAA Aliquip Backup' is unchanged and the seed sets no backup plan, so this may still fail on that value. This is the known Backup Plan load issue (changes.log 2026-10-29). Not...
+  - spec / patched: TC-DOC-008: Archive a document from the record drawer — Not a product bug. The test created the document through the API, which does not update the open page. The 20 s poll read the sidebar count (157) without reloading. Replay: after a reload the count is the expected value (158). The UI archiv...
+  - bug / reported: TC-DOC-010: Creating with an empty document name is rejected — Product: with the Name field empty and an organization chosen, Create is enabled. Clicking it sends POST /v1/assets/system.document with name 'New document' and the server returns 201. The drawer closes and a record is created. FEATURE.md (...
+
+--- e2e test cases/asset crud/assets-crud.spec.ts
++++ e2e test cases/asset crud/assets-crud.spec.ts
+@@ -21,13 +21,17 @@
+ const ASSETS_URL = '/docs/assets';
+ const API_BASE = process.env.STYTCH_API_URL || 'https://api.uat.lexful.net';
+-// The seeded server is created through the API the first time the listing opens, and archived in afterAll.
+-// It carries the field values the Server Detail Drawer tests assert on.
+-const SEEDED_SERVER = `E2E-Seed-SRV-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
++// The seeded servers are created through the API the first time the listing opens, and archived in afterAll.
++// They carry the field values the Server Detail Drawer tests assert on. Both names share one prefix:
++// the grid virtualizes its rows, so a seed outside the rendered window cannot be clicked. Each describe
++// searches on the prefix first, which brings both seeds into the grid.
++const SEED_PREFIX = `E2E-Seed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
++const SEEDED_SERVER = `${SEED_PREFIX}-first`;
++const SEED_PARTNER = `${SEED_PREFIX}-second`;
+ const SEED_ORGANIZATION_ID = '01a0ee54-00c2-7054-ae8b-a4cb9e1b7d8b'; // E2E Demo
+ let seedAccountId = '';
+-let seedServerId = '';
++let seedServerIds: string[] = [];
+ 
+ test.afterAll(async ({ playwright }) => {
+-  if (!seedServerId) return;
++  if (!seedServerIds.length) return;
+   const cookies = await getLexfulCookies();
+   const api = await playwright.request.newContext({
+@@ -38,10 +42,12 @@
+   });
+   try {
+-    const response = await api.delete(`${API_BASE}/v1/assets/servers/${seedServerId}`);
+-    if (response.status() !== 204 && response.status() !== 404) {
+-      throw new Error(`Could not archive seeded server ${seedServerId}: HTTP ${response.status()}`);
++    for (const id of seedServerIds) {
++      const response = await api.delete(`${API_BASE}/v1/assets/servers/${id}`);
++      if (response.status() !== 204 && response.status() !== 404) {
++        throw new Error(`Could not archive seeded server ${id}: HTTP ${response.status()}`);
++      }
+     }
+   } finally {
+-    seedServerId = '';
++    seedServerIds = [];
+     await api.dispose();
+   }
+@@ -59,23 +65,31 @@
+ }
+ 
+-async function createSeedServer(page: import('@playwright/test').Page) {
++async function createSeedServers(page: import('@playwright/test').Page) {
+   if (!seedAccountId) throw new Error('No X-Account-Id captured from the servers listing');
+-  const response = await page.request.post(`${API_BASE}/v1/assets/servers`, {
+-    headers: { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId },
+-    data: {
+-      name: SEEDED_SERVER,
+-      organization_id: SEED_ORGANIZATION_ID,
+-      role: 'Domain Controller',
+-      ip_address: '10.27.10.20',
+-      operating_system: 'IpsumLinux 22.04',
+-      platform: 'Physical',
+-      warranty_expiration: '2027-03-01',
+-      visibility: 'inherit',
+-    },
+-  });
+-  if (!response.ok()) {
+-    throw new Error(`Create seeded server failed HTTP ${response.status()}: ${await response.text()}`);
++  for (const name of [SEEDED_SERVER, SEED_PARTNER]) {
++    const response = await page.request.post(`${API_BASE}/v1/assets/servers`, {
++      headers: { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId },
++      data: {
++        name,
++        organization_id: SEED_ORGANIZATION_ID,
++        role: 'Domain Controller',
++        ip_address: '10.27.10.20',
++        operating_system: 'IpsumLinux 22.04',
++        platform: 'Physical',
++        warranty_expiration: '2027-03-01',
++        visibility: 'inherit',
++      },
++    });
++    if (!response.ok()) {
++      throw new Error(`Create seeded server failed HTTP ${response.status()}: ${await response.text()}`);
++    }
++    seedServerIds.push(((await response.json()) as { id: string }).id);
+   }
+-  seedServerId = ((await response.json()) as { id: string }).id;
++}
++
++/** Filter the grid to the seeds. Both seed rows share the prefix; the grid virtualizes its rows. */
++async function showSeeds(listing: ServersListingPOM) {
++  await listing.searchBox().fill(SEED_PREFIX);
++  await listing.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+ }
+ 
+@@ -88,8 +102,8 @@
+   });
+   await gotoServersListing(page);
+-  if (!seedServerId) {
++  if (!seedServerIds.length) {
+     await expect(page.getByRole('heading', { name: 'Servers', level: 1 })).toBeVisible({ timeout: 15000 });
+-    await createSeedServer(page);
+-    // The grid only shows the seed after a fresh load.
++    await createSeedServers(page);
++    // The grid only shows the seeds after a fresh load.
+     await gotoServersListing(page);
+   }
+@@ -348,5 +362,5 @@
+   test.beforeEach(async ({ page }) => {
+     pom = await openServersListing(page);
+-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
++    await showSeeds(pom);
+   });
+ 
+@@ -412,5 +426,5 @@
+   test.beforeEach(async ({ page }) => {
+     pom = await openServersListing(page);
+-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
++    await showSeeds(pom);
+   });
+ 
+@@ -448,5 +462,5 @@
+   test.beforeEach(async ({ page }) => {
+     pom = await openServersListing(page);
+-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
++    await showSeeds(pom);
+   });
+ 
+@@ -490,5 +504,5 @@
+   test.beforeEach(async ({ page }) => {
+     listingPom = await openServersListing(page);
+-    await listingPom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
++    await showSeeds(listingPom);
+   });
+
+--- e2e test cases/document editing/doceditspec.spec.ts
++++ e2e test cases/document editing/doceditspec.spec.ts
+@@ -277,4 +277,6 @@
+     const name = uniqueName('Superseded Onboarding Checklist')
+     const id = await createDocument(page, api, { name, body: 'Replaced by the Q4 checklist.' })
++    // The record was written through the API, which does not update this open page. Read the total on a fresh load.
++    await list.goto()
+     await expect.poll(() => list.recordTotal(), { timeout: 20_000 }).toBe(before + 1)
+
+2026-11-02T12:17:14Z  regression-20261102T110513Z-49ea  heal 3
+  files: e2e test cases/asset crud/assets-crud.spec.ts, e2e test cases/document editing/doceditspec.spec.ts
+  - spec / patched: details tab shows editable fields — Fixture gap: the seeded servers had no configuration, so the Details tab showed 'Add Configuration' and the test looked for 'Edit Configuration'. The seeds now set configuration (richtext). Replay on a probe record: 'Edit Configuration' is ...
+  - spec / reported: bulk action buttons appear when rows selected — environment: the Servers listing returned a CloudFront 403 'Request blocked' page on every attempt (three navigations in openServersListing). The level-1 'Servers' heading never rendered, so the test stopped in its beforeEach. No product st...
+  - spec / patched: Details tab shows additional fields — Fixture gap: the seeds had no Backup Plan, so the Details tab showed 'Add Backup Plan' and the test looked for 'Edit Backup Plan'. The seeds now create a backup record named 'AAA Aliquip Backup <prefix>' and link it through references.backu...
+  - spec / patched: TC-DOC-008: Archive a document from the record drawer — The archive closes the record drawer by itself. The test then called record.close(), which waits for a Close button that no longer exists (8 s timeout). Replay: after the DELETE (204) the drawer is hidden and no Close button is present. The...
+  - bug / reported: TC-DOC-010: Creating with an empty document name is rejected — Product bug (bug 1). Replayed with Name empty and an organization chosen: Create sends POST /v1/assets/system.document with name 'New document', the response is 201, and the drawer closes. Reproduced again in this attempt and reproduced by ...
+
+--- e2e test cases/asset crud/assets-crud.spec.ts
++++ e2e test cases/asset crud/assets-crud.spec.ts
+@@ -28,10 +28,13 @@
+ const SEEDED_SERVER = `${SEED_PREFIX}-first`;
+ const SEED_PARTNER = `${SEED_PREFIX}-second`;
++// The Backup Plan the seeds link to. The Details tab shows its name, and the test expects 'AAA Aliquip Backup'.
++const SEED_BACKUP_NAME = `AAA Aliquip Backup ${SEED_PREFIX}`;
+ const SEED_ORGANIZATION_ID = '01a0ee54-00c2-7054-ae8b-a4cb9e1b7d8b'; // E2E Demo
+ let seedAccountId = '';
+ let seedServerIds: string[] = [];
++let seedBackupIds: string[] = [];
+ 
+ test.afterAll(async ({ playwright }) => {
+-  if (!seedServerIds.length) return;
++  if (!seedServerIds.length && !seedBackupIds.length) return;
+   const cookies = await getLexfulCookies();
+   const api = await playwright.request.newContext({
+@@ -42,12 +45,19 @@
+   });
+   try {
+-    for (const id of seedServerIds) {
+-      const response = await api.delete(`${API_BASE}/v1/assets/servers/${id}`);
+-      if (response.status() !== 204 && response.status() !== 404) {
+-        throw new Error(`Could not archive seeded server ${id}: HTTP ${response.status()}`);
++    // Servers first: they reference the backup record.
++    for (const [type, ids] of [
++      ['servers', seedServerIds],
++      ['backups', seedBackupIds],
++    ] as const) {
++      for (const id of ids) {
++        const response = await api.delete(`${API_BASE}/v1/assets/${type}/${id}`);
++        if (response.status() !== 204 && response.status() !== 404) {
++          throw new Error(`Could not archive seeded ${type} ${id}: HTTP ${response.status()}`);
++        }
+       }
+     }
+   } finally {
+     seedServerIds = [];
++    seedBackupIds = [];
+     await api.dispose();
+   }
+@@ -67,7 +77,17 @@
+ async function createSeedServers(page: import('@playwright/test').Page) {
+   if (!seedAccountId) throw new Error('No X-Account-Id captured from the servers listing');
++  const headers = { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId };
++  const backup = await page.request.post(`${API_BASE}/v1/assets/backups`, {
++    headers,
++    data: { name: SEED_BACKUP_NAME, organization_id: SEED_ORGANIZATION_ID, visibility: 'inherit' },
++  });
++  if (!backup.ok()) {
++    throw new Error(`Create seeded backup failed HTTP ${backup.status()}: ${await backup.text()}`);
++  }
++  const backupId = ((await backup.json()) as { id: string }).id;
++  seedBackupIds.push(backupId);
+   for (const name of [SEEDED_SERVER, SEED_PARTNER]) {
+     const response = await page.request.post(`${API_BASE}/v1/assets/servers`, {
+-      headers: { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId },
++      headers,
+       data: {
+         name,
+@@ -78,4 +98,6 @@
+         platform: 'Physical',
+         warranty_expiration: '2027-03-01',
++        configuration: 'E2E seeded configuration',
++        references: { backup_plan: [backupId] },
+         visibility: 'inherit',
+       },
+
+--- e2e test cases/document editing/doceditspec.spec.ts
++++ e2e test cases/document editing/doceditspec.spec.ts
+@@ -296,5 +296,6 @@
+     expect(serverBody.deleted_at).toBeTruthy()
+ 
+-    await record.close()
++    // The archive closes the drawer by itself; there is no Close button left to click.
++    await expect(record.dialog).toBeHidden()
+     await expect.poll(() => list.recordTotal(), { timeout: 20_000 }).toBe(before)
+   })
+
+2026-11-02T13:02:07Z  LEX-3700-20261102T110513Z-c166  promote from LEX-3700
+  - skipped: TC-LEX-3700-001: Recent shows the three latest visits above the complete All Organizations list — organization picker, not search/asset crud/doc editing; new Recent rule
+  - skipped: TC-LEX-3700-002: Recent follows visit order, holds three, and a thin divider separates it from All — organization picker surface; new behavior of this ticket
+  - skipped: TC-LEX-3700-003: a search hides Recent and returns one deduplicated alphabetical list — org switcher search, not the global search palette journey
+  - skipped: TC-LEX-3700-004: clearing the search restores Recent and input focus, and Escape resets the search — org switcher search, not the global search palette journey
+  - skipped: TC-LEX-3700-005: with no recent visits the Recent group stays hidden and All is complete — organization picker; depends on per-browser localStorage state
+  - skipped: TC-LEX-3700-006: starring a Recent row toggles the favorite in both rows without selecting the org — organization picker favorites; new in this ticket
+  - skipped: TC-LEX-3700-007: My Organizations scope limits Recent and the list to favorites — organization picker scope; depends on favorites data
+  - skipped: TC-LEX-3700-009: the viewer All count equals the API total for the viewer, and Recent works for the viewer — persona and API-count check, not a journey; tied to this ticket
+  - skipped: TC-LEX-3700-011: GET organizations with id[in] returns only the listed ids, name-ordered, and honors limit — API contract of a new query, not a page journey
+  - skipped: TC-LEX-3700-012: a search with a trailing space still finds the organization — org switcher search; trim behavior is under review in this ticket
+  - skipped: TC-LEX-3700-014: a configuration interface keeps primary and notes after save and read back — API/config contract from PR 1167, not a listed journey
+  - skipped: TC-LEX-3700-015: a non-boolean interface primary is rejected with a validation error — API validation contract of a new schema, not a journey
+  - skipped: TC-LEX-3700-016: an undeclared interface key is dropped on write and the declared primary and notes are kept — API internal-write check, not a journey
+  - skipped: TC-LEX-3700-017: the Interfaces editor on Configuration create renders Primary and Notes from the schema — system.configuration create surface, not asset crud; new in this ticket
+

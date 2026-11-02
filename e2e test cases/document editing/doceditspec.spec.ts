@@ -276,6 +276,8 @@ test.describe('Document editing — positive', () => {
 
     const name = uniqueName('Superseded Onboarding Checklist')
     const id = await createDocument(page, api, { name, body: 'Replaced by the Q4 checklist.' })
+    // The record was written through the API, which does not update this open page. Read the total on a fresh load.
+    await list.goto()
     await expect.poll(() => list.recordTotal(), { timeout: 20_000 }).toBe(before + 1)
 
     const record = await DocumentRecordDrawer.openById(page, id)
@@ -293,7 +295,8 @@ test.describe('Document editing — positive', () => {
     const serverBody = (await server.json()) as { deleted_at?: string | null }
     expect(serverBody.deleted_at).toBeTruthy()
 
-    await record.close()
+    // The archive closes the drawer by itself; there is no Close button left to click.
+    await expect(record.dialog).toBeHidden()
     await expect.poll(() => list.recordTotal(), { timeout: 20_000 }).toBe(before)
   })
 })

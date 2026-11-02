@@ -41,11 +41,21 @@ def publish_bugs(
     if not bugs:
         return False
     listed = [b for b in (triage.get("bugs") or []) if isinstance(b, dict)]
-    bugs = [
-        {**bug, "screenshots": evidence.screenshots_for(
-            folder, f"bug:{listed.index(bug) + 1}" if bug in listed else f"failure:{n}", bug)}
-        for n, bug in enumerate(bugs, start=1)
-    ]
+    findings = {
+        str(item.get("id")): item
+        for item in _read_json(folder / "api-findings.json").get("findings") or []
+        if isinstance(item, dict) and item.get("id")
+    }
+    filed: list[dict[str, Any]] = []
+    for n, source in enumerate(bugs, start=1):
+        bug = _with_finding(source, findings)
+        ref = f"bug:{listed.index(source) + 1}" if source in listed else f"failure:{n}"
+        shots = evidence.screenshots_for(folder, ref, bug)
+        if bug.get("finding"):
+            cited = evidence.screenshots_for(folder, f"finding:{bug['finding']}", {})
+            shots = list(dict.fromkeys([*cited, *shots]))[: evidence.MAX_PER_BUG]
+        filed.append({**bug, "screenshots": shots})
+    bugs = filed
     _append_json(folder, bugs, source="triage", ticket=ticket or run_id, url=url, build=build or "unknown")
     text = render_bugs(
         bugs,
@@ -104,6 +114,22 @@ def publish_findings(
     existing = target.read_text(encoding="utf-8").rstrip() if target.is_file() else ""
     target.write_text((existing + "\n\n---\n\n" if existing else "") + text, encoding="utf-8")
     return len(kept)
+
+
+def _with_finding(bug: dict[str, Any], findings: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """A triage bug that cites `finding: <id>` takes the finding's detail for what it left blank,
+    so the filed bug carries the real steps, expected and actual, not 'The test failed'."""
+    item = findings.get(str(bug.get("finding") or ""))
+    if not item:
+        return bug
+    out = dict(bug)
+    for key in ("failure", "description", "steps", "expected", "actual", "rootCause", "evidence",
+                "severityReason", "labels", "url"):
+        if not out.get(key) and item.get(key):
+            out[key] = item[key]
+    if not out.get("area") and item.get("area"):
+        out["area"] = item["area"]
+    return out
 
 
 def _append_json(folder: Path, bugs: list[dict[str, Any]], *, source: str, ticket: str, url: str, build: str) -> None:

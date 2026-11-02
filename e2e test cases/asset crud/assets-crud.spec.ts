@@ -19,11 +19,51 @@ import { CreateAssetPOM } from './create-asset-pom';
 
 const SERVERS_URL = '/docs/d/all/servers';
 const ASSETS_URL = '/docs/assets';
-const SEEDED_SERVER = 'AAA-SRV-001';
+const API_BASE = process.env.STYTCH_API_URL || 'https://api.uat.lexful.net';
+// The seeded servers are created through the API the first time the listing opens, and archived in afterAll.
+// They carry the field values the Server Detail Drawer tests assert on. Both names share one prefix:
+// the grid virtualizes its rows, so a seed outside the rendered window cannot be clicked. Each describe
+// searches on the prefix first, which brings both seeds into the grid.
+const SEED_PREFIX = `E2E-Seed-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+const SEEDED_SERVER = `${SEED_PREFIX}-first`;
+const SEED_PARTNER = `${SEED_PREFIX}-second`;
+// The Backup Plan the seeds link to. The Details tab shows its name, and the test expects 'AAA Aliquip Backup'.
+const SEED_BACKUP_NAME = `AAA Aliquip Backup ${SEED_PREFIX}`;
+const SEED_ORGANIZATION_ID = '01a0ee54-00c2-7054-ae8b-a4cb9e1b7d8b'; // E2E Demo
+let seedAccountId = '';
+let seedServerIds: string[] = [];
+let seedBackupIds: string[] = [];
 
-async function openServersListing(page: import('@playwright/test').Page) {
-  await injectAuthCookies(page.context());
-  await page.goto('about:blank');
+test.afterAll(async ({ playwright }) => {
+  if (!seedServerIds.length && !seedBackupIds.length) return;
+  const cookies = await getLexfulCookies();
+  const api = await playwright.request.newContext({
+    extraHTTPHeaders: {
+      Cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+      'X-Account-Id': seedAccountId,
+    },
+  });
+  try {
+    // Servers first: they reference the backup record.
+    for (const [type, ids] of [
+      ['servers', seedServerIds],
+      ['backups', seedBackupIds],
+    ] as const) {
+      for (const id of ids) {
+        const response = await api.delete(`${API_BASE}/v1/assets/${type}/${id}`);
+        if (response.status() !== 204 && response.status() !== 404) {
+          throw new Error(`Could not archive seeded ${type} ${id}: HTTP ${response.status()}`);
+        }
+      }
+    }
+  } finally {
+    seedServerIds = [];
+    seedBackupIds = [];
+    await api.dispose();
+  }
+});
+
+async function gotoServersListing(page: import('@playwright/test').Page) {
   // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
   for (let attempt = 1; attempt <= 3; attempt++) {
     const response = await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
@@ -31,6 +71,63 @@ async function openServersListing(page: import('@playwright/test').Page) {
       response?.status() === 403 ||
       (await page.getByText('Request blocked').isVisible().catch(() => false));
     if (!blocked) break;
+  }
+}
+
+async function createSeedServers(page: import('@playwright/test').Page) {
+  if (!seedAccountId) throw new Error('No X-Account-Id captured from the servers listing');
+  const headers = { 'Content-Type': 'application/json', 'X-Account-Id': seedAccountId };
+  const backup = await page.request.post(`${API_BASE}/v1/assets/backups`, {
+    headers,
+    data: { name: SEED_BACKUP_NAME, organization_id: SEED_ORGANIZATION_ID, visibility: 'inherit' },
+  });
+  if (!backup.ok()) {
+    throw new Error(`Create seeded backup failed HTTP ${backup.status()}: ${await backup.text()}`);
+  }
+  const backupId = ((await backup.json()) as { id: string }).id;
+  seedBackupIds.push(backupId);
+  for (const name of [SEEDED_SERVER, SEED_PARTNER]) {
+    const response = await page.request.post(`${API_BASE}/v1/assets/servers`, {
+      headers,
+      data: {
+        name,
+        organization_id: SEED_ORGANIZATION_ID,
+        role: 'Domain Controller',
+        ip_address: '10.27.10.20',
+        operating_system: 'IpsumLinux 22.04',
+        platform: 'Physical',
+        warranty_expiration: '2027-03-01',
+        configuration: 'E2E seeded configuration',
+        references: { backup_plan: [backupId] },
+        visibility: 'inherit',
+      },
+    });
+    if (!response.ok()) {
+      throw new Error(`Create seeded server failed HTTP ${response.status()}: ${await response.text()}`);
+    }
+    seedServerIds.push(((await response.json()) as { id: string }).id);
+  }
+}
+
+/** Filter the grid to the seeds. Both seed rows share the prefix; the grid virtualizes its rows. */
+async function showSeeds(listing: ServersListingPOM) {
+  await listing.searchBox().fill(SEED_PREFIX);
+  await listing.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+}
+
+async function openServersListing(page: import('@playwright/test').Page) {
+  await injectAuthCookies(page.context());
+  await page.goto('about:blank');
+  page.on('request', (request) => {
+    const id = request.headers()['x-account-id'];
+    if (id) seedAccountId = id;
+  });
+  await gotoServersListing(page);
+  if (!seedServerIds.length) {
+    await expect(page.getByRole('heading', { name: 'Servers', level: 1 })).toBeVisible({ timeout: 15000 });
+    await createSeedServers(page);
+    // The grid only shows the seeds after a fresh load.
+    await gotoServersListing(page);
   }
   const listing = new ServersListingPOM(page);
   await expect(listing.assetTypeHeading()).toBeVisible({ timeout: 15000 });
@@ -286,7 +383,7 @@ test.describe('Servers Listing Page', () => {
 
   test.beforeEach(async ({ page }) => {
     pom = await openServersListing(page);
-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+    await showSeeds(pom);
   });
 
   test('toolbar buttons are visible', async () => {
@@ -350,7 +447,7 @@ test.describe('Filters and Search', () => {
 
   test.beforeEach(async ({ page }) => {
     pom = await openServersListing(page);
-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+    await showSeeds(pom);
   });
 
   test('search is case-insensitive', async ({ page }) => {
@@ -359,7 +456,7 @@ test.describe('Filters and Search', () => {
     await expect(pom.rowByName(SEEDED_SERVER)).toBeVisible({ timeout: 5000 });
     await pom.searchBox().clear();
     await page.waitForTimeout(1000);
-    await pom.searchBox().fill('aaa-srv-001');
+    await pom.searchBox().fill(SEEDED_SERVER.toLowerCase());
     await page.waitForTimeout(1500);
     await expect(pom.rowByName(SEEDED_SERVER)).toBeVisible({ timeout: 5000 });
   });
@@ -386,7 +483,7 @@ test.describe('Bulk Actions — Row Selection', () => {
 
   test.beforeEach(async ({ page }) => {
     pom = await openServersListing(page);
-    await pom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+    await showSeeds(pom);
   });
 
   test('deselecting one row after select-all decreases count', async ({ page }) => {
@@ -428,7 +525,7 @@ test.describe('Server Detail Drawer', () => {
 
   test.beforeEach(async ({ page }) => {
     listingPom = await openServersListing(page);
-    await listingPom.rowByName(SEEDED_SERVER).waitFor({ state: 'visible', timeout: 15000 });
+    await showSeeds(listingPom);
   });
 
   test('clicking a row opens the detail drawer', async ({ page }) => {
@@ -476,7 +573,8 @@ test.describe('Server Detail Drawer', () => {
     await expect(detail.editWarrantyExpirationButton()).toBeVisible();
     expect(await detail.editWarrantyExpirationButton().textContent()).toContain('2027');
     await expect(detail.editBackupPlanButton()).toBeVisible();
-    expect(await detail.editBackupPlanButton().textContent()).toContain('AAA Aliquip Backup');
+    // The linked backup's name loads after the Details card (a spinner shows until then).
+    await expect(detail.editBackupPlanButton()).toContainText('AAA Aliquip Backup', { timeout: 15000 });
   });
 
   test('drawer close button closes the drawer', async ({ page }) => {

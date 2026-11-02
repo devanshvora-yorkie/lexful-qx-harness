@@ -247,7 +247,7 @@ test.describe('LEX-3717 documents — smoke', () => {
 
 **2e. Hand off** — Write these in the run directory:
 
-- `coverage.json`: every AC number from `pr-brief.md` exactly once, as `{"ac":"AC1","tests":["TC-<TICKET>-001"]}`, `{"ac":"AC2","gap":"why there is no test"}`, or `{"ac":"AC3","na":"heading"}`. The server checks that each listed test passed.
+- `coverage.json`: every AC number from `pr-brief.md` exactly once, as `{"ac":"AC1","tests":["TC-<TICKET>-001"]}`, `{"ac":"AC2","gap":"why there is no test"}`, or `{"ac":"AC3","na":"heading"}`. Use `gap` only for behavior the product could do that you did not test. Use `na` for a line that is not behavior to test: a heading, a link, a status line, a build or type-check or unit-test claim (TypeScript passes, N focused browser tests), and a branch that cannot exist on UAT (say why). The server checks that each listed test passed.
 - `affected-cases.json`: `{"cases":["TC-07"]}`, the checked-in case ids whose page or API this diff changes. The server runs them after your specs.
 - `hypotheses.json` with every outcome set.
 - `planned-specs.json` and `api-findings.json` (an empty `findings` array is fine). `plan_file` is `runs/<ticket>/<run-id>/FEATURE.md`. Do not copy that file into `specs/`. The server runs `npx playwright test` on `test_files`. Do not run that official suite yourself. Replaying one step with `playwright-cli` is part of writing the spec.
@@ -356,6 +356,8 @@ Rules for every phase:
 **Phase `heal`** (ticket). §4 in full. The message lists the failing tests and the attempt. Also: `bugs[]` objects need `area`, `failure`, `context`, `severity`, `severityReason`, `description`, `affectedTests`, `steps`, `expected`, `actual`, `rootCause`, `evidence`. Severity maps to priority: Critical P0, High P1, Medium P2, Low P3. A spec you fix keeps its expected values. `playwright/signals.jsonl` shows console errors, page errors and failed API calls per test.
 
 **Phase `e2e-heal`**. §3 in full. Patch every outdated case in one return, then stop. `bugs[]` objects need `area`, `failure`, `context`, `severity`, `severityReason`, `description`, `affectedTests`, `steps`, `expected`, `actual`, `rootCause`, `evidence`.
+
+**Phase `affected-heal`** (checked-in cases that ran beside a ticket and failed; you may edit `e2e test cases/`). §3 in full: a failing case is outdated until you show the product is wrong, and it is usually a timing, locator or data problem. Read `affected/playwright/results.json` and the page snapshot in `affected/playwright/output/`. A value that loads late (a spinner, a linked record's name) needs a web-first wait on the element (`expect(locator).toContainText(...)`), not `waitForTimeout` and not a single `textContent()` read. A count that other work changes needs a baseline read inside the test. Write triage to `affected/triage.json` (not `triage.json`) as `{"failures":[...]}` with `class` (`spec` or `bug`), `action` and a `reason` for every failure, including the ones you could not fix. A case you could not fix and could not tie to this ticket stays a failure with its reason; do not file a bug here.
 
 **Phase `verify`** (a new session). The message lists defects the run is about to file: `finding:<id>`, `bug:<n>` (the n-th object of `bugs` in `triage.json`) or `signal:<n>`. Read `pr-brief.md` and `feature-map.md` when they exist, `api-findings.json`, `triage.json`, and the failing spec. For each item follow its `steps` in the live app (browser or `node scripts/api-probe.mjs`), two tries at most, as a person would, with current data.
 
