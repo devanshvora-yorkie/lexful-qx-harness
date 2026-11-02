@@ -138,9 +138,14 @@ The report must work as a local HTML file without a build step. Inline the repor
      - `.callout-expected`: Emerald/green bordered box with uppercase `EXPECTED BEHAVIOR` header.
      - `.callout-actual`: Rose/red bordered box with uppercase `OBSERVED ACTUAL` header.
      - Separates expected criteria from observed bugs with maximum visual contrast and readability.
-   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion.
+   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion. Supports interactive zoom in/out/fit controls, click-to-zoom (175%), and mousewheel zooming.
    - `Reproduction steps` and `Recommended resolution / design direction`.
-   - `shadcn/ui implementation` and `Fluent design alignment` guidance blocks.
+   - **Sectioned Recommended Solutions:** Structured into distinct actionable parts:
+     1. `Target Goal & UX Direction` (clear plain-English fix objective)
+     2. `Developer Action & Code Changes` (specific code steps, attributes, handlers, and acceptance criteria)
+     3. `shadcn/ui + Radix Implementation` (Radix primitives, Tailwind classes, and shadcn component wrappers)
+     4. `Fluent UI Alignment & A11y Standards` (design tokens, accessible names, and focus indicators)
+   - **Empty Tab Valid Reason States:** If any tab has 0 output items (e.g. 0 defects, 0 observations, or unpopulated AC matrix), it MUST render an explicit `.empty-state-card` explaining the exact valid reason (e.g., "The upstream Linear ticket does not define formal acceptance criteria checklist items") and evaluation context instead of an empty or confusing table.
 6. **Footer:** Report generation timestamp, ticket ID, engine metadata, and reviewer sign-off notice.
 
 ### Recommended solutions and design-system adaptations
@@ -180,6 +185,7 @@ Implement working, keyboard-accessible:
 - Recommendations are advisory. The AI does not modify product data. Use UAT and synthetic/demo data only; read-only by default; credentials must never appear in prompts, reports, or screenshots. A named human reviewer signs off.
 
 ## Changelog
+- **v0.25.0 — 2026-11-02:** Added interactive evidence image zoom (click-to-zoom 175%, zoom in/out/fit toolbar, mouse wheel zoom, Escape-to-close); sectioned Recommended Solution into distinct user-friendly parts (Target Goal & UX Direction, Developer Action & Code Changes, shadcn/ui Implementation, Fluent UI Alignment); added structured empty-state reason cards with explicit explanations for any tab with 0 output items.
 - **v0.24.0 — 2026-11-02:** Standardized LEX-3757 preview design across all reports: separated S0–S3 defects and UX Observations into distinct top summary cards to eliminate line wrapping; fixed Design Stack card to `shadCN + Fluent UI`; positioned evidence screenshots side-by-side with defect descriptions and Expected/Actual callouts.
 - **v0.23.0 — 2026-11-02:** Streamlined HTML report layout: condensed to 3 summary cards with Findings by Severity first; streamlined to 4 equal-width tabs (Defects, Observations, AC Matrix, Checks Matrix); removed evidence, ledger, and healer tabs; enforced card tag minimalism (only Severity, Pattern, Pillar, AC); added highlighted Expected vs Actual callouts and range-colored deduction pills.
 - **v0.22.0 — 2026-10-29:** Introduced Ticket Re-Run Resolution Verification Protocol: when re-running on a ticket, check prior findings; if stakeholders resolved the defect, verify on live UAT with a screenshot, mark `status: "Resolved"`, do NOT re-detect as a defect, and apply 0 score deductions; added `Resolved` status filter and badge.

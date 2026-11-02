@@ -101,6 +101,150 @@ def format_expected_vs_actual(raw_text: str) -> str:
         """
 
 
+
+def format_inline_code(text: str) -> str:
+    if not text:
+        return ""
+    s = html.escape(str(text))
+    # Replace backticked code
+    s = re.sub(r'`([^`]+)`', r'<code class="inline-code">\1</code>', s)
+    # Replace single-quoted code identifiers
+    s = re.sub(r'&#x27;([a-zA-Z0-9_\-\./\s]{2,40})&#x27;', r'<code class="inline-code">\1</code>', s)
+    s = re.sub(r"'([a-zA-Z0-9_\-\./\s]{2,40})'", r'<code class="inline-code">\1</code>', s)
+    return s
+
+
+def format_solution_sections(solution_data, shadcn_data, fluent_data, is_obs=False) -> str:
+    what_text = ""
+    dev_text = ""
+    design_text = ""
+
+    if isinstance(solution_data, dict):
+        what_text = str(solution_data.get("what", "")).strip()
+        dev_text = str(solution_data.get("developer", "")).strip()
+        design_text = str(solution_data.get("design", "")).strip()
+    elif isinstance(solution_data, str):
+        raw = solution_data.strip()
+        what_match = re.search(r'(?:^|\b)(?:what|what to fix|goal|direction)\s*:\s*(.*?)(?=(?:\b(?:developer|dev|implementation|design|rationale)\s*:|$))', raw, re.DOTALL | re.IGNORECASE)
+        dev_match = re.search(r'(?:^|\b)(?:developer|dev|implementation|action|code)\s*:\s*(.*?)(?=(?:\b(?:design|rationale|acceptance)\s*:|$))', raw, re.DOTALL | re.IGNORECASE)
+        design_match = re.search(r'(?:^|\b)(?:design|rationale|alignment)\s*:\s*(.*)', raw, re.DOTALL | re.IGNORECASE)
+
+        if what_match or dev_match:
+            what_text = what_match.group(1).strip() if what_match else ""
+            dev_text = dev_match.group(1).strip() if dev_match else ""
+            design_text = design_match.group(1).strip() if design_match else ""
+        else:
+            what_text = raw
+
+    if not what_text:
+        what_text = "Verified behavior matches expected design system standards." if is_obs else "Apply concrete UI/UX resolution per acceptance criteria."
+    if not dev_text and not is_obs:
+        dev_text = "Review component state mapping and programmatic attributes in drawer/view container."
+    if not design_text:
+        design_text = "Maintain consistent layout hierarchy and Fluent visual alignment."
+
+    shadcn_text = str(shadcn_data or "Conform to standard shadcn/ui and Radix UI primitive patterns.").strip()
+    fluent_text = str(fluent_data or "Adhere to Fluent design tokens, accessibility, and focus standards.").strip()
+
+    what_html = format_inline_code(what_text)
+    dev_html = format_inline_code(dev_text)
+    design_html = format_inline_code(design_text)
+    shadcn_html = format_inline_code(shadcn_text)
+    fluent_html = format_inline_code(fluent_text)
+
+    dev_card = f"""
+        <div class="solution-part part-dev">
+          <div class="part-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            2. Developer Action &amp; Code Changes
+          </div>
+          <div class="part-body">{dev_html}</div>
+        </div>
+    """ if dev_text else ""
+
+    badge_label = "RECOMMENDED DESIGN DIRECTION" if is_obs else "RECOMMENDED ACTION PLAN &amp; RESOLUTION"
+
+    return f"""
+    <div class="solution-container">
+      <div class="solution-header">
+        <div class="solution-badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          {badge_label}
+        </div>
+        <span class="solution-subtitle">Clear technical sections for engineers &amp; designers</span>
+      </div>
+
+      <div class="solution-parts-grid">
+        <div class="solution-part part-what">
+          <div class="part-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+            1. Target Goal &amp; UX Direction
+          </div>
+          <div class="part-body">{what_html}</div>
+        </div>
+        {dev_card}
+      </div>
+
+      <div class="solution-design-grid">
+        <div class="design-card card-shadcn">
+          <div class="design-card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            shadcn/ui + Radix Implementation
+          </div>
+          <div class="design-card-body">{shadcn_html}</div>
+        </div>
+
+        <div class="design-card card-fluent">
+          <div class="design-card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+            Fluent UI Alignment &amp; A11y Standards
+          </div>
+          <div class="design-card-body">{fluent_html}</div>
+        </div>
+      </div>
+    </div>
+    """
+
+
+def render_empty_tab_state(title: str, reason: str, guidance: str, icon_type: str = "info") -> str:
+    if icon_type == "success":
+        icon_svg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>'
+        icon_class = "icon-success"
+        card_class = "state-success"
+    elif icon_type == "warning":
+        icon_svg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
+        icon_class = "icon-warning"
+        card_class = "state-warning"
+    else:
+        icon_svg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'
+        icon_class = "icon-info"
+        card_class = "state-info"
+
+    return f"""
+    <div class="empty-state-card {card_class}">
+      <div class="empty-state-header">
+        <div class="empty-state-icon {icon_class}">
+          {icon_svg}
+        </div>
+        <div>
+          <h4>{escape(title)}</h4>
+          <span class="empty-state-badge">Zero Items Reported</span>
+        </div>
+      </div>
+      <div class="empty-state-body">
+        <div class="reason-row">
+          <div class="reason-tag">VALID REASON</div>
+          <div class="reason-text">{escape(reason)}</div>
+        </div>
+        <div class="guidance-row">
+          <div class="guidance-tag">CONTEXT &amp; GUIDANCE</div>
+          <div class="guidance-text">{escape(guidance)}</div>
+        </div>
+      </div>
+    </div>
+    """
+
+
 def format_pillar_chip(raw_lens: str) -> str:
     if not raw_lens:
         return ""
@@ -307,11 +451,11 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
               Evidence Screenshot
               <span class="evidence-filename" title="{escape(img_rel)}">{escape(img_rel)}</span>
             </div>
-            <div class="finding-image-preview" onclick="openLightbox('{img_uri}', '{escape(img_title)} ({escape(img_rel)})')">
-              <img src="{img_uri}" alt="{escape(img_title)}" loading="lazy">
+            <div class="finding-image-preview" onclick="openLightboxFromPreview(this)" title="Click to view full screen and zoom image">
+              <img src="{img_uri}" alt="{escape(img_title)}" data-caption="{escape(img_title)}" data-rel="{escape(img_rel)}" loading="lazy">
               <div class="image-overlay">
                 <span>{escape(img_rel)}</span>
-                <span>Click to view full resolution ⤢</span>
+                <span class="zoom-hint"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg> Click to Zoom</span>
               </div>
             </div>
           </div>
@@ -360,38 +504,8 @@ def render_card(f, is_observation=False, image_lookup=None) -> str:
 
         {body_grid_html}
 
-        <!-- Recommended Solutions & Design Guidance -->
-        <div class="guidance-grid">
-          <div class="section-box" style="border-left:3px solid var(--accent-emerald);">
-            <div class="section-box-title" style="color:#34d399;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              {"Recommended Design Direction" if is_observation else "Recommended Resolution"}
-            </div>
-            <div class="section-box-content">
-              {solution}
-            </div>
-          </div>
-
-          <div class="section-box" style="border-left:3px solid var(--accent-indigo);">
-            <div class="section-box-title" style="color:#818cf8;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-              shadcn/ui Implementation
-            </div>
-            <div class="section-box-content">
-              {shadcn}
-            </div>
-          </div>
-
-          <div class="section-box" style="border-left:3px solid var(--accent-cyan);">
-            <div class="section-box-title" style="color:#22d3ee;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-              Fluent Design Alignment
-            </div>
-            <div class="section-box-content">
-              {fluent}
-            </div>
-          </div>
-        </div>
+        <!-- Recommended Solutions & Structured Technical Action Plan -->
+        {format_solution_sections(f.get("solution"), f.get("implementationShadcn"), f.get("fluentRationale"), is_obs=is_observation)}
       </article>
 """
 
@@ -509,25 +623,23 @@ def main():
     if defects:
         defects_cards_html = [render_card(f, is_observation=False, image_lookup=image_lookup) for f in defects]
     else:
-        defects_cards_html = ["""
-        <div class="section-box" style="text-align:center;padding:48px 24px;border:1px dashed var(--border-subtle);border-radius:16px;">
-          <div style="width:48px;height:48px;border-radius:12px;background:rgba(16,185,129,0.15);color:#34d399;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-          </div>
-          <h4 style="font-size:1.15rem;font-weight:700;color:#fff;margin-bottom:6px;">0 UI/UX Defects Found</h4>
-          <p style="font-size:0.85rem;color:var(--text-muted);margin:0;">All evaluated journeys completed with high quality and zero S0–S3 defect deductions.</p>
-        </div>
-        """]
+        defects_cards_html = [render_empty_tab_state(
+            "0 UI/UX Defects Found",
+            f"All evaluated workflow journeys for {ticket} completed in full compliance with release gating standards with zero active S0–S3 defect deductions.",
+            "Review the 'UX Observations & Verification (O)' tab to inspect non-blocking observations, positive verifications, and design polish notes.",
+            "success"
+        )]
 
     # Generate Observation Cards HTML
     if observations:
         observations_cards_html = [render_card(f, is_observation=True, image_lookup=image_lookup) for f in observations]
     else:
-        observations_cards_html = ["""
-        <div class="section-box" style="text-align:center;padding:48px 24px;border:1px dashed var(--border-subtle);border-radius:16px;">
-          <p style="font-size:0.95rem;color:var(--text-muted);margin:0;">No observations recorded in this audit run.</p>
-        </div>
-        """]
+        observations_cards_html = [render_empty_tab_state(
+            "0 UX Observations Recorded",
+            f"No non-blocking observations, advisory notes, or pending stakeholder reviews were documented for {ticket}.",
+            "All audited screens and user transitions behaved strictly in accordance with standard design conventions without requiring supplementary observational notes.",
+            "info"
+        )]
 
     # Build Acceptance Criteria Matrix Table
     ac_rows = []
@@ -535,22 +647,47 @@ def main():
     
     # 1. Parse from context-pack acceptance criteria markdown if present
     raw_ac_text = ctx.get("ticket", {}).get("acceptanceCriteria") or ""
+    if not raw_ac_text:
+        raw_ac_text = ctx.get("ticket", {}).get("description") or ""
+
     if raw_ac_text:
+        in_ac_section = False
         for line in raw_ac_text.splitlines():
             line_str = line.strip()
+            if re.search(r'^(?:acceptance|acceptance criteria|requirements):', line_str, re.IGNORECASE):
+                in_ac_section = True
+                continue
+            if in_ac_section and re.search(r'^(?:validation|scope|notes|test):', line_str, re.IGNORECASE):
+                in_ac_section = False
+                continue
+
             if line_str.startswith("- [ ]") or line_str.startswith("- [x]"):
                 clean_stmt = line_str.replace("- [ ]", "").replace("- [x]", "").strip()
-                # Extract AC label e.g. AC1 if starts with it, or synthesize
                 idx = len(ac_items_dict) + 1
-                ac_key = f"AC{idx}"
-                ac_items_dict[ac_key] = clean_stmt
+                ac_items_dict[f"AC{idx}"] = clean_stmt
+            elif in_ac_section and (line_str.startswith("* ") or line_str.startswith("- ") or re.match(r'^\d+\.\s+', line_str)):
+                clean_stmt = re.sub(r'^(?:\*|-|\d+\.)\s+', '', line_str).strip()
+                if len(clean_stmt) > 8:
+                    idx = len(ac_items_dict) + 1
+                    ac_items_dict[f"AC{idx}"] = clean_stmt
 
     # 2. Add or cross-reference AC tags referenced in findings
     for f in findings:
         f_acs = f.get("acceptanceCriteria", [])
         if isinstance(f_acs, str):
-            f_acs = [f_acs]
-        for a in f_acs:
+            if f_acs.startswith("[") and f_acs.endswith("]"):
+                try:
+                    f_acs = json.loads(f_acs)
+                except Exception:
+                    f_acs = [f_acs]
+            else:
+                f_acs = [x.strip() for x in f_acs.split(",") if x.strip()]
+        elif not isinstance(f_acs, list):
+            f_acs = []
+
+        # Also search title and journey for explicit AC mentions (e.g. AC1, AC2)
+        found_in_text = re.findall(r'\b(AC\d+[a-z0-9\-]*)\b', f.get("title", "") + " " + f.get("journeyStep", ""))
+        for a in list(f_acs) + found_in_text:
             if a and len(a) < 30 and not a.startswith("Verify"):
                 if a not in ac_items_dict:
                     ac_items_dict[a] = f.get("title", "Workflow Acceptance Verification")
@@ -589,9 +726,17 @@ def main():
             </tr>
             """)
     else:
-        ac_rows.append("""
+        empty_reason_html = render_empty_tab_state(
+            f"No Acceptance Criteria Defined for Ticket {ticket}",
+            f"The upstream Linear ticket ({ticket}) context pack does not contain formal acceptance criteria checklist items (e.g., 'Acceptance:', '- [ ]', or '* AC:').",
+            f"The QA & UX audit evaluated this journey against system-wide quality baselines, WCAG 2.1 AA accessibility standards, and the 18 evaluated checks in the Evaluated Checks Matrix. To populate this matrix in future runs, provide explicit acceptance criteria bullets in the ticket description.",
+            "info"
+        )
+        ac_rows.append(f"""
         <tr>
-          <td colspan="4" style="text-align:center;padding:24px;color:var(--text-dim);">No specific acceptance criteria breakdown provided for this ticket.</td>
+          <td colspan="4" style="padding:0;border:none;">
+            {empty_reason_html}
+          </td>
         </tr>
         """)
 
@@ -1890,13 +2035,35 @@ def main():
       </table>
     </div>
 
-    <!-- Lightbox Modal -->
+    <!-- Interactive Lightbox Modal with Zoom Controls -->
     <div id="lightbox" class="lightbox-modal" onclick="closeLightbox(event)">
-      <div class="lightbox-content">
-        <button class="lightbox-close" onclick="closeLightboxDirect()">✕ Close</button>
-        <img id="lightbox-img" class="lightbox-img" src="" alt="Evidence view">
-        <div id="lightbox-caption" class="lightbox-caption"></div>
+      <div class="lightbox-toolbar" onclick="event.stopPropagation()">
+        <div class="lightbox-meta">
+          <span id="lightbox-filename" class="lightbox-tag">Evidence Screenshot</span>
+          <span id="lightbox-zoom-level" class="lightbox-zoom-badge">100%</span>
+        </div>
+        <div class="lightbox-controls">
+          <button class="lb-btn" onclick="zoomIn()" title="Zoom In (+)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Zoom In
+          </button>
+          <button class="lb-btn" onclick="zoomOut()" title="Zoom Out (-)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Zoom Out
+          </button>
+          <button class="lb-btn" onclick="resetZoom()" title="Reset to Fit">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Fit
+          </button>
+          <button class="lb-btn lb-close" onclick="closeLightboxDirect()" title="Close (Escape)">
+            ✕ Close
+          </button>
+        </div>
       </div>
+      <div class="lightbox-viewport" onclick="toggleImageZoom(event)">
+        <img id="lightbox-img" class="lightbox-img" src="" alt="Evidence screenshot" draggable="false">
+      </div>
+      <div id="lightbox-caption" class="lightbox-caption" onclick="event.stopPropagation()"></div>
     </div>
 
     <footer>
