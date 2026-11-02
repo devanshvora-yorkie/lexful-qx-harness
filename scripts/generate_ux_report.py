@@ -155,12 +155,12 @@ def format_solution(value):
 
     if isinstance(value, (list, tuple)) and value:
         items = "".join(f"<li>{escape(x)}</li>" for x in value if str(x).strip())
-        return f'<ul style="padding-left:18px;margin:0;">{items}</ul>'
+        return f'<div class="res-block"><div class="res-label">What to change</div><ul style="padding-left:18px;margin:0;">{items}</ul></div>'
 
     txt = str(value or "").strip()
     if not txt:
         txt = "No product change recommended."
-    return f'<div class="callout-body">{escape(txt)}</div>'
+    return f'<div class="res-block"><div class="res-label">What to change</div><div class="callout-body">{escape(txt)}</div></div>'
 
 
 def _sentences(text):
@@ -584,6 +584,8 @@ def render_card(f, is_observation=False, image_lookup=None, ac_map=None, spec=No
         scope_chip = scope_chip_html("In scope" if scope_val else "Pre-existing")
     elif isinstance(scope_val, str) and scope_val.strip():
         scope_chip = scope_chip_html(scope_val.strip())
+    elif sev in ("S0", "S1", "S2", "S3"):
+        scope_chip = scope_chip_html("In scope")
 
     # Pillar tag (replacing Lens per requirement)
     pillar_chip = format_pillar_chip(f.get("lens", ""))
