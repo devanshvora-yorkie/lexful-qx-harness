@@ -7,19 +7,127 @@ import fcntl
 import json
 import os
 import pty
+import pwd
 import re
 import select
+import shutil
 import signal
 import sqlite3
 import struct
 import subprocess
 import termios
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from app.logbook import Logbook, SubagentTail, plain, row, session_id_from_text
 from app.settings import SECRET_ENV, get_settings
+
+
+# ---- Agent identity -------------------------------------------------------------------------
+# The server holds every secret in its environment. Model-driven processes (OpenCode, the
+# Playwright specs it writes, playwright-cli) run as an unprivileged user, so they cannot read
+# /proc/<server pid>/environ. The cookie files and run folders are handed to that user.
+
+
+def agent_identity() -> tuple[int, int, str] | None:
+    """(uid, gid, home) of QA_AGENT_USER when the server runs as root, else None (same user)."""
+    name = get_settings().agent_user
+    if not name or os.geteuid() != 0:
+        return None
+    try:
+        entry = pwd.getpwnam(name)
+    except KeyError:
+        return None
+    return entry.pw_uid, entry.pw_gid, entry.pw_dir
+
+
+def _as_agent() -> dict[str, Any]:
+    """Popen keyword arguments that drop to the agent user."""
+    identity = agent_identity()
+    if identity is None:
+        return {}
+    uid, gid, _home = identity
+    return {"user": uid, "group": gid, "extra_groups": []}
+
+
+def _agent_home() -> Path:
+    identity = agent_identity()
+    return Path(identity[2]) if identity else Path.home()
+
+
+def opencode_db() -> Path:
+    return _agent_home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def hand_over(*paths: Path) -> None:
+    """Give the agent user ownership of the paths it must write. Symlinks are not followed."""
+    identity = agent_identity()
+    if identity is None:
+        return
+    uid, gid, _home = identity
+    for base in paths:
+        if not base.exists():
+            continue
+        targets = [base] if base.is_file() else [base, *base.rglob("*")]
+        for target in targets:
+            try:
+                if target.is_symlink():
+                    continue
+                stat = target.lstat()
+                if stat.st_uid != uid:
+                    os.chown(target, uid, gid, follow_symlinks=False)
+            except OSError:
+                continue
+
+
+def _agent_env(env: dict[str, str]) -> dict[str, str]:
+    identity = agent_identity()
+    if identity is not None:
+        name = get_settings().agent_user
+        env["HOME"] = identity[2]
+        env["USER"] = name
+        env["LOGNAME"] = name
+        env.pop("XDG_DATA_HOME", None)
+        env.pop("XDG_CONFIG_HOME", None)
+    return env
+
+
+# ---- Process registry: cancel stops what a run started -----------------------------------------
+
+_PROCS_LOCK = threading.Lock()
+_PROCS: dict[str, set[int]] = {}
+
+
+def _key(run_dir: Path) -> str:
+    """Date, time and short id: the part of the folder name that survives the rename at seal."""
+    parts = run_dir.name.split("_")
+    return "_".join(parts[:3]) if len(parts) >= 3 else run_dir.name
+
+
+def _track(run_dir: Path, pid: int) -> None:
+    with _PROCS_LOCK:
+        _PROCS.setdefault(_key(run_dir), set()).add(pid)
+
+
+def _untrack(run_dir: Path, pid: int) -> None:
+    with _PROCS_LOCK:
+        _PROCS.get(_key(run_dir), set()).discard(pid)
+
+
+def kill_run(run_dir: Path) -> int:
+    """Stop every process group this run started. Returns how many were signalled."""
+    with _PROCS_LOCK:
+        pids = list(_PROCS.get(_key(run_dir), set()))
+    for pid in pids:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                break
+            time.sleep(0.5)
+    return len(pids)
 
 
 def session_state_path() -> Path:
@@ -89,55 +197,127 @@ def write_cli_config(folder: Path) -> Path | None:
     return target
 
 
-def prepare_source(folder: Path) -> Path | None:
-    """Keep one read-only clone of the product repo for the agent to browse.
+_REPO_LOCKS: dict[str, threading.Lock] = {}
+_REPO_LOCKS_GUARD = threading.Lock()
 
-    The token is passed per command and never written to the clone's config, so
-    the agent cannot read it. Each pull request of the run is fetched as
-    refs/heads/pr-<n>. The working tree is the primary PR when it is still open,
-    otherwise main. Returns None when git or GitHub is unavailable; the agent then
-    falls back to grepping the context pack.
+
+def _repo_lock(name: str) -> threading.Lock:
+    with _REPO_LOCKS_GUARD:
+        return _REPO_LOCKS.setdefault(name, threading.Lock())
+
+
+def _git_env() -> dict[str, str] | None:
+    """The GitHub token travels in the environment of the server's own git process.
+
+    It is never on a command line (readable in /proc/<pid>/cmdline) and never in a config file.
+    """
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if not token:
+        return None
+    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env = {key: value for key, value in os.environ.items() if key not in SECRET_ENV}
+    env.update({
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+    return env
+
+
+def _repos_of(pack: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Pull requests grouped by owner/repo. A PR without a repo is in the default repo."""
+    default = f"{os.environ.get('GITHUB_ORG', 'Lexful-ai')}/{os.environ.get('GITHUB_REPO', 'docu-stack')}"
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for pull in pack.get("pullRequests") or []:
+        if isinstance(pull, dict) and pull.get("number"):
+            grouped.setdefault(str(pull.get("repo") or default), []).append(pull)
+    return grouped or {default: []}
+
+
+def worktree_root(folder: Path) -> Path:
+    return get_settings().root / "runs" / "source" / "worktrees" / _key(folder)
+
+
+def prepare_source(folder: Path) -> Path | None:
+    """One read-only clone per product repo, and a worktree of it for this run.
+
+    Each pull request is fetched as refs/heads/pr-<n>. The run's worktree is the primary PR
+    when it is still open, otherwise main, so two runs never fight over one checkout. Returns
+    the first worktree, or None when git or GitHub is unavailable; the agent then greps the pack.
     """
     settings = get_settings()
-    pack = {}
     try:
         pack = json.loads((folder / "context-pack.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    org = os.environ.get("GITHUB_ORG", "Lexful-ai")
-    repo = os.environ.get("GITHUB_REPO", "docu-stack")
-    if not token:
+    env = _git_env()
+    if env is None:
         return None
-    clone = settings.root / "runs" / "source" / repo
-    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    git = ["git", "-C", str(clone), "-c", f"http.extraHeader=Authorization: Basic {auth}"]
+    lines: list[str] = []
+    first: Path | None = None
+    for full_name, pulls in _repos_of(pack).items():
+        repo = full_name.split("/")[-1]
+        clone = settings.root / "runs" / "source" / repo
+        tree = worktree_root(folder) / repo
 
-    def run(args: list[str], timeout: int = 300) -> bool:
-        done = subprocess.run(git + args, capture_output=True, text=True, timeout=timeout)
-        return done.returncode == 0
+        def git(args: list[str], timeout: int = 300, where: Path = clone) -> bool:
+            done = subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=timeout, env=env)
+            return done.returncode == 0
 
-    try:
-        if not (clone / ".git").is_dir():
-            clone.mkdir(parents=True, exist_ok=True)
-            run(["init", "-q"]) and run(["remote", "add", "origin", f"https://github.com/{org}/{repo}.git"])
-        pulls = [p for p in pack.get("pullRequests") or [] if p.get("number")]
-        specs = ["+refs/heads/main:refs/remotes/origin/main"] + [f"+refs/pull/{p['number']}/head:refs/heads/pr-{p['number']}" for p in pulls]
-        if not run(["fetch", "-q", "--force", "origin", *specs], timeout=600):
-            return None
-        primary = next((p for p in pulls if p["number"] == pack.get("primaryPr")), None)
-        ref = f"pr-{primary['number']}" if primary and primary.get("state") == "open" else "origin/main"
-        if not run(["checkout", "-q", "-f", "--detach", ref]):
-            return None
-    except (OSError, subprocess.TimeoutExpired):
+        try:
+            with _repo_lock(repo):
+                if not (clone / ".git").is_dir():
+                    clone.mkdir(parents=True, exist_ok=True)
+                    git(["init", "-q"]) and git(["remote", "add", "origin", f"https://github.com/{full_name}.git"])
+                refs = ["+refs/heads/main:refs/remotes/origin/main"] + [
+                    f"+refs/pull/{p['number']}/head:refs/heads/pr-{p['number']}" for p in pulls
+                ]
+                if not git(["fetch", "-q", "--force", "origin", *refs], timeout=600):
+                    lines.append(f"{full_name}: fetch failed, grep the context pack instead")
+                    continue
+                primary = next((p for p in pulls if p["number"] == pack.get("primaryPr")), None)
+                ref = f"pr-{primary['number']}" if primary and primary.get("state") == "open" else "origin/main"
+                git(["worktree", "prune"])
+                if tree.exists():
+                    git(["worktree", "remove", "--force", str(tree)])
+                tree.parent.mkdir(parents=True, exist_ok=True)
+                if not git(["worktree", "add", "-q", "--detach", str(tree), ref], timeout=600):
+                    lines.append(f"{full_name}: worktree failed, grep the context pack instead")
+                    continue
+        except (OSError, subprocess.TimeoutExpired):
+            lines.append(f"{full_name}: git unavailable, grep the context pack instead")
+            continue
+        first = first or tree
+        branches = ", ".join(f"pr-{p['number']} ({'merged' if p.get('merged') else p.get('state')})" for p in pulls)
+        lines.append(
+            f"{full_name}\n  Worktree for this run: {_relative_to_root(tree)} (checked out at {ref})\n"
+            f"  Branches: origin/main; {branches or 'no PRs in this repo'}\n"
+            f"  History and other branches: git -C {_relative_to_root(tree)} log|show|blame|grep|diff"
+        )
+    if first is None:
         return None
-    refs = ", ".join(f"pr-{p['number']} ({'merged' if p.get('merged') else p.get('state')})" for p in pulls)
     (folder / "source-info.md").write_text(
-        f"Read-only clone: {_relative_to_root(clone)}\nWorking tree: {ref}\nBranches: main as origin/main; {refs or 'no PRs'}\n"
-        "Browse with Read, Grep, Glob, and git -C <clone> log|show|blame|grep|diff. Never checkout, fetch, commit, or edit.\n",
+        "Read-only source for this run. Browse with Read, Grep, Glob and git log|show|blame|grep|diff.\n"
+        "Never checkout, fetch, commit, or edit.\n\n" + "\n\n".join(lines) + "\n",
         encoding="utf-8",
     )
-    return clone
+    return first
+
+
+def cleanup_source(folder: Path) -> None:
+    """Remove this run's worktrees. The clones stay for the next run."""
+    root = worktree_root(folder)
+    if not root.is_dir():
+        return
+    for tree in root.iterdir():
+        clone = get_settings().root / "runs" / "source" / tree.name
+        try:
+            subprocess.run(["git", "-C", str(clone), "worktree", "remove", "--force", str(tree)],
+                           capture_output=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def _relative_to_root(path: Path) -> str:
@@ -161,7 +341,7 @@ def _opencode_env(run_dir: Path) -> dict[str, str]:
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
-    return env
+    return _agent_env(env)
 
 
 def _playwright_env(run_dir: Path) -> dict[str, str]:
@@ -176,7 +356,7 @@ def _playwright_env(run_dir: Path) -> dict[str, str]:
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
     env["QA_ENV_URL"] = settings.qa_url
-    return env
+    return _agent_env(env)
 
 
 def ensure_session(*, fresh: bool = False, persona: str | None = None) -> tuple[int, str]:
@@ -190,19 +370,33 @@ def ensure_session(*, fresh: bool = False, persona: str | None = None) -> tuple[
     command = ["node", "scripts/persona.mjs", name]
     if fresh:
         command.append("--fresh")
-    process = subprocess.run(
-        command,
-        cwd=settings.root,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    with _SESSION_LOCK:
+        process = subprocess.run(
+            command,
+            cwd=settings.root,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        # The agent user loads these cookies with playwright-cli and the specs read them.
+        hand_over(session_state_path().parent)
     detail = (process.stderr or process.stdout or "").strip().splitlines()
     return process.returncode, (detail[-1] if detail else "")[:220]
 
 
+# Two runs refreshing the same cookie file at once would race; one sign-in at a time.
+_SESSION_LOCK = threading.Lock()
+
+
+def _newest_log(run_dir: Path, log_name: str) -> Path:
+    """The log of the last attempt: heal-1.jsonl, or heal-1-retry1.jsonl after a retry."""
+    stem = Path(log_name).stem
+    tries = sorted((run_dir / "opencode").glob(f"{stem}-retry*.jsonl"))
+    return tries[-1] if tries else run_dir / "opencode" / log_name
+
+
 def last_opencode_error(run_dir: Path, log_name: str) -> str:
-    path = run_dir / "opencode" / log_name
+    path = _newest_log(run_dir, log_name)
     if not path.is_file():
         return ""
     message = ""
@@ -228,8 +422,9 @@ def last_opencode_error(run_dir: Path, log_name: str) -> str:
     return message or plain_line
 
 
-def _recent_root_session(started_ms: int) -> str:
-    database = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+def _recent_root_session(started_ms: int, title: str = "") -> str:
+    """Fallback when the stream never printed a session id. Matches the title so a parallel run's session is not taken."""
+    database = opencode_db()
     if not database.is_file():
         return ""
     try:
@@ -241,20 +436,37 @@ def _recent_root_session(started_ms: int) -> str:
         table = "session_v2" if "session_v2" in names else "session" if "session" in names else ""
         if not table:
             return ""
+        columns = {item[1] for item in connection.execute(f"PRAGMA table_info({table})")}
+        where = "parent_id IS NULL AND time_created >= ?"
+        params: list[Any] = [started_ms - 2_000]
+        if title and "title" in columns:
+            where += " AND title = ?"
+            params.append(title)
         found = connection.execute(
-            f"""
-            SELECT id FROM {table}
-            WHERE parent_id IS NULL AND time_created >= ?
-            ORDER BY time_created DESC
-            LIMIT 1
-            """,
-            (started_ms - 2_000,),
+            f"SELECT id FROM {table} WHERE {where} ORDER BY time_created DESC LIMIT 1",
+            params,
         ).fetchone()
         return str(found[0]) if found and str(found[0]).startswith("ses_") else ""
     except sqlite3.Error:
         return ""
     finally:
         connection.close()
+
+
+# A dropped connection, a DNS failure, a throttle, or an idle kill. The work so far is in the
+# session, so the server resumes it once instead of failing the phase.
+_TRANSIENT = re.compile(
+    r"ECONNRESET|ETIMEDOUT|ETIMEOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|socket hang up|Connection lost|"
+    r"network|inactivity|timed out|throttl|Too many requests|429|5\d\d|ServiceUnavailable|overloaded",
+    re.IGNORECASE,
+)
+
+
+def is_transient(detail: str) -> bool:
+    return bool(detail) and bool(_TRANSIENT.search(detail))
+
+
+_RESUME_NOTE = "Phase: resume\nThe connection to the model dropped. Follow section 7 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md for the phase you were in."
 
 
 def run_opencode(
@@ -266,22 +478,57 @@ def run_opencode(
     log_name: str,
     resume: bool = False,
     agent: str = "qa",
+    model: str | None = None,
+    book_name: str = "run.log",
 ) -> tuple[int, str]:
-    """Run OpenCode on a terminal so each JSON line is flushed into run.log immediately.
+    """Run one OpenCode turn. A transient failure resumes the same session up to QA_AGENT_RETRIES times."""
+    settings = get_settings()
+    book = Logbook(run_dir, book_name)
+    code, session = _run_opencode_once(
+        run_dir, session_id=session_id, prompt=prompt, title=title, log_name=log_name,
+        resume=resume, agent=agent, model=model, book=book,
+    )
+    for attempt in range(1, settings.agent_retries + 1):
+        if code == 0:
+            break
+        detail = last_opencode_error(run_dir, log_name) or ("opencode timed out" if code == 124 else "")
+        if code == 124 or not session or not is_transient(detail):
+            break
+        book.row("server", "retry", f"{agent}: {detail[:120]}  resuming {session} ({attempt} of {settings.agent_retries})")
+        code, session = _run_opencode_once(
+            run_dir, session_id=session, prompt=_RESUME_NOTE, title=title,
+            log_name=f"{Path(log_name).stem}-retry{attempt}.jsonl", resume=True,
+            agent=agent, model=model, book=book,
+        )
+    return code, session
+
+
+def _run_opencode_once(
+    run_dir: Path,
+    *,
+    session_id: str | None,
+    prompt: str,
+    title: str,
+    log_name: str,
+    resume: bool,
+    agent: str,
+    model: str | None,
+    book: Logbook,
+) -> tuple[int, str]:
+    """Run OpenCode on a terminal so each JSON line is flushed into the log immediately.
 
     A new run omits ``--session``. OpenCode creates the session and prints its id.
     ``--session`` is only passed when resuming that real id.
     """
     settings = get_settings()
-    book = Logbook(run_dir)
     active_session = session_id if resume and session_id else ""
-    tail = SubagentTail(active_session, book)
+    tail = SubagentTail(active_session, book, db_path=opencode_db())
     log_path = run_dir / "opencode" / log_name
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = ["opencode", "run", "--format", "json"]
     if active_session:
         command.extend(["--session", active_session])
-    model = settings.main_model if agent == "qa" else settings.sub_model
+    model = model or (settings.main_model if agent.startswith("qa") else settings.sub_model)
     command.extend([
         "--agent",
         agent,
@@ -306,6 +553,7 @@ def run_opencode(
         active_session = found
         tail.parent_id = found
         book.row(agent, "session", found)
+    hand_over(run_dir, get_settings().root / "e2e test cases")
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 200, 400, 0, 0))
     process = subprocess.Popen(
@@ -316,7 +564,9 @@ def run_opencode(
         stderr=slave,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
+        **_as_agent(),
     )
+    _track(run_dir, process.pid)
     os.close(slave)
     deadline = time.monotonic() + settings.agent_timeout_seconds
     pending = b""
@@ -357,13 +607,13 @@ def run_opencode(
             remember(text)
         if timed_out:
             handle.write("opencode timed out\n")
-            book.row("qa", "error", "opencode timed out")
+            book.row(agent, "error", "opencode timed out")
     os.close(master)
     if not active_session:
-        active_session = _recent_root_session(started_ms)
+        active_session = _recent_root_session(started_ms, title)
         if active_session:
             tail.parent_id = active_session
-            book.row("qa", "session", active_session)
+            book.row(agent, "session", active_session)
     tail.poll()
     tail.write_index(run_dir / "opencode" / "children.json")
     export_children(run_dir, tail.children, book)
@@ -373,6 +623,8 @@ def run_opencode(
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
         code = 124
+    finally:
+        _untrack(run_dir, process.pid)
     return code, active_session
 
 
@@ -404,6 +656,7 @@ def export_children(run_dir: Path, children: list[dict[str, Any]], book: Logbook
             text=True,
             timeout=120,
             check=False,
+            **_as_agent(),
         )
         if result.returncode == 0 and result.stdout.strip():
             target.write_text(result.stdout, encoding="utf-8")
@@ -423,6 +676,7 @@ def export_session(run_dir: Path, session_id: str, name: str = "session.json") -
         text=True,
         timeout=120,
         check=False,
+        **_as_agent(),
     )
     target = run_dir / "opencode" / name
     if result.returncode == 0 and result.stdout.strip():
@@ -586,9 +840,13 @@ def list_specs(specs: list[str]) -> tuple[bool, str]:
     if not specs:
         return True, ""
     try:
+        # Model-written specs are loaded as the agent user, never as the server.
+        hand_over(get_settings().root / "e2e test cases")
         done = subprocess.run(
             ["node_modules/.bin/playwright", "test", "--list", *specs],
             cwd=get_settings().root, capture_output=True, text=True, timeout=120,
+            env=_agent_env({k: v for k, v in os.environ.items() if k not in SECRET_ENV}),
+            **_as_agent(),
         )
     except (OSError, subprocess.TimeoutExpired) as err:
         return False, str(err)[:200]
@@ -598,8 +856,17 @@ def list_specs(specs: list[str]) -> tuple[bool, str]:
     return False, (lines[0] if lines else "playwright could not load the specs")[:240]
 
 
-def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
+def run_playwright(
+    run_dir: Path,
+    specs: list[str],
+    *,
+    out_dir: Path | None = None,
+    grep: str = "",
+    workers: int | None = None,
+) -> dict[str, Any]:
+    """Run specs. `out_dir` keeps a second report apart (the affected E2E cases); `grep` picks tests by title."""
     book = Logbook(run_dir)
+    out = out_dir or run_dir
     ready, detail = ensure_session()
     if ready == 0:
         for name in personas_requested(specs):
@@ -613,23 +880,41 @@ def run_playwright(run_dir: Path, specs: list[str]) -> dict[str, Any]:
             "summary": {"passed": 0, "failed": 1, "skipped": 0, "flaky": 0},
             "setupError": detail or "could not sign in",
         }
-    result = _run_playwright_once(run_dir, specs)
-    log_text = _playwright_log(run_dir)
-    if result["exitCode"] == 0 or not _session_expired(log_text):
+    result = _run_playwright_once(run_dir, specs, out, grep, workers)
+    if result["exitCode"] == 0:
         return result
-    book.row("server", "session", "session expired during the run. signing in again")
-    targets = _expired_personas(log_text) or [None]
-    refreshed = 0
-    detail = ""
-    for name in targets:
-        refreshed, detail = ensure_session(fresh=True, persona=name)
+    log_text = _playwright_log(out)
+    if _session_expired(log_text):
+        book.row("server", "session", "session expired during the run. signing in again")
+        targets = _expired_personas(log_text) or [None]
+        refreshed = 0
+        detail = ""
+        for name in targets:
+            refreshed, detail = ensure_session(fresh=True, persona=name)
+            if refreshed != 0:
+                break
         if refreshed != 0:
-            break
-    if refreshed != 0:
-        book.row("server", "session", f"refresh failed  {detail or 'could not sign in'}")
+            book.row("server", "session", f"refresh failed  {detail or 'could not sign in'}")
+            return result
+    elif not _revoked_sessions(specs, book):
         return result
     book.row("server", "session", "refreshed. resuming the same specs")
-    return _run_playwright_once(run_dir, specs)
+    return _run_playwright_once(run_dir, specs, out, grep, workers)
+
+
+def _revoked_sessions(specs: list[str], book: Logbook) -> bool:
+    """After a failed run: sign in again as any persona whose saved cookies the API now rejects.
+
+    A revoked session still has a valid expiry, so the specs fail with an unrelated message. ensure_session
+    asks the API whether each saved session is alive and signs in again when it is not.
+    """
+    revoked = False
+    for name in [None, *personas_requested(specs)]:
+        code, line = ensure_session(persona=name)
+        if code == 0 and "refreshed" in line:
+            book.row("server", "session", f"the saved session for {name or 'the default persona'} was rejected by the API. Signed in again")
+            revoked = True
+    return revoked
 
 
 def _expired_personas(log_text: str) -> list[str]:
@@ -650,18 +935,26 @@ def _playwright_log(run_dir: Path) -> str:
     return log_path.read_text(encoding="utf-8", errors="replace")
 
 
-def _run_playwright_once(run_dir: Path, specs: list[str]) -> dict[str, Any]:
+def _run_playwright_once(
+    run_dir: Path, specs: list[str], out: Path, grep: str = "", workers: int | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     book = Logbook(run_dir)
-    log_path = run_dir / "playwright" / "output.log"
+    log_path = out / "playwright" / "output.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    command = ["npx", "playwright", "test", "--workers=1", "--project=e2e", *specs]
-    env = _playwright_env(run_dir)
+    # Files run in parallel workers; tests inside one file stay in order (fullyParallel is off).
+    count = max(1, min(workers or settings.pw_workers, len(specs)))
+    command = ["npx", "playwright", "test", f"--workers={count}", "--project=e2e", *specs]
+    if grep:
+        command.extend(["--grep", grep])
+    env = _playwright_env(out)
     env["QA_TEST_DIR"] = str(common_test_dir(specs))
+    env["QA_PW_WORKERS"] = str(count)
+    hand_over(out, settings.root / "e2e test cases")
     book.row(
         "playwright",
         "running",
-        f"{len(specs)} files, one at a time. Each finished case is logged as done/total. A retry stays on that case.",
+        f"{len(specs)} files on {count} worker(s). Each finished case is logged as done/total. A retry stays on that case.",
     )
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 80, 200, 0, 0))
@@ -673,7 +966,9 @@ def _run_playwright_once(run_dir: Path, specs: list[str]) -> dict[str, Any]:
         stderr=slave,
         stdin=subprocess.DEVNULL,
         start_new_session=True,
+        **_as_agent(),
     )
+    _track(run_dir, process.pid)
     os.close(slave)
     deadline = time.monotonic() + settings.playwright_timeout_seconds
     with log_path.open("w", encoding="utf-8") as handle:
@@ -687,9 +982,11 @@ def _run_playwright_once(run_dir: Path, specs: list[str]) -> dict[str, Any]:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
         code = 124
-    summary = read_playwright_summary(run_dir)
+    finally:
+        _untrack(run_dir, process.pid)
+    summary = read_playwright_summary(out)
     setup_error = ""
-    log_text = _playwright_log(run_dir)
+    log_text = _playwright_log(out)
     if "No tests found" in log_text:
         setup_error = "No tests found. The spec paths were outside the Playwright testDir."
     elif code != 0 and summary["failed"] == 0 and summary["passed"] == 0:
@@ -729,10 +1026,7 @@ def planned_specs(run_dir: Path, started_at: float) -> list[str]:
             continue
         files = payload.get("test_files") if isinstance(payload, dict) else None
         if isinstance(files, list):
-            existing = [
-                str(item) for item in files
-                if _is_runnable_spec(settings.root / str(item))
-            ]
+            existing = [found for found in (_rerooted(run_dir, str(item)) for item in files) if found]
             if existing:
                 return existing
     found: list[str] = []
@@ -749,6 +1043,23 @@ def planned_specs(run_dir: Path, started_at: float) -> list[str]:
         except ValueError:
             continue
     return found
+
+
+def _rerooted(run_dir: Path, item: str) -> str:
+    """A planned spec path, still valid after the run folder was renamed (resume after a seal)."""
+    root = get_settings().root
+    if _is_runnable_spec(root / item):
+        return item
+    marker = "/specs/"
+    normalized = "/" + item.replace("\\", "/").lstrip("/")
+    if marker in normalized:
+        candidate = run_dir / "specs" / normalized.split(marker, 1)[1]
+        if _is_runnable_spec(candidate):
+            try:
+                return str(candidate.relative_to(root))
+            except ValueError:
+                return str(candidate)
+    return ""
 
 
 def _is_runnable_spec(path: Path) -> bool:

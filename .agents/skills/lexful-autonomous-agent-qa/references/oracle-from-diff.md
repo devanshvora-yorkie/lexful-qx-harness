@@ -6,15 +6,15 @@ A test written only from what the UI showed asserts today's behavior, so it can 
 
 ## Where the code is
 
-`source-info.md` in the run directory names a read-only clone of the product repo (`runs/source/<repo>`) with the run's PRs fetched as branches `pr-<number>`. The working tree is the primary PR when it is open, otherwise `main`. If the file is missing, there is no clone: grep `context-pack.json` for the patch of one file at a time.
+`source-info.md` in the run directory names a read-only worktree of each product repo the ticket's PRs touch (`runs/source/worktrees/<run>/<repo>`), with the run's PRs fetched as branches `pr-<number>`. The working tree is the primary PR when it is open, otherwise `main`. If the file is missing, there is no clone: grep `context-pack.json` for the patch of one file at a time.
 
 Browse with your normal tools: Read, Grep, Glob. Use git for history and for PR branches:
 
-- `git -C <clone> diff origin/main...pr-N -- <path>` — what a PR changes in one file
-- `git -C <clone> show pr-N:<path>` — a file as the PR leaves it
-- `git -C <clone> grep -n "<symbol>" pr-N -- "<dir>"` — find uses on a branch
-- `git -C <clone> log --oneline -n 15 -- <path>` and `git -C <clone> log -p -n 3 -- <path>` — why the code looks like this
-- `git -C <clone> blame -L a,b <path>` — who last touched the lines in question
+- `git -C <worktree> diff origin/main...pr-N -- <path>` — what a PR changes in one file
+- `git -C <worktree> show pr-N:<path>` — a file as the PR leaves it
+- `git -C <worktree> grep -n "<symbol>" pr-N -- "<dir>"` — find uses on a branch
+- `git -C <worktree> log --oneline -n 15 -- <path>` and `git -C <worktree> log -p -n 3 -- <path>` — why the code looks like this
+- `git -C <worktree> blame -L a,b <path>` — who last touched the lines in question
 
 Never checkout, fetch, commit, or edit in the clone. Do not paste whole files into your answer; quote the lines you rely on.
 
@@ -29,7 +29,8 @@ Work outward from the diff, in this order. Stop a branch of the search when it s
 5. **The rules next door.** Read the file the change sits beside: the validator it relies on, the constants it imports, the CSS that overrides it, the stylesheet loaded after it. The commonest unrecorded bug is a rule in a file the PR did not touch.
 6. **The authors' tests.** Read the tests in the PR and the neighbors of the changed file. They show what the authors thought of, and what they left out. An input class missing from them is where to look first.
 7. **The history.** `git log -p` on the changed file. A recent fix next to the change often tells you the failure mode to retest.
-8. **The words.** The ticket's acceptance criteria and the PR body. Each sentence is a claim.
+8. **The words.** The ticket's acceptance criteria, the PR body, the review notes and the Linear comments in `pr-brief.md`. Each sentence is a claim; each reviewer's question is a risk.
+9. **The past.** `history.md`: what earlier runs of this ticket failed or filed. Each is a risk to retest.
 
 Write `feature-map.md` in the run directory, short (about a page):
 
@@ -55,7 +56,7 @@ For each behavior, cover what the rule implies:
 
 ## Hunting bugs nobody recorded
 
-After the claims pass, spend a short, fixed effort on the **Risks** list. Each risk is a hypothesis: write what you expect to see if the risk is real, then try to make it happen in the app or API.
+After the claims pass, work the **Risks** list as hypotheses in `hypotheses.json` (skill §1k). Each risk is a hypothesis: write what you expect to see if the risk is real, then try to make it happen in the app or API.
 
 - A fix on one side that does not reach the other (dropdown vs highlighter, editor vs read view vs print vs chat).
 - A rule in an unchanged file that overrides the new one (a stylesheet, a default, a guard).

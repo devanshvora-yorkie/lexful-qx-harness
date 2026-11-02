@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app import evidence
+
 _TC_ID = re.compile(r"TC-[A-Za-z0-9-]+")
 _SEVERITY = {
     "critical": ("Critical", "P0"),
@@ -38,6 +40,13 @@ def publish_bugs(
     bugs = collect_bugs(triage, still_failing)
     if not bugs:
         return False
+    listed = [b for b in (triage.get("bugs") or []) if isinstance(b, dict)]
+    bugs = [
+        {**bug, "screenshots": evidence.screenshots_for(
+            folder, f"bug:{listed.index(bug) + 1}" if bug in listed else f"failure:{n}", bug)}
+        for n, bug in enumerate(bugs, start=1)
+    ]
+    _append_json(folder, bugs, source="triage", ticket=ticket or run_id, url=url, build=build or "unknown")
     text = render_bugs(
         bugs,
         ticket=ticket or run_id,
@@ -81,6 +90,8 @@ def publish_findings(
         kept.append({**item, "labels": labels, "failure": _tag(item.get("failure"), confidence)})
     if not kept:
         return 0
+    kept = [{**item, "screenshots": evidence.screenshots_for(folder, f"finding:{item.get('id')}", item)} for item in kept]
+    _append_json(folder, kept, source="finding", ticket=ticket or run_id, url=url, build=build or "unknown")
     text = render_bugs(
         kept,
         ticket=ticket or run_id,
@@ -93,6 +104,34 @@ def publish_findings(
     existing = target.read_text(encoding="utf-8").rstrip() if target.is_file() else ""
     target.write_text((existing + "\n\n---\n\n" if existing else "") + text, encoding="utf-8")
     return len(kept)
+
+
+def _append_json(folder: Path, bugs: list[dict[str, Any]], *, source: str, ticket: str, url: str, build: str) -> None:
+    """bugs.json: the same bugs as bugs.md, structured, with screenshots. The Linear report reads it."""
+    path = folder / "bugs.json"
+    existing = _read_json(path).get("bugs") or []
+    for bug in bugs:
+        cases = _cases(bug)
+        severity, priority = _severity(bug)
+        existing.append({
+            "source": source,
+            "id": str(bug.get("id") or ""),
+            "title": _bug_title(bug, ticket),
+            "severity": severity,
+            "priority": priority,
+            "confidence": str(bug.get("confidence") or "").lower() or ("confirmed" if source == "finding" else ""),
+            "area": str(bug.get("area") or ""),
+            "steps": _steps(bug, str(bug.get("url") or url)),
+            "expected": str(bug.get("expected") or "").strip(),
+            "actual": str(bug.get("actual") or bug.get("error") or "").strip(),
+            "rootCause": str(bug.get("rootCause") or bug.get("root_cause") or "").strip(),
+            "evidence": _evidence(bug, cases, str(bug.get("actual") or "")),
+            "screenshots": [str(shot) for shot in bug.get("screenshots") or []],
+            "affectedTests": [c["id"] for c in cases if c.get("id") and c["id"] != "TC"],
+            "url": str(bug.get("url") or url),
+            "build": str(bug.get("build") or build),
+        })
+    path.write_text(json.dumps({"bugs": existing}, indent=2) + "\n", encoding="utf-8")
 
 
 def _tag(value: Any, confidence: str) -> str:
@@ -297,9 +336,11 @@ def _evidence(bug: dict[str, Any], cases: list[dict[str, str]], actual: str) -> 
                 step = item.get("step") or item.get("stepN") or 1
                 detail = str(item.get("detail") or item.get("note") or "see playwright/output.log").strip()
                 lines.append(f"[{test} step {step}]: {detail}")
-    if lines:
-        return lines
-    return [f"[{cases[0]['id']} step 1]: {actual}"]
+    if not lines:
+        lines = [f"[{cases[0]['id']} step 1]: {actual}"]
+    for shot in bug.get("screenshots") or []:
+        lines.append(f"Screenshot: {shot}")
+    return lines
 
 
 def _steps(bug: dict[str, Any], url: str) -> list[str]:

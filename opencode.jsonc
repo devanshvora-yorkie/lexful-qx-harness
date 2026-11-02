@@ -142,6 +142,43 @@
         { "action": "edit", "resource": "runs/source/**", "effect": "deny" }
       ]
     },
+    "qa-ticket": {
+      "mode": "primary",
+      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
+      "description": "Feature Specific TCs: explore, author, ticket heal and verify. May not edit the checked-in suite.",
+      "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. One session owns Explore, Author, Heal, and Promote. Do not spawn subagents. If the server says E2E User Journey TCs, follow only section 3 of the skill. Stay inside this repository. Do not read .env. Do not clone a product repo.",
+      "permissions": [
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "read", "resource": ".env", "effect": "deny" },
+        { "action": "read", "resource": "*.env", "effect": "deny" },
+        { "action": "read", "resource": ".env.*", "effect": "deny" },
+        { "action": "read", "resource": "**/.env", "effect": "deny" },
+        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
+        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+        { "action": "read", "resource": ".env.example", "effect": "allow" },
+        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
+        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
+        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+        { "action": "bash", "resource": "env", "effect": "deny" },
+        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
+        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
+        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
+        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
+        { "action": "edit", "resource": "server/**", "effect": "deny" },
+        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
+        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
+        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
+        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
+        { "action": "edit", "resource": "runs/**", "effect": "allow" },
+        { "action": "edit", "resource": "runs/source/**", "effect": "deny" },
+        { "action": "edit", "resource": "e2e test cases/**", "effect": "deny" }
+      ]
+    },
     "ux-auditor": {
       "mode": "subagent",
       "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",

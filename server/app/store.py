@@ -130,22 +130,43 @@ def _locked(mutator):
     raise TimeoutError("runs/index.json stayed locked")
 
 
+def _parse_index(file: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+        return None
+    return data
+
+
 def _read_index() -> dict[str, Any]:
+    """A damaged index is never read as empty: the next write would erase every run."""
     file = _index_path()
     if not file.is_file():
         return {"runs": []}
-    try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {"runs": []}
-    if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
-        return {"runs": []}
-    return data
+    data = _parse_index(file)
+    if data is not None:
+        return data
+    backup = file.with_name("index.json.bak")
+    data = _parse_index(backup) if backup.is_file() else None
+    if data is not None:
+        return data
+    raise RuntimeError(f"{file} is not valid JSON and has no usable backup. Fix it by hand before starting runs.")
+
+
+def write_atomic(file: Path, text: str) -> None:
+    """Write beside the target, then rename over it, so a crash leaves the old file or the new one."""
+    tmp = file.with_name(f".{file.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, file)
 
 
 def _write_index(data: dict[str, Any]) -> None:
     file = _index_path()
-    file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if file.is_file() and _parse_index(file) is not None:
+        shutil.copyfile(file, file.with_name("index.json.bak"))
+    write_atomic(file, json.dumps(data, indent=2) + "\n")
 
 
 def update_run(run_id: str, **fields: Any) -> dict[str, Any]:
@@ -180,7 +201,7 @@ def _write_manifest(row: dict[str, Any], folder: Path | None = None) -> None:
         except json.JSONDecodeError:
             current = {}
     current.update(row)
-    manifest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+    write_atomic(manifest, json.dumps(current, indent=2) + "\n")
 
 
 def create_run(
@@ -223,7 +244,6 @@ def create_run(
         if kind != "phase1":
             (folder / "explore").mkdir(exist_ok=True)
             (folder / "specs").mkdir(exist_ok=True)
-        _write_contents(folder, row)
         _write_guide()
         _write_manifest(row, folder)
         return dict(row)
@@ -259,7 +279,6 @@ def publish_folder(
         target.mkdir(parents=True, exist_ok=True)
         found["folder"] = target_rel
         _write_index(data)
-        _write_contents(target, found)
         _write_manifest(found, target)
         _write_guide()
         return target_rel
@@ -310,7 +329,6 @@ def _relocate_row(row: dict[str, Any]) -> bool:
         current.rename(target)
     before = row.get("folder")
     row["folder"] = target_rel
-    _write_contents(target, row)
     _write_manifest(row, target)
     legacy = _legacy_path(run_id)
     if not had_folder and not legacy.exists():
@@ -333,53 +351,6 @@ def _saved_outcome(folder: Path) -> tuple[dict[str, Any] | None, str | None]:
     verdict = data.get("verdict") if isinstance(data.get("verdict"), str) else None
     return summary, verdict
 
-
-_PHASE1_CONTENTS = """\
-This folder is one E2E User Journey TCs attempt. It runs the checked-in specs in "e2e test cases" against UAT.
-
-The specs are not copied here. When a locator is healed, the edit is written into "e2e test cases/" in the repo. This folder only records what happened on this attempt.
-
-contents.txt       this note
-report.md          final counts and what the healer decided
-run.log            the full log, one line per event
-qa-result.json     passed, failed, skipped, and flaky counts
-manifest.json      status, model, heal count, and timestamps
-preflight.json     sign-in and toolchain checks
-triage-N.json      healer classification for heal N: spec drift, or a product bug
-bugs.md            product bugs for this attempt, when a failure remains
-playwright/        results.json, output.log, and a screenshot when a test fails
-opencode/          the agent session and the healer transcript
-"""
-
-_TICKET_CONTENTS = """\
-This folder is one Feature Specific TCs attempt.
-
-The specs written for this attempt stay in specs/. They are not copied into "e2e test cases/" by this run.
-
-contents.txt         this note
-report.md            final counts
-run.log              the full log, one line per event
-qa-result.json       passed, failed, skipped, and flaky counts
-manifest.json        status, model, heal count, and timestamps
-preflight.json       sign-in, Linear, and GitHub checks
-context-pack.json    ticket, pull request, and files gathered before the agent
-pr-brief.md          the short digest of the pack that the agent reads first
-api-probes.jsonl     every API probe the agent made, with status and shape
-api-findings.json    API and diff-vs-reality findings, filed into bugs.md
-e2e-coverage.md      checked-in search, asset crud, and document editing cases already run
-FEATURE.md           what the explorer observed on UAT, and which of those cases are new
-bugs.md              product bugs for this attempt, when a failure remains
-planned-specs.json   spec files the agent planned
-specs/               specs written for this ticket
-explore/             browser snapshots
-ux-report.html       UI review, when that switch is on
-ux-findings.json     findings behind the UI review
-ux-scorecard.json    score and verdict for the UI review
-e2e/run.log          E2E User Journey log from the journey run that preceded this attempt
-e2e/report.md        that journey run's verdict
-playwright/          results.json, output.log, and a screenshot when a test fails
-opencode/            the agent session and subagent transcripts
-"""
 
 _GUIDE = """\
 Where a run is stored
@@ -411,16 +382,13 @@ regression/ and LEX-*/
   Older paths. They are links to the folders above, so a file that is already open still resolves.
   Read phase-1/ and tickets/.
 
-Inside a run, open contents.txt for what each file is.
+Inside a ticket run, open linear-report.md first: the E2E result and bugs, the ticket's result and bugs,
+and the UX audit, with bug-evidence/ screenshots beside it. run.log ends with a run summary.
+report.md is the long form. A sealed run keeps no scratch files and its model transcripts are .gz.
 
 A locator heal is written into "e2e test cases/" in the repo. The run folder keeps the triage note.
 The spec Playwright runs next is the file in "e2e test cases/", not a copy inside the run.
 """
-
-
-def _write_contents(folder: Path, row: dict[str, Any]) -> None:
-    text = _PHASE1_CONTENTS if row.get("kind") == "phase1" else _TICKET_CONTENTS
-    (folder / "contents.txt").write_text(text, encoding="utf-8")
 
 
 def _write_guide() -> None:
@@ -442,7 +410,7 @@ def list_runs(ticket: str | None = None) -> list[dict[str, Any]]:
     return rows
 
 
-_E2E_LOG_FILES = ("run.log", "report.md", "qa-result.json", "bugs.md")
+_E2E_LOG_FILES = ("run.log", "report.md", "qa-result.json", "bugs.md", "bugs.json", "summary.json")
 _FINISHED = {"completed", "needs_revision", "halted", "failed"}
 
 
@@ -467,6 +435,10 @@ def _copy_e2e_log(source: Path, into: Path, phase1_id: str) -> bool:
         src = source / name
         if src.is_file():
             shutil.copyfile(src, dest / name)
+    for src in source.glob("triage-*.json"):
+        shutil.copyfile(src, dest / src.name)
+    if (source / "bug-evidence").is_dir():
+        shutil.copytree(source / "bug-evidence", dest / "bug-evidence", dirs_exist_ok=True)
     folder = ""
     row = get_run(phase1_id)
     if row and row.get("folder"):
@@ -504,22 +476,26 @@ def attach_e2e_log(ticket_folder: Path) -> bool:
     return _copy_e2e_log(run_dir(str(phase1["id"])), ticket_folder, str(phase1["id"]))
 
 
+RUNNING = frozenset({"preflight", "agent", "execute", "heal", "audit", "verify", "promote"})
+
+
 def find_active_phase1() -> dict[str, Any] | None:
     """A checked-in suite run that has not finished. A second trigger follows this one."""
-    active = {"accepted", "queued", "preflight", "agent", "execute", "heal"}
+    active = {"accepted", "queued", *RUNNING}
     for row in _read_index()["runs"]:
         if row.get("kind") == "phase1" and row.get("status") in active:
             return dict(row)
     return None
 
 
+def find_running_runs() -> list[dict[str, Any]]:
+    """Runs a worker is executing now (not merely queued)."""
+    return [dict(row) for row in _read_index()["runs"] if row.get("status") in RUNNING]
+
+
 def find_running_run() -> dict[str, Any] | None:
-    """Run the worker is executing now (not merely queued)."""
-    running = {"preflight", "agent", "execute", "heal"}
-    for row in _read_index()["runs"]:
-        if row.get("status") in running:
-            return dict(row)
-    return None
+    running = find_running_runs()
+    return running[0] if running else None
 
 
 def find_active_sha(sha: str) -> dict[str, Any] | None:
@@ -533,9 +509,15 @@ def find_active_sha(sha: str) -> dict[str, Any] | None:
 
 def _write_halted(run_id: str, reason: str) -> None:
     """Write a minimal report when a run stops without a normal verdict."""
+    from app.logbook import Logbook
+
     row = get_run(run_id) or {}
     folder = run_dir(run_id)
     folder.mkdir(parents=True, exist_ok=True)
+    book = Logbook(folder)
+    book.line("── run summary")
+    book.line(f"  {row.get('ticket') or run_id}  run {run_id}  verdict HALTED")
+    book.line(f"  stopped: {reason[:200]}")
     (folder / "report.md").write_text(
         "\n".join([
             f"# {row.get('ticket') or run_id}",
@@ -565,21 +547,26 @@ def _write_halted(run_id: str, reason: str) -> None:
     publish_folder(run_id, summary=None, verdict=None)
 
 
-def _write_interrupted(run_id: str) -> None:
-    _write_halted(run_id, "The server restarted during the run. This attempt has no finished suite verdict.")
+def _write_interrupted(run_id: str, phase: str = "") -> None:
+    where = f" while it was in {phase}" if phase else ""
+    _write_halted(run_id, f"The server restarted during the run{where}. This attempt has no finished suite verdict.")
 
 
-_ACTIVE_RUN = {"accepted", "queued", "preflight", "agent", "execute", "heal"}
+_ACTIVE_RUN = {"accepted", "queued", *RUNNING}
 
 
-def cancel_all_runs(reason: str = "cancelled by user") -> list[str]:
-    """Mark every in-flight or queued run as failed and write a halt report."""
+def cancel_all_runs(reason: str = "cancelled by user", *, skip: set[str] | None = None) -> list[str]:
+    """Mark every queued run, and every in-flight run not in `skip`, as failed with a halt report.
+
+    A run a worker is executing is in `skip`: the worker stops its processes and seals it,
+    so the folder is not renamed under a process that is still writing into it.
+    """
     from app.logbook import Logbook
 
     stopped: list[str] = []
     for row in list(list_runs()):
         run_id = str(row.get("id") or "")
-        if not run_id or row.get("status") not in _ACTIVE_RUN:
+        if not run_id or row.get("status") not in _ACTIVE_RUN or run_id in (skip or set()):
             continue
         folder = run_dir(run_id)
         Logbook(folder).row("server", "cancelled", reason[:220])
@@ -591,7 +578,7 @@ def cancel_all_runs(reason: str = "cancelled by user") -> list[str]:
 
 def recover_runs() -> list[str]:
     """After a restart, fail runs that were mid-flight and return the ones still waiting to start."""
-    interrupted = {"preflight", "agent", "execute", "heal"}
+    interrupted = RUNNING
     waiting = {"accepted", "queued"}
     requeue: list[str] = []
     for row in reversed(list_runs()):
@@ -600,8 +587,8 @@ def recover_runs() -> list[str]:
         if not run_id:
             continue
         if status in interrupted:
-            update_run(run_id, status="failed", error="server restarted during the run")
-            _write_interrupted(run_id)
+            update_run(run_id, status="failed", error=f"server restarted during the run ({status})")
+            _write_interrupted(run_id, str(status))
         elif status in waiting:
             requeue.append(run_id)
     return requeue

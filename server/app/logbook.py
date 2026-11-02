@@ -258,8 +258,9 @@ def child_message_lines(agent: str, message: dict[str, Any]) -> list[str]:
 
 
 class Logbook:
-    def __init__(self, folder: Path) -> None:
-        self.path = folder / "run.log"
+    def __init__(self, folder: Path, name: str = "run.log") -> None:
+        # A phase that runs beside another (the UX audit) writes its own log so run.log stays readable.
+        self.path = folder / name
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def line(self, message: str, *, moment: datetime | None = None) -> None:

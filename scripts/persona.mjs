@@ -19,7 +19,7 @@ export function parsePersonaArgs(argv) {
 
 function lineFor(session) {
   const how = session.reused ? 'reused' : 'refreshed';
-  return `session ${how}  persona ${session.persona}  cookies ${session.cookieCount}  app HTTP ${session.pageStatus}  file ${session.file}`;
+  return `session ${how}  persona ${session.persona}  cookies ${session.cookieCount}  app HTTP ${session.pageStatus}  api ${session.apiStatus ?? 'unchecked'}  file ${session.file}`;
 }
 
 async function askServer(persona, fresh) {

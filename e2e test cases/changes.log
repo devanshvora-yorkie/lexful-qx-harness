@@ -116,3 +116,95 @@ The server appends one entry per heal and one per promotion from a ticket run (w
   - renumbered: AC-041 to AC-039, AC-042 to AC-040, TC-DOC-017 to TC-DOC-016.
   - kept: AC-035 to AC-038, AC-039, AC-040, TC-DOC-014, TC-DOC-015, TC-DOC-016.
 
+2026-10-30T14:49:50Z  LEX-3536-20261030T122215Z-06f4  promote from LEX-3536
+  - reverted, the suite is unchanged: opencode exited 1: getaddrinfo ETIMEOUT bedrock-runtime.us-east-1.amazonaws.com
+
+2026-11-02T07:40:04Z  LEX-3696-20261102T071523Z-c622  promote from LEX-3696
+  - skipped: Picker opens with 80 icons, Show more, box trigger — not a search, asset crud or document editing journey; asset-type icon picker; 80-icon count is this ticket's rollout
+  - skipped: Search finds printer-check (outside the old 40), selecting it updates the trigger and closes — asset-type picker, not in the three journeys; depends on this ticket's new catalog
+  - skipped: Normalization: case, underscores, repeated spaces — asset-type picker search normalization, not a checked-in journey; ticket-specific behavior
+  - skipped: Show more 80→160; new query resets to 80; button gone when results fit — batch counts tied to this ticket's rollout; not a checked-in journey
+  - skipped: No match and special characters show the empty message; clearing recovers — asset-type picker empty state; not search palette or record journey
+  - skipped: Escape clears search and batch; reopen starts at 80 — asset-type picker keyboard behavior; not a checked-in journey; depends on this ticket's batch size
+  - skipped: Late-catalog icon saved on create (201, ui_config.icon) and shown after reload — asset-type create via API and new page; not asset record CRUD; creates fixtures outside the three folders
+  - skipped: Editor icon change: PATCH 200, persists after reload — asset-type editor, not a record drawer; rollout-specific; overlaps unfixed finding F1 on reopen
+  - skipped: Both are redirected from the new page; the editor icon trigger is disabled — role guard on asset-type pages; permission snapshot tied to this ticket; not a journey in the three folders
+
+2026-11-02T09:14:28Z  regression-20261102T085252Z-2d7a  heal 1
+  files: e2e test cases/asset crud/assets-crud.spec.ts, e2e test cases/search/search.spec.ts
+  - bug / reported: toolbar buttons are visible — Listing heading and grid render, but the seeded row AAA-SRV-001 is absent in both attempts. Wrong loaded value. See bugs[0].
+  - spec / patched: open row detail drawer and verify — environment: CloudFront 403 'Request blocked' on the Servers listing navigation. openServersListing had no retry. Added a 3-navigation retry on 403. Expectation unchanged.
+  - spec / patched: detail drawer has all 8 tabs — environment: same CloudFront 403 on listing load. Fixed by the openServersListing retry.
+  - spec / patched (4 tests): details tab shows editable fields; overview tab shows linked items; search is case-insensitive; +1 more — environment: CloudFront 403 on listing load. Fixed by the openServersListing retry.
+  - spec / reported: Filters and Search › clear selection resets selection count — environment: navigation to the Servers listing hung past 15 s. No wait change allowed in E2E heal. Not filed.
+  - spec / reported: deselecting one row after select-all decreases count — environment: navigation to the Servers listing hung past 15 s. Not filed.
+  - bug / reported: Bulk Actions — Row Selection › clear selection resets selection count — Same seeded-row absence as bugs[0]. Listing renders without AAA-SRV-001. Spec left unchanged.
+  - bug / reported (12 tests): multiple rows can be selected; bulk Actions button is present when rows are selected; clicking a row opens the detail drawer; +9 more — Same seeded-row absence as bugs[0].
+  - spec / reported: TC-DOC-005: Set an expiry date on a document — environment: CloudFront 403 on every navigation, including the helper's immediate retries. Reaches no product step. Adding a cooldown needs waitForTimeout, which E2E heal forbids. Not filed.
+  - spec / reported (3 tests): TC-DOC-006: Assign a tag to a document; TC-DOC-007: Switch the body editor between Markdown and HTML modes; TC-DOC-009: Create is blocked while no organization is selected — environment: CloudFront 403. Not filed.
+  - spec / reported: TC-DOC-008: Archive a document from the record drawer — environment: CloudFront 403 before the create step. The earlier product defect (Documents total does not increase) was not reached in this run and is not re-filed here. Not filed.
+  - spec / reported: TC-DOC-010: Creating with an empty document name is rejected — environment: CloudFront 403 before the submit. The earlier product defect (POST sent with empty name) was not reached in this run and is not re-filed here. Not filed.
+  - spec / patched: TC-08 the # asset-type token narrows results and adds entity_types — environment: gotoAssets rides out CloudFront 403 with 45 s cooldowns (up to ~3 min). The 90 s hook budget from test.slow() was too small. Replaced test.slow() with test.setTimeout(240000). Expectation unchanged.
+
+--- e2e test cases/asset crud/assets-crud.spec.ts
++++ e2e test cases/asset crud/assets-crud.spec.ts
+@@ -25,5 +25,12 @@
+   await injectAuthCookies(page.context());
+   await page.goto('about:blank');
+-  await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
++  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
++  for (let attempt = 1; attempt <= 3; attempt++) {
++    const response = await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
++    const blocked =
++      response?.status() === 403 ||
++      (await page.getByText('Request blocked').isVisible().catch(() => false));
++    if (!blocked) break;
++  }
+   const listing = new ServersListingPOM(page);
+   await expect(listing.assetTypeHeading()).toBeVisible({ timeout: 15000 });
+
+--- e2e test cases/search/search.spec.ts
++++ e2e test cases/search/search.spec.ts
+@@ -79,6 +79,7 @@
+ 
+   test.beforeEach(async ({ page }) => {
+-    // The WAF cooldown below can outlast the default per-test budget.
+-    test.slow()
++    // gotoAssets rides out up to three CloudFront 403s with a 45 s cooldown each, which
++    // outlasts the 90 s budget that test.slow() gives a 30 s test. Give the hook room.
++    test.setTimeout(240_000)
+     consoleErrors.length = 0
+     page.on('console', m => {
+
+2026-11-02T09:33:52Z  regression-20261102T085252Z-2d7a  heal 2
+  no file changes
+  - bug / reported: toolbar buttons are visible — Listing renders, seeded row absent. See bugs[0]. Spec unchanged.
+  - bug / reported (17 tests): open row detail drawer and verify; Filters and Search › search is case-insensitive; Filters and Search › bulk action buttons appear when rows selected; +14 more — Same seeded-row absence as bugs[0].
+  - spec / reported: detail drawer has all 8 tabs — environment: CloudFront 403 'Request blocked' on the Servers listing. Persisted through the 3 navigations in openServersListing. No wait allowed in E2E heal. Not filed.
+  - spec / reported (2 tests): details tab shows editable fields; overview tab shows linked items — environment: CloudFront 403. Not filed.
+  - spec / reported: Bulk Actions — Row Selection › bulk Actions button is present when rows are selected — environment: CloudFront 403 on the Servers listing. Not filed.
+  - bug / reported: TC-DOC-008: Archive a document from the record drawer — Wrong loaded value after a completed create. See bugs[1].
+  - spec / reported: TC-DOC-010: Creating with an empty document name is rejected — environment: CloudFront 403 before the submit step. The earlier POST-with-empty-name defect was not reached and is not re-filed. Not filed.
+
+2026-11-02T09:34:04Z  regression-20261102T085252Z-2d7a  heal 3
+  no file changes
+  - bug / reported: toolbar buttons are visible — Listing renders, seeded row absent. See bugs[0]. Spec unchanged.
+  - bug / reported (17 tests): open row detail drawer and verify; Filters and Search › search is case-insensitive; Filters and Search › bulk action buttons appear when rows selected; +14 more — Same seeded-row absence as bugs[0].
+  - spec / reported: detail drawer has all 8 tabs — environment: CloudFront 403 'Request blocked' on the Servers listing. Persisted through the 3 navigations in openServersListing. No wait allowed in E2E heal. Not filed.
+  - spec / reported (2 tests): details tab shows editable fields; overview tab shows linked items — environment: CloudFront 403. Not filed.
+  - spec / reported: Bulk Actions — Row Selection › bulk Actions button is present when rows are selected — environment: CloudFront 403 on the Servers listing. Not filed.
+  - bug / reported: TC-DOC-008: Archive a document from the record drawer — Wrong loaded value after a completed create. See bugs[1].
+  - spec / reported: TC-DOC-010: Creating with an empty document name is rejected — environment: CloudFront 403 before the submit step. The earlier POST-with-empty-name defect was not reached and is not re-filed. Not filed.
+
+2026-11-02T10:01:01Z  LEX-3696-20261102T085252Z-b081  promote from LEX-3696
+  - skipped: TC-LEX-3696-002: Editor icon change via search persists after reload — asset-type icon picker, not search, asset record CRUD, or document editing; tied to this ticket's rollout
+  - skipped: TC-LEX-3696-004: Show more grows the grid to 160, and a new search goes back to 80 — picker-only new surface, not one of the three journeys
+  - skipped: TC-LEX-3696-005: 79 results hide Show more; 81 show it and one click reveals the last icon — depends on Lucide registry counts (79/81); breaks on icon library upgrade
+  - skipped: TC-LEX-3696-006: Show more until exhausted lists the whole catalog once and then hides the button — depends on catalog size (>1000); up to 60 clicks, 120s timeout; not cheap
+  - skipped: TC-LEX-3696-007: No match shows the empty message; markup and wildcards stay literal and recover — picker-only new surface, not one of the three journeys
+  - skipped: TC-LEX-3696-008: Escape, outside click and selection reset search and batch size — picker-only new surface, not one of the three journeys
+  - skipped: TC-LEX-3696-009: Grid has six columns inside the popover and every shown icon renders — picker layout check tied to this ticket's build, not a journey
+  - skipped: TC-LEX-3696-001: Create keeps a late-catalog icon (printer-check) after reload — not passed (flaky in playwright/test-outcomes.json)
+  - skipped: TC-LEX-3696-003: Search normalizes case, spaces and underscores to printer-check — not passed (flaky in playwright/test-outcomes.json)
+  - skipped: TC-LEX-3696-010: Support and viewer are redirected from the new page and cannot change the editor icon — not passed (flaky in playwright/test-outcomes.json)
+

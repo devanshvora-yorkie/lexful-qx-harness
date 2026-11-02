@@ -47,6 +47,24 @@ fi
 echo "harness: refreshing Stytch session for persona ${persona}"
 node scripts/session.mjs --fresh
 
+# The agent user must be able to write the run folders and the suite. On a Linux host the bind
+# mounts belong to the host user: give qa that uid. If qa still cannot write, run as root.
+agent="${QA_AGENT_USER-qa}"
+if [ -n "$agent" ] && id "$agent" >/dev/null 2>&1; then
+  owner="$(stat -c %u runs 2>/dev/null || echo 0)"
+  if [ "$owner" != "0" ] && [ "$owner" != "$(id -u "$agent")" ]; then
+    usermod -o -u "$owner" "$agent" >/dev/null 2>&1 || true
+    chown -R "$agent" "/home/$agent" 2>/dev/null || true
+  fi
+  chown -R "$agent" runs/cache "e2e test cases" 2>/dev/null || true
+  if su "$agent" -s /bin/sh -c "touch runs/.agent-write-test && rm -f runs/.agent-write-test" 2>/dev/null; then
+    echo "harness: OpenCode and Playwright run as user $agent"
+  else
+    echo "harness: user $agent cannot write runs/. OpenCode and Playwright run as root (QA_AGENT_USER cleared)" >&2
+    export QA_AGENT_USER=""
+  fi
+fi
+
 # OpenCode's Bedrock provider reads AWS_BEARER_TOKEN_BEDROCK. BEDROCK_API_KEY is the name in .env.
 if [ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ] && [ -n "${BEDROCK_API_KEY:-}" ]; then
   export AWS_BEARER_TOKEN_BEDROCK="$BEDROCK_API_KEY"

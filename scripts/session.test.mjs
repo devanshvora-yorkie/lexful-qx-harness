@@ -70,3 +70,12 @@ test('persona names are admin, support, or viewer', () => {
   if (previous == null) delete process.env.STYTCH_PERSONA;
   else process.env.STYTCH_PERSONA = previous;
 });
+
+import { apiVerdict } from './harness-env.mjs';
+
+test('only a 401 from the API means the session is dead', () => {
+  assert.equal(apiVerdict(200), 'valid');
+  assert.equal(apiVerdict(401), 'invalid');
+  assert.equal(apiVerdict(403), 'unknown'); // a CloudFront block says nothing about the session
+  assert.equal(apiVerdict(502), 'unknown');
+});

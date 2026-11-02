@@ -78,8 +78,9 @@ test.describe('Search', () => {
   const consoleErrors: string[] = []
 
   test.beforeEach(async ({ page }) => {
-    // The WAF cooldown below can outlast the default per-test budget.
-    test.slow()
+    // gotoAssets rides out up to three CloudFront 403s with a 45 s cooldown each, which
+    // outlasts the 90 s budget that test.slow() gives a 30 s test. Give the hook room.
+    test.setTimeout(240_000)
     consoleErrors.length = 0
     page.on('console', m => {
       if (m.type() === 'error') consoleErrors.push(m.text())

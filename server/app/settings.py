@@ -57,6 +57,21 @@ class Settings:
     phase1_on_start: bool  # QA_PHASE1_ON_START: queue E2E before each ticket, not on container boot
     run_ux_audit: bool = True
     heal_fresh_session: bool = True  # QA_HEAL_FRESH_SESSION: heals read the run files, not the Explore conversation
+    pw_workers: int = 3  # QA_PW_WORKERS: Playwright workers. Files run in parallel; tests inside a file stay serial
+    max_parallel_runs: int = 1  # QA_MAX_PARALLEL_RUNS: runs the server executes at the same time
+    agent_retries: int = 1  # QA_AGENT_RETRIES: resumes of an OpenCode session after a dropped connection
+    agent_user: str = "qa"  # QA_AGENT_USER: OpenCode and Playwright run as this user. Empty keeps the server user
+    plan_model: str = ""  # QA_PLAN_MODEL: model for the feature map and plan. Empty uses the main model
+    verify_findings: bool = True  # QA_VERIFY_FINDINGS: a fresh session reproduces suspected bugs before filing
+    ux_parallel: bool = True  # QA_UX_PARALLEL: the UX audit runs while Playwright and heal run
+    session_check_minutes: int = 20  # QA_SESSION_CHECK_MINUTES: how often a busy server renews Stytch sessions. 0 = off
+
+
+def _int(name: str, default: int, low: int = 0) -> int:
+    try:
+        return max(low, int(os.getenv(name, str(default)).strip() or default))
+    except ValueError:
+        return default
 
 
 def get_settings() -> Settings:
@@ -80,5 +95,13 @@ def get_settings() -> Settings:
         phase1_on_start=_flag("QA_PHASE1_ON_START", default=True),
         run_ux_audit=_flag("QA_RUN_UX_AUDIT", default=True),
         heal_fresh_session=_flag("QA_HEAL_FRESH_SESSION", default=True),
+        pw_workers=_int("QA_PW_WORKERS", 3, low=1),
+        max_parallel_runs=_int("QA_MAX_PARALLEL_RUNS", 1, low=1),
+        agent_retries=_int("QA_AGENT_RETRIES", 1),
+        agent_user=os.getenv("QA_AGENT_USER", "qa").strip(),
+        plan_model=os.getenv("QA_PLAN_MODEL", "").strip(),
+        verify_findings=_flag("QA_VERIFY_FINDINGS", default=True),
+        ux_parallel=_flag("QA_UX_PARALLEL", default=True),
+        session_check_minutes=_int("QA_SESSION_CHECK_MINUTES", 20),
     )
 

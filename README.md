@@ -39,7 +39,23 @@ From this directory, after the container is up:
 docker compose exec harness npm run ticket -- LEX-2293
 ```
 
-That starts the run and streams the log. When `QA_PHASE1_ON_START=true` (default), the server queues E2E User Journey TCs first, then this ticket; the CLI prints E2E lines, then Feature Specific TCs. Set `QA_PHASE1_ON_START=false` to run the ticket only. Container start never runs E2E. Preflight signs in. One session walks live UAT, writes a spec step only after it has done that step, and Playwright runs the suite. On a failure the same session fixes the locator, rewrites the step, creates the fixture, or removes a case it never reached. UI/UX audit runs after that only when `QA_RUN_UX_AUDIT=true`. Set `QA_RUN_UX_AUDIT=false` to stop after functional QA. Before sign-off, the passing journeys are copied into the matching `e2e test cases` folder. The next E2E User Journey run executes those files. `docker compose down` stops the server and keeps the run volume.
+That starts the run and streams the log. When `QA_PHASE1_ON_START=true` (default), the server queues E2E User Journey TCs first, then this ticket; the CLI prints E2E lines, then Feature Specific TCs. Set `QA_PHASE1_ON_START=false` to run the ticket only. Container start never runs E2E. Preflight signs in and checks that the merged PR is deployed on UAT. One session walks live UAT, writes a spec step only after it has done that step, and Playwright runs the suite. On a failure the same session fixes the locator, rewrites the step, creates the fixture, or removes a case it never reached. UI/UX audit runs beside Playwright when `QA_RUN_UX_AUDIT=true`. Set `QA_RUN_UX_AUDIT=false` to stop after functional QA. Before sign-off, the passing journeys are copied into the matching `e2e test cases` folder. The next E2E User Journey run executes those files. `docker compose down` stops the server and keeps the run volume.
+
+Each ticket run folder starts with `linear-report.md`: the E2E result and its bugs, the ticket's result and its bugs, and the UX audit, in one markdown file to paste into Linear. Attach `ux-report.html` and the `bug-evidence/` screenshots (the report names them). A bug is filed only after a fresh session reproduced it and took a screenshot; what it could not reproduce is not filed. On the checked-in suite, a failing case is treated as outdated: the heal updates locators, copy and seeded data in `e2e test cases/` in place and records each edit in `e2e test cases/changes.log`. A sealed run is pruned of scratch files; transcripts are kept as `.jsonl.gz`.
+
+The log ends with a `── run summary` block: each phase with its status and time, where the run stopped, the test counts, bugs, findings, hypotheses, UX result, promote result and cost. The same data is in `summary.json` in the run folder.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `QA_PW_WORKERS` | 3 | Playwright workers. Files run in parallel, tests inside a file in order |
+| `QA_MAX_PARALLEL_RUNS` | 1 | Runs at the same time (each gets its own git worktree; the suite is locked) |
+| `QA_UX_PARALLEL` | true | UX audit beside Playwright and heal |
+| `QA_PLAN_MODEL` | Haiku 5.5 | The plan is its own turn on this model, then the walk continues in the same session; empty = one single turn |
+| `QA_VERIFY_FINDINGS` | true | A fresh session reproduces suspected bugs before they are filed |
+| `QA_AGENT_RETRIES` | 1 | Resume a session after a dropped connection |
+| `QA_AGENT_USER` | qa | OpenCode and Playwright run as this user; empty runs them as root |
+| `QA_SESSION_CHECK_MINUTES` | 20 | While a run is active, the server checks every saved Stytch session against the API and signs in again from `.env` when one is dead or near expiry. 0 turns it off |
+| `QA_ALLOW_UNDEPLOYED` | false | Run even when the merged PR is not on UAT yet |
 
 Explore and Author run in one `qa` session. Heal starts a new session that reads the run files (set `QA_HEAL_FRESH_SESSION=false` to resume the Explore session). The UX audit also runs in its own session. Promote follows. Entry point: `.agents/prompts/qa.md`. Full procedure: `.agents/skills/lexful-autonomous-agent-qa/SKILL.md` (listing hints in `references/listing-exploration-hints.md`).
 

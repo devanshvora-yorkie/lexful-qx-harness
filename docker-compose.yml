@@ -20,6 +20,24 @@ services:
       # UI/UX audit. Set QA_RUN_UX_AUDIT=false to run functional QA only.
       QA_RUN_UX_AUDIT: ${QA_RUN_UX_AUDIT:-true}
       QA_HEAL_FRESH_SESSION: ${QA_HEAL_FRESH_SESSION:-true}
+      # Playwright workers: spec files run in parallel, tests inside a file stay in order.
+      QA_PW_WORKERS: ${QA_PW_WORKERS:-3}
+      # Runs executed at the same time. Each run gets its own git worktree; the suite is locked.
+      QA_MAX_PARALLEL_RUNS: ${QA_MAX_PARALLEL_RUNS:-1}
+      # Resume an OpenCode session this many times after a dropped connection or idle kill.
+      QA_AGENT_RETRIES: ${QA_AGENT_RETRIES:-1}
+      # OpenCode and Playwright run as this user, so they cannot read the server's secrets. Empty = root.
+      QA_AGENT_USER: ${QA_AGENT_USER-qa}
+      # Feature map and plan run as their own turn (Phase: plan) on this model. Empty = one single turn.
+      QA_PLAN_MODEL: ${QA_PLAN_MODEL-amazon-bedrock/us.anthropic.claude-haiku-5-5}
+      # A fresh session reproduces suspected findings and server errors before they are filed.
+      QA_VERIFY_FINDINGS: ${QA_VERIFY_FINDINGS:-true}
+      # The UX audit runs beside Playwright and heal.
+      QA_UX_PARALLEL: ${QA_UX_PARALLEL:-true}
+      # Minutes between Stytch session checks while a run is active. A dead session is signed in again from .env. 0 = off.
+      QA_SESSION_CHECK_MINUTES: ${QA_SESSION_CHECK_MINUTES:-20}
+      # Run even when GitHub says the merged PR is not on UAT yet.
+      QA_ALLOW_UNDEPLOYED: ${QA_ALLOW_UNDEPLOYED:-false}
     volumes:
       - ./opencode.jsonc:/opt/lexful-qa-opencode/opencode.jsonc:ro
       - ./scripts:/opt/lexful-qa-opencode/scripts:ro
@@ -27,6 +45,7 @@ services:
       - ./.agents:/opt/lexful-qa-opencode/.agents:ro
       - ./playwright.config.ts:/opt/lexful-qa-opencode/playwright.config.ts:ro
       - ./auth-helper.ts:/opt/lexful-qa-opencode/auth-helper.ts:ro
+      - ./qa-fixtures.ts:/opt/lexful-qa-opencode/qa-fixtures.ts:ro
       # Read-write so a locator heal is written back to this folder. The space stays inside the quotes.
       - "./e2e test cases:/opt/lexful-qa-opencode/e2e test cases"
       - ./runs:/opt/lexful-qa-opencode/runs

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -13,7 +14,8 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app.logbook import Logbook
-from app.pipeline import execute_run, startup_order
+from app import prune
+from app.pipeline import execute_run, request_cancel, startup_order
 from app.runners import ensure_session
 from app.settings import get_settings
 from app.store import (
@@ -21,6 +23,7 @@ from app.store import (
     create_run,
     find_active_phase1,
     find_running_run,
+    find_running_runs,
     find_active_sha,
     get_run,
     list_runs,
@@ -41,17 +44,63 @@ async def _lifespan(_app: FastAPI):
     waiting_ids = recover_runs()
     relocate_legacy_runs()
     waiting = [row for row in (get_run(run_id) for run_id in waiting_ids) if row]
+    await asyncio.to_thread(_prune_old_runs)
     for run_id in startup_order(waiting):
         _queue.put_nowait(run_id)
-    worker = asyncio.create_task(_worker())
+    # QA_MAX_PARALLEL_RUNS workers take runs from one queue. The default, 1, keeps runs in order.
+    workers = [asyncio.create_task(_worker()) for _ in range(get_settings().max_parallel_runs)]
+    workers.append(asyncio.create_task(_session_keeper()))
     try:
         yield
     finally:
-        worker.cancel()
-        try:
-            await worker
-        except asyncio.CancelledError:
-            pass
+        for worker in workers:
+            worker.cancel()
+        for worker in workers:
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+
+
+def _prune_old_runs() -> None:
+    """Older sealed runs shed the same scratch files a new one does. Idempotent and quick."""
+    freed = 0
+    for row in list_runs():
+        folder = run_dir(str(row["id"]))
+        if folder.is_dir() and row.get("status") in {"completed", "needs_revision", "halted", "failed"}:
+            try:
+                freed += prune.prune_run(folder, finished=row.get("status") in {"completed", "needs_revision"})
+            except Exception:
+                log.exception("could not prune %s", folder)
+    if freed:
+        log.info("pruned %s from finished runs", prune.mib(freed))
+        print(f"pruned {prune.mib(freed)} from finished runs", flush=True)
+
+
+async def _session_keeper() -> None:
+    """While a run is active, keep every saved Stytch session alive.
+
+    Every few minutes each cached persona is checked: not near its expiry, and accepted by the API.
+    ensure_session signs in again from the credentials in .env when either fails, so a long run never
+    reaches a spec with a dead session. Idle servers skip it.
+    """
+    minutes = get_settings().session_check_minutes
+    while minutes > 0:
+        await asyncio.sleep(minutes * 60)
+        if not (find_running_run() or not _queue.empty()):
+            continue
+        for persona in _cached_personas():
+            code, line = await asyncio.to_thread(ensure_session, persona=persona)
+            if code != 0:
+                log.warning("session keeper: %s: %s", persona, line)
+            elif "refreshed" in line:
+                log.info("session keeper: %s", line)
+                print(f"session keeper  {line}", flush=True)
+
+
+def _cached_personas() -> list[str]:
+    cache = get_settings().root / "runs" / "cache" / "stytch"
+    return [name for name in ("admin", "support", "viewer") if (cache / f"{name}.json").is_file()] or ["admin"]
 
 
 app = FastAPI(title="Lexful QA OpenCode", version="1.0.0", lifespan=_lifespan)
@@ -81,7 +130,7 @@ def require_secret(
     provided = x_harness_deploy_secret
     if not provided and authorization and authorization.lower().startswith("bearer "):
         provided = authorization[7:].strip()
-    if provided != expected:
+    if not provided or not hmac.compare_digest(provided.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Invalid deploy trigger secret")
 
 
@@ -164,8 +213,16 @@ def health() -> dict[str, Any]:
 
 @app.post("/runs/cancel-all", status_code=200, dependencies=[Depends(require_secret)])
 async def cancel_runs() -> dict[str, Any]:
-    """Stop queued work and mark every active run failed. Restart the container to abort a run mid-flight."""
-    stopped = cancel_all_runs()
+    """Stop queued work, kill the processes of running runs, and mark every active run failed.
+
+    A run a worker is executing is sealed by that worker after its processes stop, so its
+    folder is never renamed under a process that is still writing.
+    """
+    running = [str(row["id"]) for row in find_running_runs()]
+    killed = 0
+    for run_id in running:
+        killed += await asyncio.to_thread(request_cancel, run_id)
+    stopped = cancel_all_runs(skip=set(running)) + running
     drained = 0
     while True:
         try:
@@ -177,7 +234,7 @@ async def cancel_runs() -> dict[str, Any]:
     if stopped:
         log.info("cancelled %s run(s), drained %s queue item(s)", len(stopped), drained)
         print(f"cancelled {len(stopped)} run(s)  drained {drained} queue item(s)", flush=True)
-    return {"success": True, "cancelled": stopped, "drained": drained}
+    return {"success": True, "cancelled": stopped, "drained": drained, "processesStopped": killed}
 
 
 @app.get("/runs", dependencies=[Depends(require_secret)])
@@ -200,6 +257,20 @@ def run_log(run_id: str) -> PlainTextResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No log yet")
     return PlainTextResponse(path.read_text(encoding="utf-8", errors="replace"))
+
+
+@app.post("/runs/{run_id}/resume", status_code=202, dependencies=[Depends(require_secret)])
+def resume_run(run_id: str) -> dict[str, Any]:
+    """Continue a failed or halted ticket run from Playwright, when Explore and Author already wrote their specs."""
+    row = get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if row.get("kind") == "phase1" or row.get("status") not in {"failed", "halted"}:
+        raise HTTPException(status_code=400, detail="only a failed or halted ticket run can be resumed")
+    if not (run_dir(run_id) / "planned-specs.json").is_file():
+        raise HTTPException(status_code=400, detail="nothing to resume: Explore and Author did not write planned-specs.json")
+    update_run(run_id, resume=True, error=None)
+    return _enqueue(row)
 
 
 @app.post("/run/phase1", status_code=202, dependencies=[Depends(require_secret)])

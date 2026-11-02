@@ -31,6 +31,17 @@ COPY . .
 RUN chmod +x docker/entrypoint.sh \
   && mkdir -p runs
 
+# Model-driven processes (OpenCode, playwright-cli, the specs it writes) run as `qa`, not root,
+# so they cannot read the server's environment in /proc. The app folder is world-writable with
+# the sticky bit: qa can create .playwright-cli/ and test-results/ there, but cannot rename or
+# replace anything root put there (node_modules, scripts). The clones are root's; git must trust them.
+RUN useradd --create-home --shell /bin/bash qa \
+  && cp /root/.opencode/bin/opencode /usr/local/bin/opencode \
+  && mkdir -p /home/qa/.local/share/opencode \
+  && chown -R qa:qa /home/qa \
+  && chmod 1777 /opt/lexful-qa-opencode \
+  && git config --system --add safe.directory '*'
+
 # xvfb-run is already pulled in by Playwright's browser deps. It refuses to start without xauth.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends xauth \

@@ -4,11 +4,13 @@ const base = process.env.QA_SERVER_URL || `http://127.0.0.1:${process.env.QA_SER
 const phase1 = process.argv.includes('--phase1');
 const ticket = process.argv.find((arg) => /^LEX-\d+$/i.test(arg))?.toUpperCase();
 const forceNew = process.argv.includes('--new');
-const active = new Set(['accepted', 'queued', 'preflight', 'agent', 'execute', 'heal']);
+const resume = process.argv.includes('--resume');
+const active = new Set(['accepted', 'queued', 'preflight', 'agent', 'execute', 'heal', 'audit', 'verify', 'promote']);
 const done = new Set(['completed', 'needs_revision', 'halted', 'failed']);
 
 if (!phase1 && !ticket) {
   console.error('Usage: npm run ticket -- LEX-3500    Feature Specific TCs');
+  console.error('       npm run ticket -- LEX-3500 --resume   continue a failed run from Playwright');
   console.error('       npm run e2e                  E2E User Journey TCs only');
   process.exit(1);
 }
@@ -93,6 +95,12 @@ async function follow(id, label) {
     }
 
     if (done.has(row.status)) {
+      // The status is final a moment before the server writes the run summary. Wait for it.
+      for (let i = 0; i < 20 && !seen.includes('── run summary'); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const again = await fetch(`${base}/runs/${id}/log`, { headers: requestHeaders() });
+        if (again.ok) seen = appendLog(seen, await again.text());
+      }
       console.log('');
       console.log(row.error ? `${row.status}  ${row.error}` : row.status);
       return row.status === 'completed' ? 0 : 1;
@@ -107,7 +115,18 @@ let runId;
 let phase1RunId;
 
 try {
-  if (!phase1 && forceNew && ticket) {
+  if (!phase1 && resume && ticket) {
+    const listed = await readJson(`/runs?ticket=${ticket}`);
+    const stuck = (listed.runs || []).find((row) => row.status === 'failed' || row.status === 'halted');
+    if (!stuck) {
+      console.error(`No failed or halted run of ${ticket} to resume.`);
+      process.exit(1);
+    }
+    const resumed = await readJson(`/runs/${stuck.id}/resume`, { method: 'POST' });
+    runId = resumed.runId;
+    console.log(`resuming ${runId} from Playwright`);
+  }
+  if (!phase1 && forceNew && ticket && !runId) {
     const listed = await readJson(`/runs?ticket=${ticket}`);
     const inFlight = (listed.runs || []).find((row) => active.has(row.status));
     if (inFlight) {
@@ -118,7 +137,7 @@ try {
       process.exit(1);
     }
   }
-  if (!forceNew) {
+  if (!forceNew && !runId) {
     const listed = await readJson(phase1 ? '/runs' : `/runs?ticket=${ticket}`);
     const current = (listed.runs || []).find((row) => (
       active.has(row.status) && (phase1 ? row.kind === 'phase1' : true)

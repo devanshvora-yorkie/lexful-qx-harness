@@ -84,7 +84,46 @@ def render_coverage(suite_root: Path) -> str:
             f"| {case.id} | {case.type} | {_SUITE_LABEL.get(case.suite, case.suite)} | {group} | {title} | {case.file} |"
         )
     lines.append("")
+    lines.extend(render_suite_api(suite_root))
     return "\n".join(lines) + "\n"
+
+
+_EXPORT = re.compile(r"^export\s+(?:default\s+)?(?:async\s+)?(class|function|const|interface|type)\s+([A-Za-z_$][\w$]*)", re.MULTILINE)
+_METHOD = re.compile(r"^\s{2,4}(?:async\s+)?(?!constructor\b|if\b|for\b|while\b|switch\b|return\b)([a-zA-Z_$][\w$]*)\s*\(([^)]*)\)\s*(?::[^{]+)?\{", re.MULTILINE)
+
+
+def render_suite_api(suite_root: Path) -> list[str]:
+    """Page objects, fixtures and cleanup helpers a feature spec can import instead of rewriting them."""
+    if not suite_root.is_dir():
+        return []
+    rows: list[str] = []
+    for path in sorted(suite_root.rglob("*.ts")):
+        if path.name.endswith(".spec.ts"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        exports = _EXPORT.findall(text)
+        if not exports:
+            continue
+        methods = sorted({name for name, _args in _METHOD.findall(text)})
+        names = ", ".join(f"{name} ({kind})" for kind, name in exports if kind in {"class", "function", "const"})
+        if not names:
+            continue
+        shown = ", ".join(methods[:18]) + (f", +{len(methods) - 18} more" if len(methods) > 18 else "")
+        rows.append(f"| `{path.relative_to(suite_root).as_posix()}` | {names} | {shown or '-'} |")
+    if not rows:
+        return []
+    return [
+        "## Reusable page objects and helpers",
+        "",
+        "Import these read-only instead of writing a page object for the same page. From a run's `specs/` folder the path is",
+        "the auth-helper prefix plus `e2e test cases/<journey>/<file>` without `.ts`. Read the file before you use a method.",
+        "Do not edit them in a ticket run; a missing method goes in your own page object that extends or wraps the suite's.",
+        "",
+        "| File | Exports | Methods |",
+        "|---|---|---|",
+        *rows,
+        "",
+    ]
 
 
 def load_cases(suite_root: Path) -> list[Case]:

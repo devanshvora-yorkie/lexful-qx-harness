@@ -6,19 +6,60 @@ import difflib
 import json
 import logging
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app import runners, store
+from app import checks, linear_report, prune, runners, store, summary as run_summary
 from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings
-from app.coverage import write_coverage_index
+from app.coverage import load_cases, write_coverage_index
 from app.logbook import Logbook, echo_run, plain
 from app.settings import get_settings
 from app.ux_report import write_ux_report
 
 log = logging.getLogger("qa.pipeline")
+
+# Explore, Author, ticket heal and verify may not edit the checked-in suite (opencode.jsonc denies it).
+# Promote and the E2E heal use `qa`, which may.
+TICKET_AGENT = "qa-ticket"
+SUITE_AGENT = "qa"
+# E2E heal and promote both rewrite `e2e test cases`; with several runs at once they take turns.
+SUITE_LOCK = threading.Lock()
+
+
+class RunCancelled(Exception):
+    """The user cancelled this run while a worker was executing it."""
+
+
+_CANCELLED: set[str] = set()
+_CANCELLED_LOCK = threading.Lock()
+
+
+def request_cancel(run_id: str) -> int:
+    """Flag the run and stop the processes it started. The worker seals it as cancelled."""
+    with _CANCELLED_LOCK:
+        _CANCELLED.add(run_id)
+    return runners.kill_run(store.run_dir(run_id))
+
+
+def _check_cancel(run_id: str) -> None:
+    with _CANCELLED_LOCK:
+        cancelled = run_id in _CANCELLED
+    if cancelled:
+        raise RunCancelled(run_id)
+
+
+def _begin(run_id: str, book: Logbook, title: str, *, parallel: bool = False) -> None:
+    """A phase header in run.log and a row in the end-of-run summary."""
+    _check_cancel(run_id)
+    book.phase(title)
+    run_summary.get(run_id).begin(title, parallel=parallel)
+
+
+def _end(run_id: str, title: str | None = None, status: str = "ok", detail: str = "") -> None:
+    run_summary.get(run_id).end(title, status, detail[:200])
 
 
 def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: bool) -> str:
@@ -49,16 +90,23 @@ def signoff_blockers(folder: Path) -> list[str]:
     feature = _read_text(folder / "FEATURE.md")
     required = _required_text(folder)
     required_words = _content_words(required)
-    passed = _content_words(_passing_titles(folder))
     issues: list[str] = []
-    for criterion in _acceptance_lines(folder):
-        words = _content_words(criterion)
-        if not words:
-            continue
-        needed = 1 if len(words) < 3 else 2
-        if len(words & passed) < needed:
-            issues.append(f"acceptance criterion not covered by a passing test: {criterion}")
-    for gap in _feature_gaps(feature):
+    structured = checks.coverage_blockers(folder, _passing_title_list(folder))
+    if structured is not None:
+        # coverage.json maps every criterion to test ids or a gap; the server checks the ids passed.
+        issues.extend(structured)
+    else:
+        passed = _content_words(_passing_titles(folder))
+        for criterion in _acceptance_lines(folder):
+            words = _content_words(criterion)
+            if not words:
+                continue
+            needed = 1 if len(words) < 3 else 2
+            if len(words & passed) < needed:
+                issues.append(f"acceptance criterion not covered by a passing test (no coverage.json): {criterion}")
+    _line, hypothesis_blockers = checks.hypothesis_report(folder)
+    issues.extend(hypothesis_blockers)
+    for gap in ([] if structured is not None else _feature_gaps(feature)):
         lowered = gap.lower()
         if any(phrase in lowered for phrase in _GAP_SKIP):
             continue
@@ -138,6 +186,19 @@ def _required_text(folder: Path) -> str:
     return "\n".join(parts)
 
 
+def _passing_title_list(folder: Path) -> list[str]:
+    """Final passing titles after every heal (test-outcomes.json), else from the last report."""
+    path = folder / "playwright" / "test-outcomes.json"
+    if path.is_file():
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            rows = []
+        if isinstance(rows, list):
+            return [str(r.get("title")) for r in rows if isinstance(r, dict) and r.get("status") in {"passed", "flaky"}]
+    return _passing_titles(folder).split(" \x1f ")
+
+
 def _passing_titles(folder: Path) -> str:
     report = _read_json(folder / "playwright" / "results.json")
     titles: list[str] = []
@@ -153,7 +214,7 @@ def _passing_titles(folder: Path) -> str:
 
     for suite in report.get("suites") or []:
         walk(suite)
-    return " ".join(titles)
+    return " \x1f ".join(titles)
 
 
 def _leftover_notes(folder: Path) -> list[str]:
@@ -427,23 +488,36 @@ def execute_run(run_id: str) -> None:
     row = store.get_run(run_id)
     if row is None:
         raise KeyError(run_id)
+    if row.get("status") in {"failed", "halted", "completed", "needs_revision"} and not row.get("resume"):
+        return  # cancelled or finished while it waited in the queue
     folder = store.run_dir(run_id)
     book = Logbook(folder)
+    run_summary.get(run_id)
     try:
         if row.get("kind") == "phase1":
-            _execute_phase1(run_id, row, folder, book)
+            with SUITE_LOCK:
+                _execute_phase1(run_id, row, folder, book)
         else:
             store.attach_e2e_log(folder)
             if (folder / "e2e" / "run.log").is_file():
                 book.row("server", "e2e", "E2E User Journey log saved in e2e/run.log")
             _execute(run_id, row, folder, book)
+    except RunCancelled:
+        reason = "cancelled by user"
+        book.row("server", "cancelled", "processes stopped; sealing the run")
+        store.update_run(run_id, status="failed", error=reason)
+        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[reason])
+        _seal(run_id, None, "HALTED", issues=[reason], error=reason, status="cancelled")
     except Exception as exc:
         book.row("server", "failed", str(exc)[:220])
         log.exception("run failed")
         store.update_run(run_id, status="failed", error=str(exc)[:500])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[str(exc)[:500]])
-        _seal(run_id, None, "HALTED")
+        _seal(run_id, None, "HALTED", issues=[str(exc)[:500]], error=str(exc)[:200])
     finally:
+        with _CANCELLED_LOCK:
+            _CANCELLED.discard(run_id)
+        run_summary.drop(run_id)
         if row.get("kind") == "phase1":
             try:
                 store.share_e2e_log(run_id)
@@ -451,13 +525,12 @@ def execute_run(run_id: str) -> None:
                 log.exception("e2e log was not copied into the ticket folder")
 
 
-def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
-    settings = get_settings()
-    echo_run(folder)
-    book.phase(f"Feature Specific TCs  {row.get('ticket') or run_id}")
-    book.row("server", "queued", str(row.get("ticket") or run_id))
+def _explore_and_author(
+    run_id: str, row: dict[str, Any], folder: Path, book: Logbook, settings: Any
+) -> tuple[str, dict[str, Any], str, float] | None:
+    """Preflight, then the qa agent walks and writes the specs. None means the run was sealed here."""
     store.update_run(run_id, status="preflight")
-    book.phase("preflight")
+    _begin(run_id, book, "preflight")
     book.row("server", "preflight", "started")
     code = runners.run_preflight(folder, ticket=row.get("ticket"), pr=row.get("pr"), sha=row.get("sha"))
     preflight = _read_json(folder / "preflight.json")
@@ -468,56 +541,139 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     if not preflight_ok:
         detail = plain(_failed_check(preflight) or "preflight failed")
         book.row("server", "preflight", f"failed  {detail}")
+        _end(run_id, "preflight", "failed", detail)
         store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket or None, "HALTED", summary, [detail])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
-        _seal(run_id, summary, "HALTED")
-        return
+        _seal(run_id, summary, "HALTED", issues=[detail])
+        return None
 
-    checks = [item for item in (preflight.get("checks") or []) if isinstance(item, dict)]
-    passed = sum(1 for item in checks if item.get("status") == "pass")
+    checks_rows = [item for item in (preflight.get("checks") or []) if isinstance(item, dict)]
+    passed = sum(1 for item in checks_rows if item.get("status") == "pass")
     book.row(
         "server",
         "preflight",
         f"ok  {ticket or 'no ticket'}  PR {preflight.get('primaryPr') or 'none'}  "
-        f"{passed}/{len(checks)} checks  {preflight.get('appUrl') or settings.qa_url}",
+        f"{passed}/{len(checks_rows)} checks  {preflight.get('appUrl') or settings.qa_url}",
     )
+    deployment = _deployment_line(folder)
+    if deployment:
+        book.row("server", "deployment", deployment[:220])
+        run_summary.get(run_id).note("deployment", deployment)
+    _end(run_id, "preflight")
     store.update_run(run_id, status="agent", ticket=ticket, pr=preflight.get("primaryPr"))
-    book.phase("coordinator")
+    _begin(run_id, book, "explore + author")
     covered = write_coverage_index(settings.root / "e2e test cases", folder / "e2e-coverage.md")
     book.row("server", "coverage", f"{covered} checked-in cases")
+    history = write_history(folder, ticket)
+    if history:
+        book.row("server", "history", f"{history} earlier run(s) of {ticket} in history.md")
     source = runners.prepare_source(folder)
-    book.row("server", "source", "read-only clone ready" if source else "no clone, agent greps the context pack")
+    book.row("server", "source", "read-only worktree ready" if source else "no clone, agent greps the context pack")
     cli_config = runners.write_cli_config(folder)
     if cli_config:
         book.row("server", "browser", "playwright-cli config written")
-    prompt = _lead_prompt(folder, ticket, preflight)
+    prompt = _lead_prompt(folder, ticket, preflight, run_id)
     (folder / "prompt.md").write_text(prompt + "\n", encoding="utf-8")
     started = time.time()
-    agent_code, session_id = runners.run_opencode(
-        folder,
-        session_id=None,
-        prompt=prompt,
-        title=f"{ticket} {run_id}",
-        log_name="agent.jsonl",
-    )
+    suite_before = _suite_files()
+    agent_code, session_id = _plan_then_explore(run_id, folder, ticket, prompt, settings, book)
+    _guard_suite(suite_before, book, "explore")
+    _check_cancel(run_id)
     if session_id:
         store.update_run(run_id, opencodeSession=session_id)
     runners.export_session(folder, session_id)
+    if agent_code != 0 and _handoff_written(folder, started):
+        # The agent finished and wrote its handoff; only the connection dropped afterwards.
+        book.row("server", "agent", f"opencode exited {agent_code} after the handoff was written. Continuing to Playwright")
+        agent_code = 0
     if agent_code != 0:
         reason = _opencode_failure(folder, "agent.jsonl", agent_code)
         book.row("qa", "failed", reason)
+        _end(run_id, "explore + author", "failed", reason)
         log.error("%s", reason)
         store.update_run(run_id, status="failed", error=reason)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket, "HALTED", summary, [reason])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[reason])
-        _seal(run_id, summary, "HALTED")
-        return
+        _seal(run_id, summary, "HALTED", issues=[reason])
+        return None
+    _end(run_id, "explore + author")
+    return ticket, preflight, session_id, started
 
-    book.row("qa", "finished", "coordinator returned")
-    book.phase("playwright")
+
+def _plan_then_explore(
+    run_id: str, folder: Path, ticket: str, prompt: str, settings: Any, book: Logbook
+) -> tuple[int, str]:
+    """With QA_PLAN_MODEL set, the plan is its own turn (Phase: plan), then the walk continues in the same session.
+
+    The model for the plan turn is QA_PLAN_MODEL (Haiku by default, like everything else). When the plan
+    turn fails the whole job runs in one turn.
+    """
+    if settings.plan_model:
+        book.row("server", "plan", f"feature map and plan with {settings.plan_model}")
+        code, session_id = runners.run_opencode(
+            folder, session_id=None, prompt=_plan_message(prompt), title=f"{ticket} {run_id}",
+            log_name="agent-plan.jsonl", agent=TICKET_AGENT, model=settings.plan_model,
+        )
+        _check_cancel(run_id)
+        if code == 0 and session_id and (folder / "feature-map.md").is_file():
+            return runners.run_opencode(
+                folder, session_id=session_id, prompt=prompt, title=f"{ticket} {run_id}",
+                log_name="agent.jsonl", resume=True, agent=TICKET_AGENT,
+            )
+        book.row("server", "plan", f"plan turn failed ({_opencode_failure(folder, 'agent-plan.jsonl', code)}). The main model does the whole job")
+    return runners.run_opencode(
+        folder, session_id=None, prompt=prompt, title=f"{ticket} {run_id}",
+        log_name="agent.jsonl", agent=TICKET_AGENT,
+    )
+
+
+def _plan_message(prompt: str) -> str:
+    return prompt.replace("Phase: explore+author", "Phase: plan", 1)
+
+
+def _guard_suite(before: dict[str, str], book: Logbook, phase: str) -> None:
+    """A ticket session may not change `e2e test cases/`. Put it back when this is the only run."""
+    after = _suite_files()
+    if after == before:
+        return
+    changed = sorted(set(before) ^ set(after) | {name for name in before if name in after and before[name] != after[name]})
+    if get_settings().max_parallel_runs == 1:
+        _restore_suite(before)
+        book.row("server", "suite", f"{phase} changed the checked-in suite; reverted {', '.join(changed)}"[:220])
+    else:
+        book.row("server", "suite", f"the checked-in suite changed during {phase} (another run may own it): {', '.join(changed)}"[:220])
+
+
+def _handoff_written(folder: Path, started: float) -> bool:
+    """True when this run wrote planned-specs.json and at least one runnable spec."""
+    plan = folder / "planned-specs.json"
+    return plan.is_file() and plan.stat().st_mtime >= started and bool(runners.planned_specs(folder, started))
+
+
+def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
+    settings = get_settings()
+    echo_run(folder)
+    book.phase(f"Feature Specific TCs  {row.get('ticket') or run_id}")
+    book.row("server", "queued", str(row.get("ticket") or run_id))
+    if row.get("resume") and (folder / "planned-specs.json").is_file():
+        # Explore and Author already finished in this folder. Continue from Playwright.
+        book.row("server", "resume", "continuing from Playwright; Explore and Author already ran")
+        run_summary.get(run_id).begin("explore + author (earlier attempt)")
+        _end(run_id, "explore + author (earlier attempt)", "skipped", "resumed")
+        preflight = _read_json(folder / "preflight.json")
+        ticket = str(preflight.get("ticket") or row.get("ticket") or "")
+        session_id = str(row.get("opencodeSession") or "")
+        started = 0.0
+        store.update_run(run_id, status="agent", resume=False, error=None)
+    else:
+        explored = _explore_and_author(run_id, row, folder, book, settings)
+        if explored is None:
+            return
+        ticket, preflight, session_id, started = explored
+        book.row("qa", "finished", "coordinator returned")
     specs = runners.planned_specs(folder, started)
     if not specs:
         detail = "the agent did not write a spec file"
@@ -526,41 +682,54 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket, "HALTED", summary, [detail])
         _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
-        _seal(run_id, summary, "HALTED")
+        _seal(run_id, summary, "HALTED", issues=[detail])
         return
 
-    book.row("server", "specs", f"{len(specs)} files  {', '.join(specs)}"[:240])
-    summary = _execute_and_heal(run_id, folder, ticket, specs, settings.heal_attempts, session_id, book)
-    verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
-    issues = [] if verdict == "PERFECT" else [_open_issue(summary)]
-
+    # The UX audit reads only the Explore files, so it runs while Playwright and heal run.
+    ux_thread: threading.Thread | None = None
+    ux_state: dict[str, Any] = {}
     if settings.run_ux_audit and ticket:
-        book.phase("ui-ux audit")
-        ux_prompt = _ux_audit_prompt(folder, ticket, preflight)
-        (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
-        # A new session: the audit reads the run files, so it must not carry the Explore conversation.
-        ux_code, ux_session_id = runners.run_opencode(
-            folder,
-            session_id=None,
-            prompt=ux_prompt,
-            title=f"{ticket} ux-audit",
-            log_name="ux-audit.jsonl",
-            agent="ux-auditor",
-        )
-        runners.export_session(folder, ux_session_id, "session-ux.json")
-        write_ux_report(folder, ticket)
-        ux_card = _read_json(folder / "ux-scorecard.json")
-        ux_findings = _read_findings(folder / "ux-findings.json")
-        ux_verdict = str(ux_card.get("verdict") or ("PASS" if ux_code == 0 else "INCOMPLETE — NOT A PASS"))
-        book.row(
-            "server",
-            "ux-audit",
-            f"verdict {ux_verdict}  score {ux_card.get('score', 100)}  {len(ux_findings)} finding(s)",
-        )
+        if settings.ux_parallel:
+            ux_thread = threading.Thread(
+                target=_run_ux_audit, args=(run_id, folder, ticket, preflight, ux_state, True), daemon=True,
+            )
+            _begin(run_id, book, "ui-ux audit", parallel=True)
+            book.row("server", "ux-audit", "started beside Playwright. Its log is ux-audit.log")
+            ux_thread.start()
     elif ticket:
         book.row("server", "ux-audit", "off  QA_RUN_UX_AUDIT=false  functional QA only")
 
+    try:
+        book.row("server", "specs", f"{len(specs)} files  {', '.join(specs)}"[:240])
+        summary = _execute_and_heal(run_id, folder, ticket, specs, settings.heal_attempts, session_id, book)
+        affected = _run_affected_cases(run_id, folder, book)
+        signals = checks.summarize_signals(folder)
+        if signals["count"]:
+            book.row("server", "signals", signals["line"][:220])
+            run_summary.get(run_id).note("signals", signals["line"])
+        if settings.verify_findings:
+            _verify_findings(run_id, folder, ticket, book, signals)
+    finally:
+        if ux_thread is not None:
+            if ux_thread.is_alive():
+                book.row("server", "ux-audit", "waiting for the UX audit to finish")
+            ux_thread.join()
+    _check_cancel(run_id)
+    if settings.run_ux_audit and ticket and not settings.ux_parallel:
+        _begin(run_id, book, "ui-ux audit")
+        _run_ux_audit(run_id, folder, ticket, preflight, ux_state, False)
+    ux_issue = _finish_ux(run_id, folder, ticket, book, ux_state) if settings.run_ux_audit and ticket else ""
+
+    verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
+    issues = [] if verdict == "PERFECT" else [_open_issue(summary)]
     blockers = signoff_blockers(folder) if ticket else []
+    blockers.extend(affected)
+    edits = checks.assertion_edits(folder)
+    if edits:
+        run_summary.get(run_id).note("assertions", f"{len(edits)} expectation(s) changed by heal")
+        blockers.extend(f"heal changed an expectation, review it: {line}" for line in edits[:5])
+    if ux_issue:
+        blockers.append(ux_issue)
     if blockers:
         issues = [*issues, *blockers]
         if verdict == "PERFECT":
@@ -575,14 +744,77 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         book.row("server", "signoff", blocker[:220])
 
     if ticket and int(summary.get("passed") or 0) > 0:
-        _promote_into_suite(run_id, folder, ticket, book)
+        _begin(run_id, book, "promote")
+        store.update_run(run_id, status="promote")
+        with SUITE_LOCK:
+            outcome = _promote_into_suite(run_id, folder, ticket, book)
+        run_summary.get(run_id).note("promote", outcome)
+        _end(run_id, "promote", "reverted" if outcome.startswith("reverted") else "ok", outcome)
 
     store.update_run(run_id, status=status, error=None)
     if _record_bugs(folder, store.get_run(run_id) or row, summary):
         book.row("server", "bugs", "bugs.md")
+    _note_findings(run_id, folder)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
     _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
-    _seal(run_id, summary, verdict)
+    _seal(run_id, summary, verdict, issues=issues)
+
+
+def _run_ux_audit(
+    run_id: str, folder: Path, ticket: str, preflight: dict[str, Any], state: dict[str, Any], parallel: bool,
+) -> None:
+    """One UX audit session. Errors are kept in `state`; the run goes on without the audit."""
+    state["started"] = time.time()
+    try:
+        ux_prompt = _ux_audit_prompt(folder, ticket, preflight, parallel=parallel)
+        (folder / "ux-prompt.md").write_text(ux_prompt + "\n", encoding="utf-8")
+        code, session = runners.run_opencode(
+            folder,
+            session_id=None,
+            prompt=ux_prompt,
+            title=f"{ticket} ux-audit",
+            log_name="ux-audit.jsonl",
+            agent="ux-auditor",
+            book_name="ux-audit.log" if parallel else "run.log",
+        )
+        state["code"] = code
+        runners.export_session(folder, session, "session-ux.json")
+        if code != 0:
+            state["error"] = _opencode_failure(folder, "ux-audit.jsonl", code)
+    except Exception as exc:  # the audit must not take the functional run down with it
+        log.exception("ux audit crashed")
+        state["code"] = 1
+        state["error"] = f"ux audit crashed: {exc}"[:240]
+
+
+def _finish_ux(run_id: str, folder: Path, ticket: str, book: Logbook, state: dict[str, Any]) -> str:
+    """Score and render the audit. Returns an open issue when the audit did not finish."""
+    code = int(state.get("code", 1))
+    started = float(state.get("started") or 0)
+    findings_file = folder / "ux-findings.json"
+    wrote = findings_file.is_file() and findings_file.stat().st_mtime >= started - 1
+    error = str(state.get("error") or ("" if code == 0 else f"opencode exited {code}"))
+    if wrote:
+        write_ux_report(folder, ticket)
+    card = _read_json(folder / "ux-scorecard.json")
+    if not wrote:
+        card = {"ticket": ticket, "verdict": "NOT RUN", "score": None, "error": error or "the auditor wrote no ux-findings.json"}
+        (folder / "ux-scorecard.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
+    elif code != 0:
+        card["verdict"] = f"INCOMPLETE ({card.get('verdict', 'unscored')})"
+        card["error"] = error
+        (folder / "ux-scorecard.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
+    count = len(_read_findings(findings_file)) if wrote else 0
+    score = card.get("score")
+    line = f"verdict {card.get('verdict')}  score {score if score is not None else 'not scored'}  {count} finding(s)"
+    book.row("server", "ux-audit", line + (f"  {error}" if error else ""))
+    run_summary.get(run_id).note("ux", line)
+    _end(run_id, "ui-ux audit", "ok" if code == 0 and wrote else "failed", error)
+    if not wrote:
+        return f"UX audit did not run to the end: {error or 'no findings written'}"
+    if code != 0:
+        return f"UX audit stopped early, findings are partial: {error}"
+    return ""
 
 
 def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
@@ -597,13 +829,14 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
     )
     log.info("E2E User Journey TCs %s started", run_id)
     store.update_run(run_id, status="preflight")
-    book.phase("session")
+    _begin(run_id, book, "session")
     book.row("server", "session", "signing in. Linear is not called")
     code = runners.run_preflight(folder, ticket=None, pr=None, sha=None, session_only=True)
     preflight = _read_json(folder / "preflight.json")
     if code != 0 or not preflight.get("ok"):
         detail = plain(_failed_check(preflight) or "session failed")
         book.row("server", "session", f"failed  {detail}")
+        _end(run_id, "session", "failed", detail)
         store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, None, "HALTED", summary, [detail], extra=_phase1_meta())
@@ -615,7 +848,7 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
             issues=[detail],
             extra=_phase1_report_lines(),
         )
-        _seal(run_id, summary, "HALTED")
+        _seal(run_id, summary, "HALTED", issues=[detail])
         return
 
     book.row("server", "session", f"ok  {preflight.get('appUrl') or settings.qa_url}")
@@ -634,7 +867,7 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
             issues=[detail],
             extra=_phase1_report_lines(),
         )
-        _seal(run_id, summary, "HALTED")
+        _seal(run_id, summary, "HALTED", issues=[detail])
         return
 
     book.row("server", "specs", f'{len(specs)} files in "e2e test cases"')
@@ -671,15 +904,59 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
         issues=issues,
         extra=_phase1_report_lines() + _triage_section(folder),
     )
-    _seal(run_id, summary, verdict)
+    _note_findings(run_id, folder)
+    _seal(run_id, summary, verdict, issues=issues)
 
 
-def _seal(run_id: str, summary: dict[str, Any] | None, verdict: str | None) -> None:
-    """Put the final counts in the folder name after every file for this attempt is written."""
+def _seal(
+    run_id: str,
+    summary: dict[str, Any] | None,
+    verdict: str | None,
+    *,
+    issues: list[str] | None = None,
+    error: str = "",
+    status: str = "",
+) -> None:
+    """Write the run summary, then put the final counts in the folder name."""
+    folder = store.run_dir(run_id)
+    book = Logbook(folder)
+    row = store.get_run(run_id) or {}
     try:
-        store.publish_folder(run_id, summary=summary, verdict=verdict)
+        run_summary.write(
+            run_id, folder, book,
+            ticket=str(row.get("ticket") or ("E2E User Journey TCs" if row.get("kind") == "phase1" else "")),
+            verdict=verdict or "HALTED",
+            status=status or str(row.get("status") or ""),
+            counts=summary,
+            issues=issues or [],
+            costs=phase_costs(folder),
+            error=error,
+        )
+    except Exception:
+        log.exception("run summary was not written")
+    if row.get("kind") != "phase1":
+        try:
+            linear_report.write(folder, row, verdict=verdict or "HALTED", issues=issues or [])
+        except Exception:
+            log.exception("linear report was not written")
+    try:
+        runners.cleanup_source(folder)
+    except Exception:
+        log.exception("worktree was not removed")
+    target = ""
+    try:
+        target = store.publish_folder(run_id, summary=summary, verdict=verdict)
+        Logbook(store.runs_root() / target).row("server", "folder", f"runs/{target}")
     except Exception:
         log.exception("run folder was not renamed")
+    try:
+        sealed = store.runs_root() / target if target else folder
+        finished = (status or str(row.get("status") or "")) in {"completed", "needs_revision"}
+        freed = prune.prune_run(sealed, finished=finished)
+        if freed:
+            Logbook(sealed).row("server", "prune", f"removed {prune.mib(freed)} of scratch and duplicate files")
+    except Exception:
+        log.exception("run folder was not pruned")
 
 
 def _phase1_meta() -> dict[str, Any]:
@@ -713,10 +990,13 @@ def _execute_and_heal(
     classify: bool = False,
 ) -> dict[str, int]:
     store.update_run(run_id, status="execute")
+    _begin(run_id, book, "playwright")
     book.row("playwright", "started", f"{len(specs)} files  {', '.join(specs)}"[:240])
     result = runners.run_playwright(folder, specs)
+    _check_cancel(run_id)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
+    _end(run_id, "playwright", "ok" if not result.get("setupError") else "failed", _counts(summary))
     test_outcomes = test_outcomes_from_report(_read_json(folder / "playwright" / "results.json"))
     if result.get("setupError"):
         book.row("playwright", "error", str(result["setupError"]))
@@ -727,25 +1007,28 @@ def _execute_and_heal(
         return summary
     baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
     attempts_used: dict[str, int] = {}
+    verifier_hints_now: dict[str, str] = {}
     fresh_heal = not classify and get_settings().heal_fresh_session
     if fresh_heal:
         session_id = ""  # round 1 starts clean; later rounds resume that small session
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
-        book.phase(f"heal {attempt} of {heal_attempts}")
+        _begin(run_id, book, f"heal {attempt} of {heal_attempts}")
         who = "qa E2E heal" if classify else "qa feature heal"
         book.row("server", "heal", f"{attempt} of {heal_attempts}  {who}  {len(specs)} files")
         failing_now = failed_tests(_read_json(folder / "playwright" / "results.json"))
         for item in failing_now:
             attempts_used[item["title"]] = attempts_used.get(item["title"], 0) + 1
         prompt = (
-            _phase1_heal_prompt(folder, attempt, heal_attempts, specs)
+            _phase1_heal_prompt(folder, attempt, heal_attempts, specs, verifier_hints_now)
             if classify
             else _heal_prompt(folder, ticket, attempt, heal_attempts, specs, failing_now, attempts_used)
         )
         (folder / f"heal-{attempt}.md").write_text(prompt + "\n", encoding="utf-8")
         before = _heal_revision(folder, classify)
         before_text = _suite_texts() if classify else {}
+        before_specs = checks.spec_texts(folder) if not classify else {}
+        suite_before = _suite_files() if not classify else {}
         heal_code, session_id = runners.run_opencode(
             folder,
             session_id=session_id or None,
@@ -753,22 +1036,38 @@ def _execute_and_heal(
             title=f"{ticket} heal {attempt}",
             log_name=f"heal-{attempt}.jsonl",
             resume=bool(session_id),
+            agent=SUITE_AGENT if classify else TICKET_AGENT,
         )
+        _check_cancel(run_id)
+        if not classify:
+            _guard_suite(suite_before, book, f"heal {attempt}")
+            edits = checks.record_assertion_edits(folder, attempt, before_specs, checks.spec_texts(folder))
+            for line in edits[:3]:
+                book.row("server", "assertion", f"heal {attempt} changed an expectation: {line}"[:220])
         if session_id and not fresh_heal:
             store.update_run(run_id, opencodeSession=session_id)
         runners.export_session(folder, session_id, "session-heal.json" if fresh_heal else "session.json")
         triage = _take_triage(folder, attempt)
         if classify and heal_code == 0:
             record_suite_edits(run_id, attempt, before_text, _suite_texts(), triage)
+            # A checked-in case that fails is outdated until a person-style reproduction says otherwise.
+            if get_settings().verify_findings and any(isinstance(b, dict) for b in triage.get("bugs") or []):
+                verifier_hints_now = _verify_findings(
+                    run_id, folder, "checked-in", book, {}, label=f"verify bugs after heal {attempt}")
+                triage = latest_triage(folder)[0]
         if heal_code != 0:
-            book.row("qa", "failed", _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code))
+            reason = _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code)
+            book.row("qa", "failed", reason)
+            _end(run_id, None, "failed", reason)
             continue
         changed = suite_files_changed(before, _heal_revision(folder, classify))
         for line in suspicious_patches(triage):
             book.row("server", "heal", line[:220])
         if not changed:
-            book.row("server", "heal", _unchanged_heal_message(triage))
-            if heal_stopped_on_bugs(triage):
+            message = _unchanged_heal_message(triage)
+            book.row("server", "heal", message)
+            _end(run_id, None, "ok", message)
+            if heal_stopped_on_bugs(triage) and not verifier_hints_now:
                 break
             continue
         book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
@@ -777,9 +1076,10 @@ def _execute_and_heal(
         if not baseline:
             baseline = outcomes_by_file(previous_report)
         store.update_run(run_id, status="execute")
-        book.phase("playwright")
+        _begin(run_id, book, f"playwright after heal {attempt}")
         book.row("playwright", "started", f"re-running {len(rerun)} failed file(s) after heal {attempt}"[:240])
         result = runners.run_playwright(folder, rerun)
+        _check_cancel(run_id)
         latest_report = _read_json(folder / "playwright" / "results.json")
         if rerun != specs and baseline:
             baseline = replace_outcomes(
@@ -794,6 +1094,7 @@ def _execute_and_heal(
             baseline = outcomes_by_file(latest_report)
             test_outcomes = test_outcomes_from_report(latest_report)
         book.row("playwright", "result", _counts(summary))
+        _end(run_id, None, "ok", _counts(summary))
         if _suite_passed(result["exitCode"], summary):
             write_test_outcomes_json(folder, test_outcomes)
             return summary
@@ -820,52 +1121,254 @@ def _display(folder: Path) -> str:
         return str(folder)
 
 
-def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any]) -> str:
-    relative = _display(folder)
-    connected = ", ".join(preflight.get("connectedTickets") or []) or "none"
-    prs = ", ".join(str(number) for number in (preflight.get("pullRequests") or [])) or "none"
+SKILL = ".agents/skills/lexful-autonomous-agent-qa/SKILL.md"
+
+
+def _message(phase: str, folder: Path, *facts: str) -> str:
+    """The text the server sends OpenCode. Facts only: the rules for each phase are in the skill, section 7."""
     return "\n".join([
-        f"Run directory: {relative}",
-        f"Ticket: {ticket}",
-        f"Pull requests: {prs}",
-        f"Connected Linear issues: {connected}",
-        "Follow .agents/skills/lexful-autonomous-agent-qa/SKILL.md and .agents/prompts/qa.md. This is Feature Specific TCs. You own this session: Explore, Author, Heal, and Promote when asked. Do not spawn subagents.",
-        f"Checked-in coverage: {relative}/e2e-coverage.md",
-        "Those cases already run in E2E User Journey TCs for search, asset crud, and document editing.",
-        "Do not write a case that file already lists. Cite its id.",
-        "Write a new case for each acceptance criterion and each observed behavior that the coverage file does not already assert.",
-        "There is no minimum and no maximum. The number of tests is the uncovered behavior of this ticket.",
-        "Each new test has one type tag (@positive, @negative, or @edge) and one suite tag (@bvt, @smoke, @sanity, or @regression).",
-        "A test that passes by skipping the assertion does not count. Do not write a skipped or deprecated test.",
-        f"Preflight is already ok: {relative}/preflight.json",
-        f"Read {relative}/pr-brief.md first. It is the context pack without the patches: criteria, PR text, and changed file paths.",
-        f"{relative}/source-info.md names a read-only clone of the product repo (when it exists). Browse it with Read, Grep, Glob, and git log/show/blame/grep to understand the feature before you plan tests. Follow references/oracle-from-diff.md and write {relative}/feature-map.md.",
-        f"{relative}/context-pack.json holds the full diffs (about 1 MB). Never open it whole. Grep it for one file or symbol.",
-        "Choose the lane from the changed file paths. For API code the API probe is the main way to find bugs: `node scripts/api-probe.mjs [--persona all] GET /v1/...`. Follow the API lane and Diff-vs-reality sections of the skill.",
-        f"Write API and diff findings to {relative}/api-findings.json. The server turns them into bugs.md even when every test passes.",
-        f"playwright-cli: always pass --config={relative}/explore/pw-cli.json. It points at the installed Chromium. Do not look for a browser.",
-        "Run one shell command per call. Do not chain commands with && or ;, because a chained call can be denied and ends the session.",
-        "Auth cookies: runs/cache/stytch/session.json for the default persona, admin.",
-        "When a case needs support or viewer, run `node scripts/persona.mjs support` or `node scripts/persona.mjs viewer` before browsing as that user.",
-        "That writes runs/cache/stytch/<persona>.json. Do not read the file. Load it with playwright-cli state-load.",
-        "A spec for that persona calls injectAuthCookies(page.context(), 'support') or 'viewer'. Other specs keep the default call.",
-        f"The live URL is the appUrl in the context pack. Do not start a dev server. Put snapshots in {relative}/explore/.",
-        f"Walk the app with playwright-cli. Write {relative}/FEATURE.md and append each successful step to {relative}/explore/flow.md. When the walk includes a listing, use references/listing-exploration-hints.md. A covered row cites an id from e2e-coverage.md. A new row is a control the walk reached. A control the walk did not reach is a Gap, not a test.",
-        f"Then write specs and the POM under {relative}/specs/ from {relative}/FEATURE.md and {relative}/explore/flow.md. Open the app when a selector is missing. Do not write a Gap or a covered row.",
-        f"Leave FEATURE.md at {relative}/FEATURE.md. Do not copy it into specs/ or tests/.",
-        f"From a file in {relative}/specs/, import auth as '{_import_prefix(relative)}/auth-helper'. Put the POM in that same specs folder. Do not import anything from tests/.",
-        f"planned-specs.json goes in {relative}/. plan_file is {relative}/FEATURE.md. test_files and pom_files are paths like {relative}/specs/<name>.spec.ts.",
-        "Do not run preflight, do not call /auth/password, and do not run the official Playwright suite. Replaying one step with playwright-cli is part of writing the spec.",
+        f"Phase: {phase}",
+        f"Run directory: {_display(folder)}",
+        f"Follow {SKILL}, section 7, for this phase. Entry point: .agents/prompts/qa.md.",
+        *facts,
     ])
 
 
-def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -> None:
+def _browser_name(folder: Path, kind: str = "qa") -> str:
+    return f"{kind}-{runners._key(folder).split('_')[-1]}"
+
+
+def _lead_prompt(folder: Path, ticket: str, preflight: dict[str, Any], run_id: str = "") -> str:
+    prs = ", ".join(str(number) for number in (preflight.get("pullRequests") or [])) or "none"
+    connected = ", ".join(preflight.get("connectedTickets") or []) or "none"
+    return _message(
+        "explore+author", folder,
+        f"Ticket: {ticket}",
+        f"Pull requests: {prs}",
+        f"Connected Linear issues: {connected}",
+        f"Import prefix for specs: {_import_prefix(_display(folder))}",
+        f"Browser session name: {_browser_name(folder)}",
+    )
+
+
+def _deployment_line(folder: Path) -> str:
+    """One line from the deployment check preflight wrote into the context pack."""
+    deployment = _read_json(folder / "context-pack.json").get("deployment")
+    if not isinstance(deployment, dict):
+        return ""
+    return str(deployment.get("summary") or "")
+
+
+def write_history(folder: Path, ticket: str) -> int:
+    """history.md: earlier runs of this ticket, their verdict, bugs and open issues. Returns how many."""
+    root = get_settings().runs / "tickets" / ticket
+    if not ticket or not root.is_dir():
+        return 0
+    earlier = sorted((p for p in root.iterdir() if p.is_dir() and p.resolve() != folder.resolve()), reverse=True)[:5]
+    lines = [f"# Earlier runs of {ticket}", "", "Newest first. Retest what failed or was filed before; do not trust an old pass.", ""]
+    count = 0
+    for run in earlier:
+        result = _read_json(run / "qa-result.json")
+        if not result:
+            continue
+        count += 1
+        counts = result.get("test_results") or {}
+        lines.append(f"## {run.name}")
+        lines.append(f"- Verdict: {result.get('verdict')}  passed {counts.get('passed', 0)}  failed {counts.get('failed', 0)}")
+        for issue in (result.get("open_issues") or [])[:5]:
+            lines.append(f"- Open: {str(issue)[:200]}")
+        bugs = _read_text(run / "bugs.md")
+        for title in re.findall(r"^#+\s*(.+)$", bugs, re.MULTILINE)[:6]:
+            lines.append(f"- Bug filed: {title[:160]}")
+        triage, _cycle = latest_triage(run)
+        for item in (triage.get("failures") or [])[:6]:
+            if isinstance(item, dict):
+                lines.append(f"- Heal: {failure_kind(item) or 'note'} / {item.get('action', '')}: {str(item.get('test') or item.get('title') or '')[:120]}")
+        lines.append("")
+    if not count:
+        return 0
+    (folder / "history.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return count
+
+
+def _run_affected_cases(run_id: str, folder: Path, book: Logbook) -> list[str]:
+    """Run the checked-in cases the agent said the diff touches. A failure is a possible regression."""
+    data = _read_json(folder / "affected-cases.json")
+    wanted = {str(case).strip() for case in data.get("cases") or [] if str(case).strip()}
+    if not wanted:
+        return []
+    cases = [case for case in load_cases(get_settings().root / "e2e test cases") if case.id in wanted]
+    if not cases:
+        book.row("server", "affected", f"none of {', '.join(sorted(wanted))[:120]} is in the suite")
+        return []
+    _begin(run_id, book, "affected E2E cases")
+    store.update_run(run_id, status="execute")
+    root = get_settings().root / "e2e test cases"
+    files = sorted({f"e2e test cases/{case.journey}/{case.file}" for case in cases if (root / case.journey / case.file).is_file()})
+    grep = "|".join(re.escape(case.title) for case in cases)
+    book.row("playwright", "affected", f"{len(cases)} checked-in case(s) in {len(files)} file(s): {', '.join(c.id for c in cases)}"[:220])
+    result = runners.run_playwright(folder, files, out_dir=folder / "affected", grep=grep)
+    _check_cancel(run_id)
+    failing = failed_tests(_read_json(folder / "affected" / "playwright" / "results.json"))
+    book.row("playwright", "affected", _counts(result["summary"]))
+    line = f"{len(cases)} run, {len(failing)} failed"
+    run_summary.get(run_id).note("affected", line)
+    _end(run_id, "affected E2E cases", "ok" if not failing else "failed", line)
+    by_title = {case.title: case.id for case in cases}
+    return [
+        f"affected E2E case failed, possible regression from this ticket: {by_title.get(item['title'], '')} {item['title']} — {item['error'][:120]}".strip()
+        for item in failing
+    ]
+
+
+def _verify_findings(
+    run_id: str, folder: Path, ticket: str, book: Logbook, signals: dict[str, Any], *, label: str = "verify findings",
+) -> dict[str, str]:
+    """A fresh session reproduces every defect the run is about to file, and screenshots it.
+
+    Items: each finding, each triage bug, and server errors the specs recorded. What it cannot
+    reproduce is not filed. Returns {title: hint} for the tests whose "bug" was not reproduced, so
+    the next heal fixes the spec or its data instead.
+    """
+    items: list[str] = []
+    for item in _read_json(folder / "api-findings.json").get("findings") or []:
+        if isinstance(item, dict) and item.get("id") and not item.get("status") == "skipped":
+            items.append(f"finding:{item['id']} — {str(item.get('failure') or item.get('description') or '')[:160]}")
+    triage, _cycle = latest_triage(folder)
+    for index, bug in enumerate(triage.get("bugs") or [], start=1):
+        if isinstance(bug, dict) and not bug.get("finding") and bug.get("status") != "skipped":
+            items.append(f"bug:{index} — {str(bug.get('failure') or bug.get('description') or '')[:160]}")
+    for index, sample in enumerate(s for s in signals.get("samples") or [] if int(s.get("status") or 0) >= 500 or s.get("kind") == "pageerror"):
+        if index >= 5:
+            break
+        items.append(f"signal:{index + 1} — {sample.get('kind')} {sample.get('method', '')} {sample.get('status', '')} {sample.get('path') or str(sample.get('text') or '')[:120]} in {sample.get('test', '')}")
+    if not items:
+        return {}
+    _begin(run_id, book, label)
+    store.update_run(run_id, status="verify")
+    prompt = _message(
+        "verify", folder,
+        f"Ticket: {ticket}",
+        f"Browser session name: {_browser_name(folder, 'verify')}",
+        "Items:",
+        *[f"- {line}" for line in items[:12]],
+    )
+    log_name = f"verify-{len(list(folder.glob('opencode/verify-*.jsonl'))) + 1}.jsonl"
+    (folder / "verify.json").unlink(missing_ok=True)
+    code, session = runners.run_opencode(folder, session_id=None, prompt=prompt, title=f"{ticket} verify",
+                                          log_name=log_name,
+                                          agent=SUITE_AGENT if ticket == "checked-in" else TICKET_AGENT)
+    _check_cancel(run_id)
+    applied = apply_verification(folder)
+    book.row("server", "verify", f"{len(items)} item(s) checked: {applied}" if code == 0 else _opencode_failure(folder, log_name, code))
+    _end(run_id, label, "ok" if code == 0 else "failed", applied)
+    return verifier_hints(folder)
+
+
+def verifier_hints(folder: Path) -> dict[str, str]:
+    """{test title: what the verifier saw} for bugs it could not reproduce."""
+    hints: dict[str, str] = {}
+    results = {str(r.get("ref")): r for r in _read_json(folder / "verify.json").get("results") or [] if isinstance(r, dict)}
+    triage, _cycle = latest_triage(folder)
+    for index, bug in enumerate(triage.get("bugs") or [], start=1):
+        result = results.get(f"bug:{index}")
+        if isinstance(bug, dict) and result and result.get("reproduced") is False:
+            hint = str(result.get("specFix") or result.get("notes") or "not reproduced")[:300]
+            for name in _affected_titles(bug):
+                hints[name] = hint
+    return hints
+
+
+def _affected_titles(bug: dict[str, Any]) -> list[str]:
+    raw = bug.get("affectedTests") or bug.get("affected_tests") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(item) for item in raw if isinstance(item, str) and item.strip()]
+
+
+def apply_verification(folder: Path) -> str:
+    """Confirm what was reproduced. What was not reproduced is not filed: a finding is skipped, a triage
+    bug is skipped and its failures become spec work, so the healer fixes the test or its data."""
+    results = [r for r in _read_json(folder / "verify.json").get("results") or [] if isinstance(r, dict)]
+    if not results:
+        return "no verify.json"
+    by_ref = {str(r.get("ref") or "").strip(): r for r in results}
+    confirmed = dropped = 0
+    findings_path = folder / "api-findings.json"
+    data = _read_json(findings_path)
+    for item in data.get("findings") or []:
+        if not isinstance(item, dict):
+            continue
+        result = by_ref.get(f"finding:{item.get('id')}")
+        if result is None:
+            continue
+        if result.get("reproduced") is True:
+            item["confidence"] = "confirmed"
+            item["verifier"] = str(result.get("notes") or "reproduced")[:300]
+            confirmed += 1
+        elif result.get("reproduced") is False:
+            item["status"] = "skipped"
+            item["verifier"] = "not reproduced: " + str(result.get("notes") or "")[:300]
+            dropped += 1
+    if data:
+        findings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    triage_files = sorted(folder.glob("triage-*.json"))
+    if triage_files:
+        triage = _read_json(triage_files[-1])
+        bugs = [b for b in triage.get("bugs") or [] if isinstance(b, dict)]
+        kept = 0
+        for index, bug in enumerate(triage.get("bugs") or [], start=1):
+            result = by_ref.get(f"bug:{index}")
+            if not isinstance(bug, dict) or result is None:
+                kept += 1 if isinstance(bug, dict) and bug.get("status") != "skipped" else 0
+                continue
+            if result.get("reproduced") is True:
+                bug["confidence"] = "confirmed"
+                bug["verifier"] = str(result.get("notes") or "reproduced")[:300]
+                confirmed += 1
+                kept += 1
+            else:
+                bug["status"] = "skipped"
+                bug["verifier"] = "not reproduced: " + str(result.get("notes") or "")[:300]
+                dropped += 1
+                names = {n.lower() for n in _affected_titles(bug)}
+                for failure in triage.get("failures") or []:
+                    title = str(failure.get("title") or failure.get("test") or "").lower() if isinstance(failure, dict) else ""
+                    if title and failure_kind(failure) == "bug" and any(title in n or n in title for n in names):
+                        failure["class"] = "spec"
+                        failure["action"] = "reported"
+                        failure["reason"] = "verifier could not reproduce a product defect: " + str(result.get("notes") or "")[:200]
+        if bugs and kept == 0:
+            # Every filed bug failed to reproduce: no failure keeps a "bug" label that would file it again.
+            for failure in triage.get("failures") or []:
+                if isinstance(failure, dict) and failure_kind(failure) == "bug":
+                    failure["class"] = "spec"
+                    failure["action"] = "reported"
+                    failure["reason"] = "verifier could not reproduce a product defect"
+        triage_files[-1].write_text(json.dumps(triage, indent=2) + "\n", encoding="utf-8")
+    return f"{confirmed} confirmed, {dropped} not reproduced"
+
+
+def _note_findings(run_id: str, folder: Path) -> None:
+    """Counts for the run summary."""
+    notes = run_summary.get(run_id)
+    bugs = _read_text(folder / "bugs.md")
+    filed = len(re.findall(r"^Title:", bugs, re.MULTILINE))
+    notes.note("bugs", f"{filed} in bugs.md" if bugs else "none")
+    findings = [f for f in _read_json(folder / "api-findings.json").get("findings") or [] if isinstance(f, dict)]
+    if findings:
+        confirmed = sum(1 for f in findings if str(f.get("confidence") or "").lower() == "confirmed")
+        notes.note("findings", f"{len(findings)} ({confirmed} confirmed)")
+    if (folder / "hypotheses.json").is_file():
+        notes.note("hypotheses", checks.hypothesis_report(folder)[0])
+
+
+def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -> str:
     """Copy the passing journeys into the checked-in suite before the run is sealed.
 
     The suite is snapshotted first. A promotion that fails, or that adds a spec Playwright
     cannot load, is reverted so it never breaks the next E2E run. Every promotion is logged.
     """
-    book.phase("promote")
     prompt = _promote_prompt(folder, ticket)
     (folder / "promote-prompt.md").write_text(prompt + "\n", encoding="utf-8")
     before = _suite_files()
@@ -875,6 +1378,7 @@ def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -
         prompt=prompt,
         title=f"{ticket} promote",
         log_name="promote.jsonl",
+        agent=SUITE_AGENT,
     )
     promoted = _read_json(folder / "promoted.json")
     cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
@@ -895,38 +1399,17 @@ def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -
         _restore_suite(before)
         record_promotion(run_id, ticket, before, before, {**promoted, "cases": []}, reverted=reverted)
         book.row("server", "promote", f"reverted  {reverted}"[:240])
-        return
+        return f"reverted: {reverted}"[:200]
     record_promotion(run_id, ticket, before, after, promoted)
     if not cases:
         book.row("server", "promote", "no new journey copied")
-        return
+        return "nothing promoted"
     book.row("server", "promote", f"{len(cases)} case(s) added to e2e test cases")
+    return f"{len(cases)} case(s) added: " + ", ".join(str(c.get("id", "")) for c in cases if isinstance(c, dict))
 
 
 def _promote_prompt(folder: Path, ticket: str) -> str:
-    relative = _display(folder)
-    return "\n".join([
-        f"Promote passing tests from ticket {ticket} into the checked-in suite before sign-off.",
-        f"Run directory: {relative}",
-        f"Final per-test status: {relative}/playwright/test-outcomes.json (use this after heals; not the partial results.json alone)",
-        f"Playwright report: {relative}/playwright/results.json",
-        f"Feature specs and POM: {relative}/specs/",
-        f"Coverage already in the suite: {relative}/e2e-coverage.md",
-        "Checked-in suite: `e2e test cases/`.",
-        "Follow the Promote step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
-        "The default is to promote nothing. Promote at most two tests, only when each passes every test in the Promote step of the skill (one user journey, no ticket or account-mode dependence, no AI response, not a duplicate).",
-        "Before you add a test, read the target folder's FEATURE.md and grep its specs. If a row or test already asserts the same surface, skip it. Two variants of one guard are one test.",
-        "Document-editor flows go in `e2e test cases/document editing` with the next TC-DOC id.",
-        "Record drawers, attachments and Move go in `e2e test cases/asset crud` with the next free AC- id (no gaps in the numbering).",
-        "Search-palette flows go in `e2e test cases/search`.",
-        "Import auth as `../../auth-helper`. Keep the POM beside the spec. Keep afterEach cleanup.",
-        "The test() title must match the FEATURE.md Title cell exactly, with no id prefix.",
-        "Append one inventory row per new test to that folder's FEATURE.md.",
-        f"Write {relative}/promoted.json as {{\"files\":[...],\"cases\":[{{\"id\":\"...\",\"title\":\"...\"}}],\"skipped\":[{{\"title\":\"...\",\"reason\":\"...\"}}]}}. Put every passing candidate you rejected in skipped, with the reason in a few words.",
-        "If nothing qualifies, write promoted.json with empty files and cases, and list the candidates in skipped.",
-        "The server loads every spec you add. A spec that does not load is removed and the promotion is reverted.",
-        "Do not run Playwright. Do not edit specs that were already in the suite. Do not change playwright.config.ts.",
-    ])
+    return _message("promote", folder, f"Ticket: {ticket}")
 
 
 def _promoted_section(folder: Path) -> list[str]:
@@ -947,23 +1430,18 @@ def _ux_audit_prompt(
     folder: Path,
     ticket: str,
     preflight: dict[str, Any],
+    *,
+    parallel: bool = False,
 ) -> str:
     relative = _display(folder)
     return "\n".join([
-        f"UI/UX audit for ticket: {ticket}",
+        "Phase: ux-audit",
         f"Run directory: {relative}",
+        f"Ticket: {ticket}",
         f"App URL: {preflight.get('appUrl') or 'the appUrl in the context pack'}",
-        "This is a new session. The run files are your only memory of the functional walk.",
-        f"Read first: {relative}/feature-map.md, {relative}/FEATURE.md, {relative}/triage.json, and the screenshots in {relative}/explore/ux/. Use {relative}/context-pack.json only for the acceptance criteria (grep it, do not open it whole).",
-        f"Earlier runs of this ticket: list runs/tickets/{ticket}/ and read each ux-findings.json, for the Resolved protocol in the audit gate skill.",
-        "Follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. The prompt is .agents/prompts/ux-auditor.md.",
-        "Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md, .agents/ux/traceability.md. From .agents/ux/checks.yaml grep the check ids for the journey (SRCH-, CRUD-, DOC-, A11Y-) instead of reading the whole file.",
-        "Do not read .agents/ux/audit-preview-reference.html. It is a layout reference for the server's generator, not for you.",
-        "Working UI passes. QA-expected behavior is at most an Observation (O).",
-        "S2 and S3 do not fail the audit. With no S0 or S1, the verdict is PASS WITH ADVISORIES. Only S0 or S1 is BLOCKING FAIL.",
-        f"Write only ux-findings.json (a JSON array) and ux-scorecard.json into {relative}/. Do NOT write ux-report.html or ux-report.md: the server scores the findings and renders the report from the JSON.",
-        f"Every Observation and Resolved item needs a screenshot path under {relative}/explore/ux/ or {relative}/ux-evidence/. Reuse the Explore screenshots before you capture new ones.",
-        "Do not write test specs and do not edit product code.",
+        "Follow .agents/prompts/ux-auditor.md.",
+        f"Browser session name: {_browser_name(folder, 'ux')}",
+        *(["Playwright and heal run beside you: do not read playwright/ or triage.json."] if parallel else []),
     ])
 
 
@@ -976,75 +1454,41 @@ def _heal_prompt(
     failing: list[dict[str, str]] | None = None,
     attempts_used: dict[str, int] | None = None,
 ) -> str:
-    relative = _display(folder)
-    listed = ", ".join(specs)
     counts = attempts_used or {}
     failing_lines = [
         f"- {item['title']}  (attempt {counts.get(item['title'], attempt)} of {total})"
         for item in (failing or [])
     ] or ["- the Playwright report has failures, but no test title was parsed"]
-    return "\n".join([
-        f"Ticket {ticket}. Heal attempt {attempt} of {total}.",
-        f"Playwright results: {relative}/playwright/results.json",
-        f"Playwright log: {relative}/playwright/output.log",
-        f"Specs: {listed}",
-        f"Follow the Feature Specific Heal step in .agents/skills/lexful-autonomous-agent-qa/SKILL.md. You have no memory of the walk: the run files are your memory. Read {relative}/FEATURE.md (selectors, endpoints, gaps), {relative}/explore/flow.md, and {relative}/feature-map.md first, then the failing spec.",
-        "Do not apply the E2E User Journey heal section.",
-        f"Exploration: {relative}/explore/ and {relative}/FEATURE.md and {relative}/explore/flow.md.",
-        "Replay each failing test below. Fix the locator, rewrite the step to a control this session saw, create the missing fixture, or remove the test.",
-        f"Stop after {total} attempts at a failing test. class is spec, gap, or bug.",
-        "A gap is a case the walk never reached. Remove or rewrite that test and leave the reason in FEATURE.md Gaps. Do not put it in bugs.",
-        "A behavior this ticket requires stays a gap on the record. Removing the test does not make the run a pass.",
-        "A bug is a step this session completed where the page then did the wrong thing. Do not change that expected outcome.",
-        "If a completed step or a probe showed the wrong result and you cannot say why, file it as a bug with confidence suspected and keep the evidence. A gap is only a control you never reached.",
-        "Add a bugs array to triage.json, one object per product defect. The server writes bugs.md from it.",
-        "Do not put a skipped, deprecated, or gap test in bugs.",
-        "Before you return, delete every record this session created.",
-        "Do not run the official suite. The server re-runs the failed spec files when you change one.",
-        "Each bug needs area, failure, context, severity (Critical, High, Medium, or Low), severityReason, description, affectedTests, steps, expected, actual, rootCause, and evidence.",
-        "Severity decides priority: Critical is P0, High is P1, Medium is P2, Low is P3.",
+    return _message(
+        "heal", folder,
+        f"Ticket: {ticket}",
+        f"Heal attempt {attempt} of {total}",
+        f"Specs: {', '.join(specs)}",
+        f"Browser session name: {_browser_name(folder, 'heal')}",
         "Still failing:",
         *failing_lines,
-    ])
+    )
 
 
-def _phase1_heal_prompt(folder: Path, attempt: int, total: int, specs: list[str]) -> str:
-    relative = _display(folder)
+def _phase1_heal_prompt(
+    folder: Path, attempt: int, total: int, specs: list[str], hints: dict[str, str] | None = None,
+) -> str:
     failures = failed_tests(_read_json(folder / "playwright" / "results.json"))
     listed = "\n".join(
         f"- {item['title']}  ({_short_file(item['file'])})  {item['error']}".rstrip()
         for item in failures[:40]
     ) or "- the Playwright report has failures, but no test title was parsed"
-    return "\n".join([
-        "This is an E2E User Journey TCs heal. It is not Feature Specific TCs.",
-        "Follow only the E2E User Journey heal section in .agents/skills/lexful-autonomous-agent-qa/SKILL.md.",
-        "Do not apply Feature Specific Heal. Do not remove a test because you are unsure.",
-        "Do not explore or write a new test. Do not call Linear, GitHub, or /auth/password.",
-        "In this one return, patch every spec-drift failure in the checked-in suite, then stop.",
-        "CloudFront 403 Request blocked on UAT is environment timing: class spec, retry navigation, do not file bugs.",
-        f"Heal attempt {attempt} of {total}.",
-        f"Run directory: {relative}",
-        f"Playwright results: {relative}/playwright/results.json",
-        f"Playwright log: {relative}/playwright/output.log",
-        "Auth cookies: runs/cache/stytch/session.json",
-        "The suite is \"e2e test cases\". Edit only a failing spec and the page object or fixture it imports.",
-        "Read e2e test cases/changes.log before you edit. It lists locator updates already saved in the suite.",
-        "Do not edit a locator that the log already records. Leave that file as it is.",
-        "Do not edit e2e test cases/changes.log. The server appends to it after you return.",
-        "Do not edit FEATURE.md, playwright.config.ts, or auth-helper.ts.",
-        'Write {"failures":[...]} to triage.json in the run directory. class is "spec" or "bug". action is "patched" or "reported".',
-        "spec: a renamed locator, a locator that matches several elements, or an existing wait that expired while the snapshot already shows that control. Narrow the locator or raise that timeout. Do not add waitForTimeout. Leave the expected outcome.",
-        "bug: a loaded value is wrong, a blocked request was sent, or the page is an error response. Do not edit the spec.",
-        "If you are unsure, class it as bug and do not edit.",
-        "Add a bugs array for those product defects. One object can list several affectedTests when they are the same defect. The server writes bugs.md.",
-        "Do not put a skipped or deprecated test in failures or in bugs.",
-        "Each bug needs area, failure, context, severity (Critical, High, Medium, or Low), severityReason, description, affectedTests, steps, expected, actual, rootCause, and evidence.",
-        "Severity decides priority: Critical is P0, High is P1, Medium is P2, Low is P3.",
+    seen = [f"- {name}: {hint}" for name, hint in (hints or {}).items()]
+    return _message(
+        "e2e-heal", folder,
+        "Suite: E2E User Journey TCs (not a ticket)",
+        f"Heal attempt {attempt} of {total}",
+        f"Specs: {', '.join(specs)}",
+        f"Browser session name: {_browser_name(folder, 'heal')}",
         "Failures:",
         listed,
-        f"Specs: {', '.join(specs)}",
-        "Do not run the suite. The server re-runs the failed spec files only if you changed one.",
-    ])
+        *(["The verifier could not reproduce a product defect for these. The test or its data is outdated; fix it:", *seen] if seen else []),
+    )
 
 
 def _short_file(file: str) -> str:
@@ -1289,12 +1733,14 @@ def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> 
     triage, cycle = latest_triage(folder)
     pack = _read_json(folder / "context-pack.json")
     url = str(pack.get("appUrl") or get_settings().qa_url)
+    deployment = pack.get("deployment") if isinstance(pack.get("deployment"), dict) else {}
+    build = str(row.get("sha") or deployment.get("build") or "unknown")
     filed = publish_bugs(
         folder,
         ticket=str(row.get("ticket") or ""),
         run_id=str(row.get("id") or folder.name),
         url=url,
-        build=str(row.get("sha") or "unknown"),
+        build=build,
         failed=int(summary.get("failed") or 0),
         triage=triage,
         still_failing=failed_tests(_read_json(folder / "playwright" / "results.json")),
@@ -1305,7 +1751,7 @@ def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> 
         ticket=str(row.get("ticket") or ""),
         run_id=str(row.get("id") or folder.name),
         url=url,
-        build=str(row.get("sha") or "unknown"),
+        build=build,
     )
     return filed or probed > 0
 
@@ -1444,7 +1890,9 @@ def _read_findings(path: Path) -> list[dict[str, Any]]:
 
 
 _PHASE_OF_LOG = (
+    ("agent-plan", "Plan"),
     ("agent", "Explore + Author"),
+    ("verify", "Verify"),
     ("heal", "Heal"),
     ("ux-audit", "UX audit"),
     ("promote", "Promote"),
@@ -1485,6 +1933,28 @@ def _cost_section(folder: Path) -> list[str]:
     return lines
 
 
+def _checks_section(folder: Path) -> list[str]:
+    """Deployment, hypotheses, affected E2E cases, verifier results and heal expectation edits."""
+    lines: list[str] = []
+    deployment = _deployment_line(folder)
+    if deployment:
+        lines.append(f"- Deployment: {deployment}")
+    if (folder / "hypotheses.json").is_file():
+        lines.append(f"- Risk hypotheses: {checks.hypothesis_report(folder)[0]}")
+    affected = _read_json(folder / "affected" / "playwright" / "results.json")
+    if affected:
+        stats = affected.get("stats") or {}
+        lines.append(f"- Affected E2E cases: passed {stats.get('expected', 0)}, failed {stats.get('unexpected', 0)}, flaky {stats.get('flaky', 0)}")
+    verified = [r for r in _read_json(folder / "verify.json").get("results") or [] if isinstance(r, dict)]
+    if verified:
+        yes = sum(1 for r in verified if r.get("reproduced") is True)
+        lines.append(f"- Verifier: {yes} of {len(verified)} reproduced")
+    edits = checks.assertion_edits(folder)
+    for edit in edits[:8]:
+        lines.append(f"- Heal changed an expectation: {edit}")
+    return ["## Checks", "", *lines, ""] if lines else []
+
+
 def _ux_report_section(folder: Path) -> list[str]:
     card = _read_json(folder / "ux-scorecard.json")
     if not card and not (folder / "ux-report.html").is_file():
@@ -1495,7 +1965,8 @@ def _ux_report_section(folder: Path) -> list[str]:
         "## UI/UX audit",
         "",
         f"- UX verdict: **{card.get('verdict', 'PASS')}**",
-        f"- Score: {card.get('score', 100)} / 100",
+        f"- Score: {card.get('score') if card.get('score') is not None else 'not scored'} / 100",
+        *([f"- Audit error: {card.get('error')}"] if card.get("error") else []),
         f"- Findings: S0={counts.get('S0', 0)}, S1={counts.get('S1', 0)}, S2={counts.get('S2', 0)}, S3={counts.get('S3', 0)}, Observations={counts.get('O', 0)}",
         "- Report: `ux-report.html`",
         "- Findings file: `ux-findings.json`",
@@ -1556,6 +2027,8 @@ def _write_report(
     bugs = folder / "bugs.md"
     if bugs.is_file():
         lines.extend(["## Bugs", "", bugs.read_text(encoding="utf-8").rstrip(), ""])
+    lines.extend(_checks_section(folder))
+    lines.extend(checks.signals_section(folder))
     ux_section = _ux_report_section(folder)
     if ux_section:
         lines.extend(ux_section)

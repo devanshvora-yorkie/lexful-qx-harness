@@ -10,7 +10,7 @@ try {
     process.exit(1);
   }
   const how = session.reused ? 'reused' : 'refreshed';
-  console.log(`session ${how}  persona ${creds.name}  cookies ${session.cookieCount}  app HTTP ${session.pageStatus}`);
+  console.log(`session ${how}  persona ${creds.name}  cookies ${session.cookieCount}  app HTTP ${session.pageStatus}  api ${session.apiStatus ?? 'unchecked'}`);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);

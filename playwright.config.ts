@@ -10,11 +10,12 @@ export default defineConfig({
   expect: {
     timeout: 10000,
   },
+  // Files run in parallel workers (QA_PW_WORKERS); tests inside one file keep their order.
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   // One retry for a transient UAT 403. A second failure is a real result for the healer.
   retries: 1,
-  workers: 1,
+  workers: Number(process.env.QA_PW_WORKERS || 1),
   reporter: runDir
     ? [
       ['./scripts/progress-reporter.mjs'],

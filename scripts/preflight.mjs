@@ -57,7 +57,7 @@ async function stytchCheck() {
   if (session.pageStatus === 403) {
     return check('Stytch', 'pass', `${who}: ${reused}, cookies saved; app returned 403 (CloudFront)`);
   }
-  return check('Stytch', 'pass', `${who}: ${reused}, ${session.cookieCount} cookies, app HTTP ${session.pageStatus}`);
+  return check('Stytch', 'pass', `${who}: ${reused}, ${session.cookieCount} cookies, app HTTP ${session.pageStatus}, api ${session.apiStatus ?? 'unchecked'}`);
 }
 
 function versionCheck() {
@@ -171,6 +171,13 @@ async function main() {
           `${built.pack.ticket.key}: PR ${report.pullRequests.join(', ') || 'none'}; connected ${report.connectedTickets.join(', ') || 'none'}`,
         ));
       }
+      const deployed = built.pack.deployment || {};
+      report.deployment = deployed.summary || '';
+      // Testing a build that does not contain the PR reports false bugs and false passes.
+      const notDeployed = String(deployed.summary || '').startsWith('NOT DEPLOYED');
+      const allow = /^(1|true|yes)$/i.test(process.env.QA_ALLOW_UNDEPLOYED || '');
+      checks.push(check('Deployment', notDeployed && !allow ? 'fail' : 'pass',
+        `${deployed.summary || 'not checked'}${notDeployed && allow ? ' (QA_ALLOW_UNDEPLOYED=true)' : ''}`));
     } catch (err) {
       checks.push(check('Ticket context', 'fail', err.message));
     }

@@ -24,7 +24,14 @@ const SEEDED_SERVER = 'AAA-SRV-001';
 async function openServersListing(page: import('@playwright/test').Page) {
   await injectAuthCookies(page.context());
   await page.goto('about:blank');
-  await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const response = await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const blocked =
+      response?.status() === 403 ||
+      (await page.getByText('Request blocked').isVisible().catch(() => false));
+    if (!blocked) break;
+  }
   const listing = new ServersListingPOM(page);
   await expect(listing.assetTypeHeading()).toBeVisible({ timeout: 15000 });
   return listing;

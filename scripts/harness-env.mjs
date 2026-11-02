@@ -59,13 +59,26 @@ export async function linear(query, variables = {}) {
   return body.data;
 }
 
-/** Pull-request endpoints only. Never lists the repo tree or file contents. */
+const REPO_PATH = /^\/repos\/([^/]+)\/[^/]+\//;
+
+/**
+ * Pull requests, their comments, and deployment records only. Never lists the repo tree or
+ * file contents (the server's read-only clone does that), and only inside GITHUB_ORG.
+ */
 export async function github(apiPath, query) {
   const allowed = apiPath === '/user'
     || apiPath === '/search/issues'
-    || /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+(\/files)?$/.test(apiPath)
+    || /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+(\/(files|comments|reviews|commits))?$/.test(apiPath)
+    || /^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/.test(apiPath)
+    || /^\/repos\/[^/]+\/[^/]+\/(environments|deployments)$/.test(apiPath)
+    || /^\/repos\/[^/]+\/[^/]+\/deployments\/\d+\/statuses$/.test(apiPath)
+    || /^\/repos\/[^/]+\/[^/]+\/compare\/[0-9a-f]{7,40}\.\.\.[0-9a-f]{7,40}$/i.test(apiPath)
     || /^\/repos\/[^/]+\/[^/]+\/commits\/[0-9a-f]{7,40}\/pulls$/i.test(apiPath);
   if (!allowed) throw new Error(`GitHub path is outside the pull request: ${apiPath}`);
+  const owner = apiPath.match(REPO_PATH)?.[1];
+  if (owner && owner.toLowerCase() !== CFG.githubOrg.toLowerCase()) {
+    throw new Error(`GitHub path is outside ${CFG.githubOrg}: ${apiPath}`);
+  }
   const url = new URL(`https://api.github.com${apiPath}`);
   if (query) {
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
@@ -212,6 +225,38 @@ async function probeApp(cookies) {
   };
 }
 
+const ACCOUNT_FILE = path.join(ROOT, 'runs', 'cache', 'stytch', 'account-id.txt');
+const API_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+
+/** 401 is the API saying the session is dead. A CDN 403 or a network error says nothing about it. */
+export function apiVerdict(status) {
+  if (status === 401) return 'invalid';
+  if (status >= 200 && status < 300) return 'valid';
+  return 'unknown';
+}
+
+/**
+ * The app page answers 200 with or without a login, because the SPA checks the session later, so the
+ * page cannot tell a dead session from a live one. The API can: it answers 401 to a session Stytch
+ * has revoked or expired, even while the cookie's own expiry is still in the future.
+ */
+export async function probeApi(cookies) {
+  const account = env('LEXFUL_ACCOUNT_ID') || (existsSync(ACCOUNT_FILE) ? readFileSync(ACCOUNT_FILE, 'utf8').trim() : '');
+  if (!account) return { checked: false, verdict: 'unknown' };
+  try {
+    const res = await fetch(`${CFG.apiUrl}/v1/asset_types?limit=1`, {
+      headers: {
+        Cookie: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; '),
+        'X-Account-Id': account,
+        'User-Agent': API_UA,
+      },
+    });
+    return { checked: true, status: res.status, verdict: apiVerdict(res.status) };
+  } catch {
+    return { checked: false, verdict: 'unknown' };
+  }
+}
+
 function publishSession(record, files) {
   for (const file of files) writeSecretJson(file, record);
 }
@@ -251,7 +296,11 @@ async function loginStytch(creds = personaCredentials()) {
     throw new Error('Stytch response did not set stytch_session and stytch_session_jwt');
   }
   const probe = await probeApp(cookies);
-  return { status: res.status, cookies, ...probe };
+  const api = await probeApi(cookies);
+  if (api.verdict === 'invalid') {
+    throw new Error(`Stytch accepted the password for ${creds.email}, but the API answered ${api.status} to the new session`);
+  }
+  return { status: res.status, cookies, ...probe, apiStatus: api.status ?? null };
 }
 
 function sessionUsable(probe) {
@@ -285,6 +334,9 @@ export async function ensureStytchSession({ force = false, persona } = {}) {
       try {
         const probe = await probeApp(cached.cookies);
         if (!sessionUsable(probe)) continue;
+        const api = await probeApi(cached.cookies);
+        if (api.verdict === 'invalid') continue; // revoked before its expiry: sign in again below
+        probe.apiStatus = api.status ?? null;
         const record = {
           ...cached,
           persona: creds.name,
@@ -317,7 +369,7 @@ export async function ensureStytchSession({ force = false, persona } = {}) {
     status: fresh.status,
     cookies: fresh.cookies,
     origins: [],
-    probe: { landed: fresh.landed, onLogin: fresh.onLogin, pageStatus: fresh.pageStatus },
+    probe: { landed: fresh.landed, onLogin: fresh.onLogin, pageStatus: fresh.pageStatus, apiStatus: fresh.apiStatus },
   };
   publishSession(record, files);
   return {
@@ -329,6 +381,7 @@ export async function ensureStytchSession({ force = false, persona } = {}) {
     landed: fresh.landed,
     onLogin: fresh.onLogin,
     pageStatus: fresh.pageStatus,
+    apiStatus: fresh.apiStatus,
   };
 }
 
@@ -377,7 +430,24 @@ const ISSUE_FIELDS = `
   parent { identifier }
   children { nodes { identifier } }
   relations { nodes { relatedIssue { identifier } } }
+  attachments { nodes { url title } }
+  comments(first: 30) { nodes { body createdAt user { name } } }
 `;
+
+const PR_URL = /github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/i;
+
+/** GitHub pull requests linked on the Linear issue, in any repo of GITHUB_ORG. */
+export function linkedPullRequests(issue) {
+  const found = [];
+  for (const node of issue?.attachments?.nodes || []) {
+    const match = String(node?.url || '').match(PR_URL);
+    if (!match || match[1].toLowerCase() !== CFG.githubOrg.toLowerCase()) continue;
+    found.push({ repo: `${match[1]}/${match[2]}`, number: Number(match[3]) });
+  }
+  return found;
+}
+
+const clipText = (text, n) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, n);
 
 function mapIssue(issue, relation) {
   const description = issue.description || '';
@@ -393,6 +463,10 @@ function mapIssue(issue, relation) {
     parent: issue.parent?.identifier || null,
     children: (issue.children?.nodes || []).map((n) => n.identifier).filter(Boolean),
     linkedKeys: (issue.relations?.nodes || []).map((n) => n.relatedIssue?.identifier).filter(Boolean),
+    linkedPullRequests: linkedPullRequests(issue),
+    comments: (issue.comments?.nodes || [])
+      .filter((n) => n?.body)
+      .map((n) => ({ author: n.user?.name || '', at: n.createdAt || '', body: clipText(n.body, 800) })),
   };
 }
 
@@ -428,10 +502,34 @@ export async function fetchTicket(key) {
   return { ...ticket, connectedTickets };
 }
 
-export async function fetchPullRequest(number) {
-  const { githubOrg: owner, githubRepo: repo } = CFG;
+/** Every page of a GitHub list, up to `cap` items. */
+export async function githubPages(apiPath, cap = 300, query = {}) {
+  const items = [];
+  for (let page = 1; items.length < cap; page += 1) {
+    const data = await github(apiPath, { ...query, per_page: '100', page: String(page) });
+    const list = Array.isArray(data) ? data : [];
+    items.push(...list);
+    if (list.length < 100) break;
+  }
+  return items.slice(0, cap);
+}
+
+export async function fetchPullRequest(number, fullRepo = `${CFG.githubOrg}/${CFG.githubRepo}`) {
+  const [owner, repo] = fullRepo.split('/');
   const raw = await github(`/repos/${owner}/${repo}/pulls/${number}`);
-  const files = await github(`/repos/${owner}/${repo}/pulls/${number}/files`, { per_page: '100' });
+  const files = await githubPages(`/repos/${owner}/${repo}/pulls/${number}/files`, 300);
+  // Reviewers' questions are the cheapest bug leads there are. Kept short.
+  const [inline, conversation, reviews] = await Promise.all([
+    githubPages(`/repos/${owner}/${repo}/pulls/${number}/comments`, 60).catch(() => []),
+    githubPages(`/repos/${owner}/${repo}/issues/${number}/comments`, 30).catch(() => []),
+    githubPages(`/repos/${owner}/${repo}/pulls/${number}/reviews`, 30).catch(() => []),
+  ]);
+  const isBot = (user) => /\[bot\]$|^github-actions/i.test(String(user?.login || ''));
+  const reviewComments = [
+    ...inline.filter((c) => !isBot(c.user)).map((c) => ({ path: c.path, line: c.line || c.original_line || null, author: c.user?.login || '', body: clipText(c.body, 500) })),
+    ...reviews.filter((r) => r.body && !isBot(r.user)).map((r) => ({ path: null, line: null, author: r.user?.login || '', state: r.state, body: clipText(r.body, 500) })),
+  ];
+  const discussion = conversation.filter((c) => !isBot(c.user)).map((c) => ({ author: c.user?.login || '', body: clipText(c.body, 500) }));
   const fileDetails = Array.isArray(files)
     ? files.map((item) => ({
       filename: item.filename,
@@ -442,12 +540,16 @@ export async function fetchPullRequest(number) {
     }))
     : [];
   return {
+    repo: fullRepo,
     number: raw.number,
     title: raw.title || '',
     body: raw.body || '',
     state: raw.state || '',
     merged: Boolean(raw.merged_at),
     mergedAt: raw.merged_at,
+    mergeCommitSha: raw.merged_at ? raw.merge_commit_sha || '' : '',
+    reviewComments,
+    discussion,
     htmlUrl: raw.html_url || '',
     headRef: raw.head?.ref || '',
     baseRef: raw.base?.ref || 'main',
@@ -456,20 +558,87 @@ export async function fetchPullRequest(number) {
   };
 }
 
-/** PRs whose title or body mentions this ticket. Does not list the repository. */
-export async function searchPullRequests(ticketKey, known = []) {
+/**
+ * PRs for this ticket: the ones linked on the Linear issue (any repo of the org), plus the
+ * ones whose title or body mentions the key in the default repo. Does not list a repository.
+ */
+export async function searchPullRequests(ticketKey, known = [], linked = []) {
   const { githubOrg: owner, githubRepo: repo } = CFG;
-  const data = await github('/search/issues', {
-    q: `repo:${owner}/${repo} is:pr ${ticketKey.toUpperCase()}`,
-    per_page: '10',
-  });
-  const numbers = [...new Set((data.items || []).map((item) => item.number))];
-  const byNumber = new Map(known.filter((pr) => pr?.number != null).map((pr) => [pr.number, pr]));
-  const pulls = [];
-  for (const n of numbers) {
-    pulls.push(byNumber.get(n) || await fetchPullRequest(n));
+  const defaultRepo = `${owner}/${repo}`;
+  const key = (fullRepo, number) => `${fullRepo.toLowerCase()}#${number}`;
+  const wanted = new Map(linked.map((item) => [key(item.repo, item.number), item]));
+  for (let page = 1; page <= 3; page += 1) {
+    const data = await github('/search/issues', {
+      q: `repo:${defaultRepo} is:pr ${ticketKey.toUpperCase()}`,
+      per_page: '30',
+      page: String(page),
+    });
+    for (const item of data.items || []) wanted.set(key(defaultRepo, item.number), { repo: defaultRepo, number: item.number });
+    if ((data.items || []).length < 30) break;
   }
+  const have = new Map(known.filter((pr) => pr?.number != null).map((pr) => [key(pr.repo || defaultRepo, pr.number), pr]));
+  const pulls = [];
+  for (const [id, item] of wanted) {
+    pulls.push(have.get(id) || await fetchPullRequest(item.number, item.repo));
+  }
+  for (const [id, pr] of have) if (!wanted.has(id)) pulls.push(pr);
   return pulls.sort((a, b) => String(a.mergedAt || '').localeCompare(String(b.mergedAt || '')));
+}
+
+/**
+ * Is each merged PR on UAT? GitHub keeps a deployment per environment (docu-app-uat, ...).
+ * A changed path segment that names an environment (`apps/docu-app/...` → docu-app-uat)
+ * selects it. The PR is deployed when its merge commit is an ancestor of the last successful
+ * deployment there.
+ */
+export async function deploymentStatus(pulls) {
+  const defaultRepo = `${CFG.githubOrg}/${CFG.githubRepo}`;
+  const merged = pulls.filter((p) => p.merged && p.mergeCommitSha && (p.repo || defaultRepo) === defaultRepo);
+  const open = pulls.filter((p) => !p.merged && String(p.state).toLowerCase() === 'open');
+  if (!merged.length) {
+    return { summary: open.length ? `no merged PR; ${open.length} open PR(s) are not on UAT` : 'no merged PR to check', build: '', components: [] };
+  }
+  const [owner, repo] = defaultRepo.split('/');
+  const envs = ((await github(`/repos/${owner}/${repo}/environments`, { per_page: '100' })).environments || [])
+    .map((e) => e.name).filter((name) => /-uat$/.test(name));
+  const latest = new Map();
+  async function lastGood(env) {
+    if (latest.has(env)) return latest.get(env);
+    let found = null;
+    for (const d of await github(`/repos/${owner}/${repo}/deployments`, { environment: env, per_page: '10' })) {
+      const statuses = await github(`/repos/${owner}/${repo}/deployments/${d.id}/statuses`, { per_page: '5' });
+      if ((statuses || []).some((s) => s.state === 'success')) { found = { sha: d.sha, at: d.created_at }; break; }
+    }
+    latest.set(env, found);
+    return found;
+  }
+  const components = [];
+  for (const pr of merged) {
+    const segments = new Set((pr.files || []).flatMap((f) => f.split('/').slice(0, 3)));
+    const targets = envs.filter((env) => segments.has(env.replace(/-uat$/, '')));
+    for (const env of targets) {
+      const good = await lastGood(env);
+      let included = null;
+      if (good?.sha) {
+        try {
+          const cmp = await github(`/repos/${owner}/${repo}/compare/${pr.mergeCommitSha}...${good.sha}`);
+          included = cmp.status === 'ahead' || cmp.status === 'identical';
+        } catch { included = null; }
+      }
+      components.push({ pr: pr.number, env, deployedSha: good?.sha || '', deployedAt: good?.at || '', included });
+    }
+  }
+  const missing = components.filter((c) => c.included === false);
+  const unknown = components.filter((c) => c.included === null);
+  const summary = !components.length
+    ? 'no UAT environment matches the changed paths; deployment not verified'
+    : missing.length
+      ? `NOT DEPLOYED: ${missing.map((c) => `#${c.pr} on ${c.env}`).join(', ')} (UAT runs an older build)`
+      : unknown.length
+        ? `unverified for ${unknown.map((c) => c.env).join(', ')}; deployed on ${components.filter((c) => c.included).map((c) => c.env).join(', ') || 'none'}`
+        : `deployed: ${components.map((c) => `#${c.pr} on ${c.env} (${c.deployedSha.slice(0, 8)}, ${c.deployedAt.slice(0, 16)})`).join(', ')}`;
+  const build = components.find((c) => c.deployedSha)?.deployedSha?.slice(0, 12) || '';
+  return { summary, build, components };
 }
 
 export function parseArgs(argv) {

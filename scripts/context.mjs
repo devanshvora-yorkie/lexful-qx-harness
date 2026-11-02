@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {
   CFG,
+  deploymentStatus,
   fetchPullRequest,
   fetchTicket,
   parseArgs,
@@ -30,12 +31,16 @@ export async function buildContext({ ticket, pr, outDir }) {
   const issue = await fetchTicket(issueKey);
   let pulls = known;
   try {
-    const found = await searchPullRequests(issue.key, known);
-    const byNumber = new Map(found.map((item) => [item.number, item]));
-    for (const item of known) byNumber.set(item.number, item);
-    pulls = [...byNumber.values()];
+    pulls = await searchPullRequests(issue.key, known, issue.linkedPullRequests || []);
   } catch (err) {
     errors.push({ source: 'github', reason: 'pull_request_search_failed', detail: err.message });
+  }
+  let deployment = { summary: 'not checked', build: '', components: [] };
+  try {
+    deployment = await deploymentStatus(pulls);
+  } catch (err) {
+    // A failed check is reported, never fatal: the run still tests, marked unverified.
+    deployment = { summary: `not verified: ${err.message.slice(0, 120)}`, build: '', components: [] };
   }
 
   const pack = {
@@ -47,6 +52,7 @@ export async function buildContext({ ticket, pr, outDir }) {
     scope: 'pull-request-files-and-connected-linear-issues',
     pullRequests: pulls,
     primaryPr: pr || pickPrimaryPr(pulls),
+    deployment,
     contextErrors: errors,
     writtenAt: new Date().toISOString(),
   };

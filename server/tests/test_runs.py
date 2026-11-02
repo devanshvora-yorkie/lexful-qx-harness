@@ -350,7 +350,7 @@ class StoreTest(unittest.TestCase):
         self.assertTrue(created["folder"].startswith("tickets/LEX-3371/"))
         folder = Path(self.tmp.name) / created["folder"]
         self.assertTrue((folder / "manifest.json").is_file())
-        self.assertTrue((folder / "contents.txt").is_file())
+        self.assertFalse((folder / "contents.txt").is_file())
         update_run(created["id"], status="preflight")
         again = get_run(created["id"])
         self.assertIsNotNone(again)
@@ -416,7 +416,7 @@ class StoreTest(unittest.TestCase):
         self.assertIsNone(created["ticket"])
         folder = Path(self.tmp.name) / created["folder"]
         self.assertTrue((folder / "manifest.json").is_file())
-        self.assertTrue((folder / "contents.txt").read_text(encoding="utf-8").startswith("This folder is one E2E User Journey"))
+        self.assertFalse((folder / "contents.txt").is_file())
         self.assertFalse((folder / "specs").exists())
         published = publish_folder(
             created["id"],
@@ -457,7 +457,7 @@ class StoreTest(unittest.TestCase):
         )
         target = root / folder
         self.assertEqual((target / "report.md").read_text(encoding="utf-8"), "# hi\n")
-        self.assertTrue((target / "contents.txt").is_file())
+        self.assertFalse((target / "contents.txt").is_file())
         self.assertTrue(legacy.is_symlink())
         self.assertEqual((legacy / "report.md").read_text(encoding="utf-8"), "# hi\n")
         self.assertEqual(relocate_legacy_runs(), [])
@@ -588,16 +588,21 @@ class CoverageTest(unittest.TestCase):
             ["e2e test cases/search/search.spec.ts"],
         )
 
-    def test_lead_prompt_has_no_floor_and_points_at_coverage(self):
+    def test_server_messages_carry_facts_and_the_rules_live_in_the_skill(self):
         text = _lead_prompt(Path("/tmp/runs/tickets/LEX-1/attempt"), "LEX-1", {})
-        self.assertNotIn("at least", text.lower())
-        self.assertNotIn("15", text)
-        self.assertIn("e2e-coverage.md", text)
-        self.assertIn("no minimum and no maximum", text)
-        self.assertIn("node scripts/persona.mjs support", text)
-        self.assertNotIn("qa-explorer", text)
-        self.assertNotIn("delegate", text.lower())
-        self.assertIn("listing-exploration-hints", text)
+        self.assertTrue(text.startswith("Phase: explore+author"))
+        self.assertIn("Ticket: LEX-1", text)
+        self.assertIn("section 7", text)
+        self.assertLess(len(text.splitlines()), 10)
+        # No procedure in the message: counts, tool flags and file contracts are skill text.
+        for rule in ("at least", "persona.mjs", "coverage.json", "qa-fixtures", "one shell command"):
+            self.assertNotIn(rule, text.lower())
+        skill = (Path(__file__).resolve().parents[2] / ".agents/skills/lexful-autonomous-agent-qa/SKILL.md").read_text()
+        section = skill[skill.index("### 7. Server turns"):]
+        for phase in ("plan", "explore+author", "heal", "e2e-heal", "verify", "promote", "ux-audit", "resume"):
+            self.assertIn(f"**Phase `{phase}`", section)
+        for rule in ("coverage.json", "persona.mjs", "qa-fixtures", "One shell command per call"):
+            self.assertIn(rule, section)
 
     def test_merge_test_outcomes_keeps_unrerun_files(self):
         def report(file: str, rows: list[tuple[str, str]]) -> dict:
