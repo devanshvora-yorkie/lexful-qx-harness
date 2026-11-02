@@ -1208,7 +1208,7 @@
       <button class="tab-btn" onclick="switchTab('tab-checks', this)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         Evaluated Checks Matrix
-        <span class="tab-count">16</span>
+        <span class="tab-count">18</span>
       </button>
     </div>
 
@@ -1530,19 +1530,94 @@
             </thead>
             <tbody>
               <tr>
-                <td><strong>LENS-B-CRUD-10</strong><br><span style="font-size:0.75rem;color:var(--text-dim)">Pillar: Clarity &amp; trust</span></td>
-                <td><span class="badge-status status-warning">DEFECT (S3)</span></td>
-                <td>Display name fallback missing on top-level asset types. Logged as UX-LEX3717-01.</td>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-01 &mdash; <span style="color:#cbd5e1;font-weight:400;">All validation errors shown together</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Flows &amp; speed</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Inline form error messages displayed simultaneously during input validation.</td>
               </tr>
               <tr>
-                <td><strong>LENS-C-STATE-04</strong><br><span style="font-size:0.75rem;color:var(--text-dim)">Pillar: State &amp; edge cases</span></td>
-                <td><span class="badge-status status-pass">PASS</span></td>
-                <td>Protected field states disabled correctly in UI inspector.</td>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-02 &mdash; <span style="color:#cbd5e1;font-weight:400;">Unsaved-change warning guardrail</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: State &amp; edge cases</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Safe navigation confirmed; dirty state triggers confirmation modal prior to exit.</td>
               </tr>
               <tr>
-                <td><strong>LENS-A-FLOW-01</strong><br><span style="font-size:0.75rem;color:var(--text-dim)">Pillar: Flows &amp; speed</span></td>
-                <td><span class="badge-status status-pass">PASS</span></td>
-                <td>Save payload completes within 350ms round-trip.</td>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-03 &mdash; <span style="color:#cbd5e1;font-weight:400;">Destructive actions confirm clearly</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Clarity &amp; trust</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Confirmation dialog prompts before destructive schema mutations.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-04 &mdash; <span style="color:#cbd5e1;font-weight:400;">Irreversible settings warn first</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Clarity &amp; trust</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Role transition warnings clearly state schema implications.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-05 &mdash; <span style="color:#cbd5e1;font-weight:400;">Moved controls leave a trace</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Drift &amp; consistency</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Filter triggers, search input, and action menus remain accessible in consistent coordinates.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-06 &mdash; <span style="color:#cbd5e1;font-weight:400;">Visible confirmation after save / link</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Clarity &amp; trust</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-warning">DEFECT (S3)</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Logged in UX-LEX3717-02: No visible confirmation after 'Save changes' in editor; save bar quietly vanishes.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-07 &mdash; <span style="color:#cbd5e1;font-weight:400;">Empty states offer a clear next step</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Drift &amp; consistency</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Zero-count table views present an explicit reset-filters or create affordance.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-08 &mdash; <span style="color:#cbd5e1;font-weight:400;">Components match design system</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">UI controls conform to shadCN + Fluent UI design system standards.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-09 &mdash; <span style="color:#cbd5e1;font-weight:400;">Bulk selection behaves predictably</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Flows &amp; speed</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Bulk selection updates row checkboxes and action bar count accurately.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-10 &mdash; <span style="color:#cbd5e1;font-weight:400;">Display name fallback and staged edits</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Clarity &amp; trust</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-warning">DEFECT (S3)</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Logged in UX-LEX3717-01: Corporate Lease field with an empty display name is labelled 'New field'.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-11 &mdash; <span style="color:#cbd5e1;font-weight:400;">Dialog and drawer workflows</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Flows &amp; speed</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Modals dismiss cleanly on Escape and backdrop click without state loss.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">CRUD-12 &mdash; <span style="color:#cbd5e1;font-weight:400;">Table tabs preserve filter state</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Navigation</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Switching between tabs retains active search and filter parameters.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-01 &mdash; <span style="color:#cbd5e1;font-weight:400;">Text contrast ratio (WCAG 2.1 AA)</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Foreground text elements achieve >= 4.5:1 contrast against dark card backgrounds.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-02 &mdash; <span style="color:#cbd5e1;font-weight:400;">Visible keyboard focus indicators</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Two-tone Fluent focus ring visible on all interactive table rows, inputs, and buttons.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-03 &mdash; <span style="color:#cbd5e1;font-weight:400;">Icon-only buttons have accessible names</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Action buttons provide explicit aria-label and tooltip affordances for screen readers.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-04 &mdash; <span style="color:#cbd5e1;font-weight:400;">Header action hierarchy</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Drift &amp; consistency</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Primary 'Save changes' CTA visually distinguished from secondary revert actions.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-05 &mdash; <span style="color:#cbd5e1;font-weight:400;">Accessible form control labels</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Checkbox, switch, and select controls programmatically bound to their labels.</td>
+              </tr>
+              <tr>
+                <td><div style="font-weight:700;color:#fff;font-family:var(--font-mono);font-size:0.85rem;">A11Y-06 &mdash; <span style="color:#cbd5e1;font-weight:400;">Table grid and tablist semantics</span></div><div style="font-size:0.75rem;color:var(--text-dim);margin-top:2px;">Pillar: Design alignment &amp; a11y</div></td>
+                <td style="text-align:center;white-space:nowrap;"><span class="badge-status status-pass">PASS</span></td>
+                <td style="color:var(--text-muted);font-size:0.86rem;line-height:1.5;">Table elements utilize appropriate role='tablist', role='tab', and role='gridcell' attributes.</td>
               </tr>
             </tbody>
           </table>
