@@ -1,5 +1,20 @@
 # What changed
 
+## v0.28.0 (Kit v12) — Interactive Lightbox Zoom & Collapsible Ticket Block
+
+- **Interactive Evidence Lightbox & Zoom Controls:**
+  - Added dedicated zoom toolbar to the lightbox modal: **Zoom In (+)**, **Zoom Out (-)**, **Fit to Screen**, and **✕ Close** with real-time zoom percentage badge (`100%`, `125%`, `150%`, `175%`, `200%`, etc.).
+  - Added click-to-zoom toggle on the lightbox image (1.75x enlarged mode with smooth pan and zoom cursor states).
+  - Added keyboard shortcuts (`+`/`=` to zoom in, `-` to zoom out, `0` to fit, `Escape` to close) and mouse-wheel / trackpad zoom support.
+  - Replaced fragile inline `onclick="openLightbox(...)"` string interpolation with element-based `openLightboxFromPreview(this)` utilizing `data-title` and `data-rel` attributes. Completely eliminates JavaScript `SyntaxError` crashes on finding titles containing single quotes/apostrophes and cuts report file size by ~48%.
+- **Collapsible "Ticket as filed" Header:**
+  - Converted the hero ticket description into an interactive `<details class="ticket-details">` disclosure component with animated chevron and `"Expand ticket text"` / `"Collapse ticket"` badge.
+  - Removed duplicate `Acceptance` bullet list from the top hero block; acceptance criteria remain fully evaluated in Tab 3: Acceptance Criteria Matrix.
+- **Contract Gate Validation:**
+  - Full suite validated with `scripts/check_report_contract.py`: 29 rule groups passed, 0 failures, 0 warnings across all ticket reports.
+
+---
+
 ## v0.27.0 — a gate, so a regressed report cannot ship
 
 New: `scripts/check_report_contract.py`. It reads a finished `ux-report.html` and fails on the
