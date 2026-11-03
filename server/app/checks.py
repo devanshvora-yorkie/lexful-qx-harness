@@ -151,14 +151,14 @@ def brief_criteria(folder: Path) -> list[str]:
     pack = _read(folder / "context-pack.json", {})
     ticket = pack.get("ticket") if isinstance(pack.get("ticket"), dict) else {}
     lines = [line.strip() for line in str(ticket.get("acceptanceCriteria") or "").split("\n") if line.strip()]
-    return [re.sub(r"^[-*•]\s*", "", line) for line in lines[:30]]
+    return [line.lstrip("-*• ") for line in lines[:30]]
 
 
-def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str] | None:
-    """Issues from coverage.json, or None when the agent did not write it (the old check runs)."""
+def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str]:
+    """Issues from coverage.json. The file is the agent's hand-off (skill §2e); without it nothing is signed off."""
     data = _read(folder / "coverage.json", None)
     if not isinstance(data, dict) or not isinstance(data.get("criteria"), list):
-        return None
+        return ["coverage.json is missing or has no criteria: no acceptance criterion is mapped to a test"]
     criteria = brief_criteria(folder)
     mapped: dict[str, dict[str, Any]] = {}
     for item in data["criteria"]:
@@ -183,25 +183,21 @@ def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str] | No
     return issues
 
 
-def _risk_count(folder: Path) -> int:
-    text = (folder / "feature-map.md").read_text(encoding="utf-8", errors="replace") if (folder / "feature-map.md").is_file() else ""
-    match = re.search(r"^#+\s*Risks\b.*?$(.*?)(?=^#+\s|\Z)", text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
-    if not match:
-        return 0
-    return sum(1 for line in match.group(1).splitlines() if re.match(r"\s*(?:\d+\.|[-*]|R\d+)", line))
-
-
 def hypothesis_report(folder: Path) -> tuple[str, list[str]]:
-    """One summary line and the blockers: risks listed but none tried, or a confirmed risk with no finding."""
+    """One summary line and the blockers: risks listed but none tried, or a confirmed risk with no finding.
+
+    Every Risk in feature-map.md is a hypothesis in hypotheses.json (skill §1k), so the file is the count.
+    """
     data = _read(folder / "hypotheses.json", {})
     items = [item for item in data.get("hypotheses") or [] if isinstance(item, dict)] if isinstance(data, dict) else []
-    risks = _risk_count(folder)
     outcomes = Counter(str(item.get("outcome") or "planned").lower() for item in items)
     tried = sum(count for outcome, count in outcomes.items() if outcome in {"confirmed", "refuted"})
     line = f"{len(items)} listed, {tried} tried ({outcomes.get('confirmed', 0)} confirmed, {outcomes.get('refuted', 0)} refuted, {outcomes.get('unreached', 0)} unreached)"
     blockers: list[str] = []
-    if risks and not tried:
-        blockers.append(f"no risk hypothesis was tried: feature-map.md lists {risks} risk(s), hypotheses.json has {tried} tried")
+    if (folder / "feature-map.md").is_file() and not items:
+        blockers.append("hypotheses.json is missing: the risks in feature-map.md were not listed as hypotheses")
+    elif items and not tried:
+        blockers.append(f"no risk hypothesis was tried: hypotheses.json lists {len(items)}, none confirmed or refuted")
     for item in items:
         if str(item.get("outcome") or "").lower() == "confirmed" and not item.get("finding") and not item.get("bug"):
             blockers.append(f"hypothesis {item.get('id', '?')} was confirmed but no finding or bug cites it")

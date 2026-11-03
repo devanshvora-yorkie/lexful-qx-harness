@@ -44,7 +44,7 @@ The server is the orchestrator. It runs preflight, starts one `qa` session, then
 
 A Feature Specific TCs run always explores the live `appUrl` before any spec is written. Do not start a local dev server. Do not reuse an existing `FEATURE.md`. Use the model.
 
-An E2E User Journey TCs run is not a ticket. The server message says `Phase: e2e-heal`. The server already executed `e2e test cases` against UAT and did not call Linear. Do not explore and do not write new specs. Follow **§3 E2E User Journey heal** only: fix outdated cases and their data in place; report a product bug only when it is reproduced.
+An E2E User Journey TCs run is not a ticket. The server message says `Phase: e2e-heal`. The server already executed `e2e test cases` against UAT and did not call Linear. In a ticket run this is the first stage and its run directory is the ticket run's `e2e/` folder; on its own (`npm run e2e`) it is a folder under `runs/phase-1/`. Either way, the run directory in the message is where you read and write. Do not explore and do not write new specs. Follow **§3 E2E User Journey heal** only: fix outdated cases and their data in place; report a product bug only when it is reproduced.
 
 ## Quick Reference
 
@@ -54,7 +54,7 @@ An E2E User Journey TCs run is not a ticket. The server message says `Phase: e2e
 | Step 0b | Use `appUrl` from the context pack. Do not start a dev server. A 403 does not change the target |
 | Explore | Walk the live app and append each successful step to `explore/flow.md`. Write `FEATURE.md` from those steps |
 | Author | Generate the POM and the specs from the flow. Open the app when a selector is missing. Leave out any control the flow did not reach |
-| Heal | Same session. For each failing test, replay, fix, and stop after 3 attempts at that test. The server re-runs the files that changed |
+| Heal | A new session that reads the run files (§4). For each failing test, replay, fix, and stop after 3 attempts at that test. The server re-runs the tests that did not pass |
 | Handoff | The server writes `runs/<run-id>/qa-result.json` from the Playwright reporter |
 
 **Explore is not optional.** Skipping it and inferring the flow from source code is the single most common failure mode this skill exists to prevent.
@@ -161,7 +161,7 @@ The PR diff and body say what the build should do. UAT says what it does. Compar
    - **Mismatch** — the endpoint exists but behaves differently from the claim (wrong status or error code, a filter that does nothing, a field that is missing, a role that gets in when the claim says refused). This is a **finding**. Never write a test that asserts the wrong behavior as correct.
 4. A finding has `expected` (quote the PR, ticket, or OpenAPI line), `actual` (status and shape from the probe), and `evidence` (the `api-probes.jsonl` line or snapshot). Reproduce it a second time before you set `confidence: "confirmed"`. With one observation, use `"suspected"`.
 
-Write all findings to `api-findings.json` as `{"findings":[{"id","area","failure","severity","severityReason","description","steps","expected","actual","rootCause","evidence","confidence"}]}`. `severity` is Critical, High, Medium, or Low. `rootCause` may say what the diff suggests ("PR #2172 adds the filter only for enforced accounts"), or `Unknown`. The server files them in `bugs.md` whether or not Playwright passes. Write the file before you hand off.
+Write all findings to `api-findings.json` as `{"findings":[...]}`, each an `id` plus the bug object of §8. The server files them whether or not Playwright passes. Write the file before you hand off.
 
 Not findings: a CDN 403 "Request blocked" that clears on retry (`api-probe` retries once and tags it), a 404 for a route the diff adds but UAT does not have, a `NOT_ENABLED` answer the PR says legacy accounts get, a missing fixture.
 
@@ -224,14 +224,14 @@ Stop a hypothesis after the first reproducible mismatch or after two clean tries
 - Cover the roles this ticket changes
 - One file is one suite (`bvt`, `smoke`, `sanity`, or `regression`). Types share that file
 - The id is `TC-<TICKET>-001`. Do not reuse an id from `e2e-coverage.md`
-- Tag each test with one type and one suite: `{ tag: ['@positive', '@smoke'] }`
+- Tag each test with one type and one suite: `{ tag: ['@positive', '@smoke'] }`. The run report groups the tests by these tags as Playwright records them; a test without them is reported as untagged
 - The default `injectAuthCookies(page.context())` is admin. A support or viewer case passes that name: `injectAuthCookies(page.context(), 'viewer')`
 - Write a test for each `new` row the walk reached. Do not write a `covered` row or a Gap
 - Create the fixture through the API or the UI. Do not stop the test on a missing env var
 - **Every data-loading action must use `page.waitForResponse`** — reference the API Endpoints section from Explore. Never use `waitForTimeout` for data loading
 - A `[ ]` row is a test only when the walk reached that control. A covered row is not a test
 - Import `test` and `expect` from the run's `qa-fixtures` (the prompt gives the path), not from `@playwright/test`. It records console errors, page errors and failed API calls during every test
-- Specs run in parallel workers, one file per worker; tests inside a file keep their order. Build every name from `Date.now()` and a random suffix, never a fixed name another worker could also create, and clean up in `afterEach`
+- Each test runs on whichever worker is free, in any order, beside tests of the same file. A test stands alone: it creates its own data in the test or `beforeEach`, cleans it up in `afterEach`, and never reads what another test left. Build every name from `Date.now()` and a random suffix, never a fixed name another worker could also create. Do not use `beforeAll`/`afterAll` for data (they run around every test). Only when steps truly cannot be split, put them in one test, or declare `test.describe.configure({ mode: 'serial' })` in that describe
 
 ```ts
 test.describe('LEX-3717 documents — smoke', () => {
@@ -278,9 +278,9 @@ You may edit the failing spec and the page object, fixture or constant file it i
 
 If you cannot say why the case fails, it is not yet a bug: try once more, look at what changed, and fix the case. A case that fails only because data is missing is `spec`, never `bug`. A skipped or deprecated test is neither.
 
-Write `triage.json` as `{"failures":[...],"bugs":[...]}`. Every failure appears once with `class` (`spec` or `bug`) and `action` (`patched` or `reported`), and a `reason` that says what changed in the app. A `bugs[]` object lists the tests it explains in `affectedTests` (one object per defect) and has the fields from section 7. If the message lists tests the verifier could not reproduce, the test or its data is outdated: fix it this round.
+Write `triage.json` as `{"failures":[...],"bugs":[...]}`. Every failure appears once with `class` (`spec` or `bug`) and `action` (`patched` or `reported`), and a `reason` that says what changed in the app. Each defect is one `bugs[]` object (§8) that lists the tests it explains in `affectedTests`. A failure classed `bug` with no `bugs[]` object is not filed; it stays an open issue of the run. If the message lists tests the verifier could not reproduce, the test or its data is outdated: fix it this round.
 
-Do not run the suite. The server re-runs the files you changed.
+Do not run the suite. The server re-runs only the tests that did not pass, plus any test you added or renamed, so `playwright/results.json` after a heal holds only those. When the heals are done it runs every spec in a folder you edited once in full, so a page-object change that breaks a passing test still shows.
 
 ### 4. Feature Specific Heal
 
@@ -294,12 +294,12 @@ For each failing test, replay the step, then do one of these. Stop after 3 attem
 2. The step targeted the wrong surface: a tab, a refetch, or a role's control that this session did not see. Rewrite the test to the control the walk showed, or remove the test. Class it `gap`. Say why in `triage.json`. Do not add it to `bugs`.
 3. The fixture was missing. Create it through the API or the UI and point the test at it. Class it `spec`.
 4. An existing wait expired while the snapshot already shows that control. Raise that timeout. Do not add `waitForTimeout`. Do not edit `playwright.config.ts`.
-5. This session completed the step, or a probe returned the answer, and the result was wrong: the wrong loaded value, a request sent that the step requires to be blocked, an error page, a wrong status or error code, a role that got in or was kept out against the PR or ticket. Class it `bug`. Do not change the expected outcome. Add one object to `bugs`. If `api-findings.json` already has that defect, do not repeat it: put `"finding": "<id>"` on the bug object instead of new text. Several tests for the same defect go on that one object, with steps, expected, actual, evidence, severity, `severityReason`, and `confidence`.
+5. This session completed the step, or a probe returned the answer, and the result was wrong: the wrong loaded value, a request sent that the step requires to be blocked, an error page, a wrong status or error code, a role that got in or was kept out against the PR or ticket. Class it `bug`. Do not change the expected outcome. Add one object to `bugs`. If `api-findings.json` already has that defect, do not repeat it: put `"finding": "<id>"` on the bug object instead of new text. Several tests for the same defect go on that one object, written as §8 says.
 6. The environment failed, not the product: a CloudFront 403 "Request blocked" that clears on retry, a listing that stalls with placeholder rows on every attempt, or a missing fixture env var. Class it `spec`, retry navigation once, and say `environment` in the reason. Do not add it to `bugs`. If it persists on all 3 attempts, leave the test failing and say so in `triage.json`; the server will not file it.
 
 **Unsure?** Re-run the step or the probe once. Same wrong result twice: `bug`, `confidence: "confirmed"`. Wrong once, cannot reproduce: `bug`, `confidence: "suspected"`, keep the evidence. Only a control you never reached is a `gap`. A gap is not a verdict on the product, and a suspected bug is not a failure to find one.
 
-Write `triage.json` as `{"failures":[...],"bugs":[...]}`. `class` is `spec`, `gap`, or `bug`. `action` is `patched`, `removed`, or `reported`. Do not run the official suite. The server re-runs the spec files you changed. A required gap that you removed from the spec stays in `FEATURE.md` and keeps the run in revision.
+Write `triage.json` as `{"failures":[...],"bugs":[...]}`. `class` is `spec`, `gap`, or `bug`. `action` is `patched`, `removed`, or `reported`. Do not run the official suite. The server re-runs the tests that did not pass (§3 says how). A required gap that you removed from the spec stays in `FEATURE.md` and keeps the run in revision.
 
 **Debug playbook (each failing test, up to 3 attempts):**
 
@@ -321,7 +321,7 @@ A test qualifies only if it passes **all** of these:
 2. **It will still be true next quarter.** Not tied to this ticket's rollout: no dependence on an account mode (legacy, shadow, enforced), a feature flag, or a build that is not yet everywhere. A snapshot of today's permissions or field lists goes stale and fails later.
 3. **It is deterministic and cheap.** No AI or Lex response, no wait over about 30 seconds, no dependence on seeded names that the suite does not already use.
 4. **It is new.** Read the target folder's `FEATURE.md` and grep its specs first. If a row or test already asserts the same surface, skip it. Two variants of one guard (for example Cancel and Escape) are one test; keep the more direct one.
-5. **It cleans up after itself.** Anything it creates or moves is restored in `afterEach`.
+5. **It cleans up after itself and stands alone.** Anything it creates or moves is restored in `afterEach`, and it passes when it runs alone on a fresh worker (the suite runs test by test, not file by file).
 
 Take **at most two**, and only when each is a different behavior. When several candidates pass, prefer the one that fails loudly if the behavior regresses. Skip gaps, failures, skips, tooltip-only checks, and any title already in `e2e-coverage.md`.
 
@@ -347,15 +347,15 @@ Rules for every phase:
 
 **Phase `explore+author`** (or the second turn after `plan`). Do §0 to §2 in full: brief, source, feature map, hypotheses, the walk, the probes, the specs. In addition:
 
-- Import `test` and `expect` from `<prefix>/qa-fixtures` and auth from `<prefix>/auth-helper` (the message gives `<prefix>`). Build every test-data name from `Date.now()` and a random suffix, because spec files run in parallel workers.
+- Import `test` and `expect` from `<prefix>/qa-fixtures` and auth from `<prefix>/auth-helper` (the message gives `<prefix>`). Build every test-data name from `Date.now()` and a random suffix, because tests run in parallel workers, test by test; each test must pass alone (§2 spec rules).
 - Reuse the suite's page objects listed at the end of `e2e-coverage.md`, read-only.
 - Write the hand-off files of §2e: `coverage.json`, `affected-cases.json`, `hypotheses.json`, `planned-specs.json`, `api-findings.json`. `plan_file` is `<run dir>/FEATURE.md`; `test_files` and `pom_files` are paths under `<run dir>/specs/`.
 - Personas: `injectAuthCookies(page.context(), 'support' | 'viewer')` in a spec; `node scripts/persona.mjs <persona>` before browsing as that user.
 - Take screenshots of key states into `explore/ux/` (the UX audit reuses them).
 
-**Phase `heal`** (ticket). §4 in full. The message lists the failing tests and the attempt. Also: `bugs[]` objects need `area`, `failure`, `context`, `severity`, `severityReason`, `description`, `affectedTests`, `steps`, `expected`, `actual`, `rootCause`, `evidence`. Severity maps to priority: Critical P0, High P1, Medium P2, Low P3. A spec you fix keeps its expected values. `playwright/signals.jsonl` shows console errors, page errors and failed API calls per test.
+**Phase `heal`** (ticket). §4 in full. The message lists the failing tests and the attempt. Each `bugs[]` object is written as §8 says. A spec you fix keeps its expected values. `playwright/signals.jsonl` shows console errors, page errors and failed API calls per test.
 
-**Phase `e2e-heal`**. §3 in full. Patch every outdated case in one return, then stop. `bugs[]` objects need `area`, `failure`, `context`, `severity`, `severityReason`, `description`, `affectedTests`, `steps`, `expected`, `actual`, `rootCause`, `evidence`.
+**Phase `e2e-heal`**. §3 in full. Patch every outdated case in one return, then stop. Each `bugs[]` object is written as §8 says.
 
 **Phase `affected-heal`** (checked-in cases that ran beside a ticket and failed; you may edit `e2e test cases/`). §3 in full: a failing case is outdated until you show the product is wrong, and it is usually a timing, locator or data problem. Read `affected/playwright/results.json` and the page snapshot in `affected/playwright/output/`. A value that loads late (a spinner, a linked record's name) needs a web-first wait on the element (`expect(locator).toContainText(...)`), not `waitForTimeout` and not a single `textContent()` read. A count that other work changes needs a baseline read inside the test. Write triage to `affected/triage.json` (not `triage.json`) as `{"failures":[...]}` with `class` (`spec` or `bug`), `action` and a `reason` for every failure, including the ones you could not fix. A case you could not fix and could not tie to this ticket stays a failure with its reason; do not file a bug here.
 
@@ -364,7 +364,7 @@ Rules for every phase:
 - If the product does the wrong thing, it is reproduced: save a screenshot that shows the wrong state to `<run dir>/bug-evidence/<ref with ":" replaced by "-">.png` (`finding-F1.png`, `bug-2.png`) with `playwright-cli screenshot`. One clear screenshot, the state after the last step, not a series.
 - If the product behaves correctly, or the case fails because its data or locator is outdated, it is not a bug. Say what you saw and, for a checked-in case, what the case should use now (`specFix`: the equivalent record, the new label).
 
-Write `verify.json` as `{"results":[{"ref":"bug:2","reproduced":true,"notes":"...","evidence":"...","screenshot":"bug-evidence/bug-2.png","specFix":"..."}]}`, one result per item. A signal you reproduce as a real defect becomes a new finding in `api-findings.json` with the next free id and `confidence: "confirmed"`. What you cannot reproduce is not filed.
+Write `verify.json` as `{"results":[{"ref":"bug:2","reproduced":true,"notes":"...","evidence":"...","screenshot":"bug-evidence/bug-2.png","persona":"admin","steps":["..."],"specFix":"..."}]}`, one result per item. When you reproduced it, `steps` and `persona` are the ones you actually followed, written as §8 says; the filed bug takes them in place of the steps it was written with, so a developer reproduces it the way you did. A signal you reproduce as a real defect becomes a new finding in `api-findings.json` with the next free id and `confidence: "confirmed"`. What you cannot reproduce is not filed.
 
 **Phase `promote`**. §5 in full. The inputs are `playwright/test-outcomes.json`, `specs/`, `e2e-coverage.md`. Write `promoted.json`.
 
@@ -374,7 +374,29 @@ Write `verify.json` as `{"results":[{"ref":"bug:2","reproduced":true,"notes":"..
 
 ### 6. Verdict & Handoff
 
-The server writes `runs/<ticket>/<run-id>/qa-result.json` and `report.md`. `FEATURE.md` stays in the run directory. Specs and the POM live in that folder's `specs/` directory. The server copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count. Do not write a run's specs under `tests/`.
+The server writes `qa-result.json`, `bugs.json` and `bugs.md` (each bug written as a ticket, from your §8 objects), and `linear-report.md` with `linear-report.html`, the one report of the run. `FEATURE.md` stays in the run directory. Specs and the POM live in that folder's `specs/` directory. The server copies `plan_file`, `test_files`, and `pom_files` from `planned-specs.json` and sets `test_results` from the Playwright JSON reporter. Do not invent the pass count. Do not write a run's specs under `tests/`.
+
+### 8. Bug objects
+
+Every defect you report, as a `bugs[]` object in `triage.json` or a finding in `api-findings.json`, is filed as its own ticket. The server copies your words into it and adds nothing, so write it for a developer who has never seen this run. A bug object that cites `"finding": "<id>"` takes the finding's fields; do not repeat them.
+
+| Field | What to write |
+|---|---|
+| `area` | The screen, drawer or API, two to four words, no colon: `Organization picker search`, `Documents create drawer`, `GET /v1/organizations` |
+| `failure` | What goes wrong, as the user sees it, in under 80 characters, present tense, no ticket or test id: `Blank or padded search returns no matches`. The title is `<area>: <failure>` |
+| `description` | One to three sentences: what the user sees, then why it is wrong. Impact first, mechanism after |
+| `severity`, `severityReason` | Critical, High, Medium or Low (priority follows: P0 to P3), and one sentence on the impact that sets it |
+| `persona` | `admin`, `support` or `viewer`: who was signed in |
+| `preconditions` | The data or state step 1 needs: `an organization with at least two Foundation records`. Empty when nothing is needed |
+| `steps` | One user action per step, the way a person does it in the app with today's data. Start with where to go (the path, `/docs/d/all/system.document`). Name controls by their visible label, not by locators or test code. No `Observe` steps: what you see goes in `actual` |
+| `expected` | What should happen, and where that comes from (the AC line, the PR, the API contract) |
+| `actual` | What happened: the text on screen, the status code and the request that was sent |
+| `rootCause` | What the diff or source suggests, with the file and line, or `Unknown` |
+| `evidence` | Where you saw it: the walk step, the probe line, the screenshot. One item per source |
+| `affectedTests` | The ids of the tests that fail because of it (`TC-LEX-3700-008`) |
+| `confidence` | `confirmed` when you reproduced it twice, otherwise `suspected` |
+
+A fresh verify session follows the steps before anything is filed (§7, `verify`). What it cannot reproduce is not filed.
 
 ## Verification
 

@@ -1,9 +1,12 @@
 """One index for every run.
 
-E2E User Journey TCs live in runs/phase-1/. Feature Specific TCs live in runs/tickets/<ticket>/.
-The folder name is the UTC start time plus the final counts once the run finishes.
-The id stays stable for the API. Older paths under runs/regression/ and runs/LEX-*/
-remain as links so a run that is already open still resolves.
+A run's folder is chosen when the run is created and never moves or renames: everything the run
+writes (its E2E User Journey stage in e2e/, the specs, the reports) stays in that one folder.
+A run whose ticket is known when it starts (named, or read from its PR or deployed commit) lives in
+runs/tickets/<ticket>/. Without a ticket it lives in pull-requests/, deploys/ or manual/.
+runs/phase-1/ holds only E2E runs started on their own (npm run e2e).
+The folder name is the UTC start time and a short id; the result is in manifest.json and index.json.
+Older paths under runs/regression/ and runs/LEX-*/ remain as links so an old run still resolves.
 """
 
 from __future__ import annotations
@@ -59,21 +62,13 @@ def run_dir(run_id: str) -> Path:
     return _legacy_path(run_id)
 
 
-def relative_folder(
-    row: dict[str, Any],
-    *,
-    summary: dict[str, Any] | None = None,
-    verdict: str | None = None,
-) -> str:
-    """Readable path relative to runs/. Counts are added when the run has finished."""
+def relative_folder(row: dict[str, Any]) -> str:
+    """Path relative to runs/, fixed when the run is created: <group>/<UTC day>_<time>Z_<short id>."""
     created = str(row.get("createdAt") or "")
     day = created[:10] if len(created) >= 10 else "unknown-date"
     clock = created[11:16].replace(":", "") if len(created) >= 16 else "0000"
     short = str(row.get("id") or "run").rsplit("-", 1)[-1]
     name = f"{day}_{clock}Z_{short}"
-    score = _score_label(summary, verdict, str(row.get("status") or ""))
-    if score:
-        name = f"{name}_{score}"
     kind = row.get("kind") or "ticket"
     if kind == "phase1":
         return f"phase-1/{name}"
@@ -83,24 +78,24 @@ def relative_folder(
     pr = row.get("pr")
     if pr:
         return f"pull-requests/pr-{pr}/{name}"
+    sha = str(row.get("sha") or "")
+    if sha:
+        return f"deploys/{sha[:12]}/{name}"
     return f"manual/{name}"
 
 
-def _score_label(summary: dict[str, Any] | None, verdict: str | None, status: str) -> str:
+def result_label(summary: dict[str, Any] | None, verdict: str | None) -> str:
+    """`11 passed, 0 failed, needs revision`: the outcome as one phrase for the index and the manifest."""
     parts: list[str] = []
     if isinstance(summary, dict) and ("passed" in summary or "failed" in summary):
-        parts.append(f"{int(summary.get('passed') or 0)}-passed")
-        parts.append(f"{int(summary.get('failed') or 0)}-failed")
-        flaky = int(summary.get("flaky") or 0)
-        skipped = int(summary.get("skipped") or 0)
-        if flaky:
-            parts.append(f"{flaky}-flaky")
-        if skipped:
-            parts.append(f"{skipped}-skipped")
-    label = (verdict or status or "").strip().lower().replace("_", "-")
-    if label and label not in {"accepted", "queued", "preflight", "agent", "execute", "heal"}:
-        parts.append(label)
-    return "_".join(parts)
+        parts.append(f"{int(summary.get('passed') or 0)} passed")
+        parts.append(f"{int(summary.get('failed') or 0)} failed")
+        for key in ("flaky", "skipped"):
+            if int(summary.get(key) or 0):
+                parts.append(f"{int(summary[key])} {key}")
+    if verdict:
+        parts.append(verdict.strip().lower().replace("_", " "))
+    return ", ".join(parts)
 
 
 def _index_path() -> Path:
@@ -210,7 +205,9 @@ def create_run(
     pr: int | None,
     sha: str | None,
     kind: str = "ticket",
+    trigger: str = "",
 ) -> dict[str, Any]:
+    """`trigger` is what started the run: `ticket` (a person named it), `pr`, `uat-deploy` (the deploy webhook) or `e2e`."""
     label = "regression" if kind == "phase1" else ticket or (f"pr-{pr}" if pr else "manual")
     run_id = f"{label}-{_stamp()}-{os.urandom(2).hex()}"
     now = _now()
@@ -220,6 +217,7 @@ def create_run(
         "ticket": None if kind == "phase1" else ticket,
         "pr": pr,
         "sha": sha,
+        "trigger": trigger or ("e2e" if kind == "phase1" else "ticket" if ticket else "pr" if pr else "manual"),
         "status": "accepted",
         "createdAt": now,
         "updatedAt": now,
@@ -251,43 +249,34 @@ def create_run(
     return _locked(mutate)
 
 
-def publish_folder(
+def record_outcome(
     run_id: str,
     *,
     summary: dict[str, Any] | None,
     verdict: str | None,
 ) -> str:
-    """Rename the run folder so the directory name includes the final counts."""
+    """Write the final result into the index and manifest.json. The folder stays where it is."""
 
     def mutate() -> str:
         data = _read_index()
-        found = None
-        for row in data["runs"]:
-            if row.get("id") == run_id:
-                found = row
-                break
+        found = next((row for row in data["runs"] if row.get("id") == run_id), None)
         if found is None:
             raise KeyError(run_id)
-        target_rel = relative_folder(found, summary=summary, verdict=verdict)
-        current = runs_root() / str(found["folder"]) if found.get("folder") else _legacy_path(run_id)
-        target = runs_root() / target_rel
-        if current.exists() and _same_path(current, target) is False:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                raise FileExistsError(target_rel)
-            current.rename(target)
-        target.mkdir(parents=True, exist_ok=True)
-        found["folder"] = target_rel
+        if not found.get("folder"):
+            found["folder"] = relative_folder(found)
+        found["result"] = result_label(summary, verdict)
         _write_index(data)
-        _write_manifest(found, target)
-        _write_guide()
-        return target_rel
+        _write_manifest(found, runs_root() / str(found["folder"]))
+        return str(found["folder"])
 
     return _locked(mutate)
 
 
 def relocate_legacy_runs() -> list[str]:
-    """Move finished runs into phase-1/ and tickets/. Leave the old path as a link."""
+    """Give runs from before the index kept a folder their place under phase-1/ and tickets/.
+
+    A run that already has a folder is never moved. A legacy one keeps a link at its old path.
+    """
 
     def mutate() -> list[str]:
         data = _read_index()
@@ -305,36 +294,31 @@ def relocate_legacy_runs() -> list[str]:
     return _locked(mutate)
 
 
-def _same_path(left: Path, right: Path) -> bool:
-    if left.exists() and right.exists():
-        return left.resolve() == right.resolve()
-    return left.resolve() == right.resolve() and left.exists()
-
-
 def _relocate_row(row: dict[str, Any]) -> bool:
+    if row.get("folder"):
+        return False
     run_id = str(row["id"])
-    had_folder = bool(row.get("folder"))
-    current = runs_root() / str(row["folder"]) if had_folder else _legacy_path(run_id)
+    current = _legacy_path(run_id)
     if current.is_symlink() or not current.is_dir():
         return False
     summary, verdict = _saved_outcome(current)
     if verdict is None and row.get("status") in {"failed", "halted"}:
         verdict = str(row["status"]).upper()
-    target_rel = relative_folder(row, summary=summary, verdict=verdict)
+    target_rel = relative_folder(row)
     target = runs_root() / target_rel
     if current.resolve() != target.resolve():
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             return False
         current.rename(target)
-    before = row.get("folder")
     row["folder"] = target_rel
+    row["result"] = result_label(summary, verdict)
     _write_manifest(row, target)
     legacy = _legacy_path(run_id)
-    if not had_folder and not legacy.exists():
+    if not legacy.exists():
         legacy.parent.mkdir(parents=True, exist_ok=True)
         legacy.symlink_to(os.path.relpath(target, legacy.parent), target_is_directory=True)
-    return before != target_rel
+    return True
 
 
 def _saved_outcome(folder: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -355,19 +339,26 @@ def _saved_outcome(folder: Path) -> tuple[dict[str, Any] | None, str | None]:
 _GUIDE = """\
 Where a run is stored
 
-phase-1/
-  E2E User Journey TCs. One folder per run of the checked-in suite in "e2e test cases".
-  The name is the UTC start time, then the result.
-  Example: 2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision
-  Open report.md in that folder for the healer notes.
+A run is written into one folder, chosen when it starts. It is never moved or renamed, so a file you
+have open stays where it is. The folder name is the UTC start time and a short id, for example
+tickets/LEX-3642/2026-11-03_0928Z_bc40. The result is in index.json ("result"), manifest.json and
+linear-report.md.
 
 tickets/
-  Feature Specific TCs. One folder per Linear ticket, then one folder per attempt.
-  Example: tickets/LEX-2293/2026-10-21_1021Z_1722_18-passed_0-failed_perfect
-  e2e/run.log in that folder is a copy of the E2E User Journey log.
+  One folder per Linear ticket, then one folder per attempt. A run started from a pull request or
+  a UAT deploy lands here too: its ticket is read from GitHub before the folder is made.
+  An attempt holds the ticket's Feature Specific TCs and, in e2e/, the E2E User Journey TCs
+  that ran against the same build.
+
+phase-1/
+  E2E User Journey TCs started on their own (npm run e2e), not by a ticket.
 
 pull-requests/
-  A run started from a pull request number, when there is no ticket.
+  A run started from a pull request whose title, branch and body name no LEX ticket, or when
+  GitHub could not be read at start.
+
+deploys/<commit>/
+  A run started from a UAT deploy whose commit has no pull request with a ticket.
 
 manual/
   Anything else.
@@ -382,9 +373,21 @@ regression/ and LEX-*/
   Older paths. They are links to the folders above, so a file that is already open still resolves.
   Read phase-1/ and tickets/.
 
-Inside a ticket run, open linear-report.md first: the E2E result and bugs, the ticket's result and bugs,
-and the UX audit, with bug-evidence/ screenshots beside it. run.log ends with a run summary.
-report.md is the long form. A sealed run keeps no scratch files and its model transcripts are .gz.
+Inside a run, open linear-report.md (or linear-report.html in a browser). It is the one report:
+what triggered the run, the E2E and Feature Specific results, the bugs, and the UX audit's suggested
+changes, with links to ux-report.html and the screenshots. bugs.md has each bug written as a ticket.
+run.log is the timeline and ends with a run summary; summary.json holds the same data.
+
+A sealed attempt keeps:
+  linear-report.md, linear-report.html, ux-report.html     the reports
+  bugs.json, bugs.md, bug-evidence/                         the bugs and their screenshots
+  playwright/test-outcomes.json                             every test, its tags and its final result
+  specs/, FEATURE.md, feature-map.md, explore/              what was tested and how
+  coverage.json, hypotheses.json, triage-*.json, verify.json   the agent's hand-off and the heal notes
+  e2e/                                                      the E2E stage: results, triage, bugs
+  affected/test-outcomes.json                               the checked-in cases the diff touches
+  opencode/*.jsonl.gz                                       transcripts of explore, heal and verify
+A halted or failed attempt keeps everything, so it can be resumed or debugged.
 
 A locator heal is written into "e2e test cases/" in the repo. The run folder keeps the triage note.
 The spec Playwright runs next is the file in "e2e test cases/", not a copy inside the run.
@@ -408,72 +411,6 @@ def list_runs(ticket: str | None = None) -> list[dict[str, Any]]:
         key = ticket.upper()
         rows = [row for row in rows if str(row.get("ticket") or "").upper() == key]
     return rows
-
-
-_E2E_LOG_FILES = ("run.log", "report.md", "qa-result.json", "bugs.md", "bugs.json", "summary.json")
-_FINISHED = {"completed", "needs_revision", "halted", "failed"}
-
-
-def latest_finished_phase1() -> dict[str, Any] | None:
-    """Newest E2E User Journey run that has a log. The index is newest first."""
-    for row in list_runs():
-        if row.get("kind") != "phase1" or row.get("status") not in _FINISHED:
-            continue
-        if (run_dir(str(row["id"])) / "run.log").is_file():
-            return dict(row)
-    return None
-
-
-def _copy_e2e_log(source: Path, into: Path, phase1_id: str) -> bool:
-    if not (source / "run.log").is_file():
-        return False
-    dest = into / "e2e"
-    if (dest / "run.log").is_file():
-        return False
-    dest.mkdir(parents=True, exist_ok=True)
-    for name in _E2E_LOG_FILES:
-        src = source / name
-        if src.is_file():
-            shutil.copyfile(src, dest / name)
-    for src in source.glob("triage-*.json"):
-        shutil.copyfile(src, dest / src.name)
-    if (source / "bug-evidence").is_dir():
-        shutil.copytree(source / "bug-evidence", dest / "bug-evidence", dirs_exist_ok=True)
-    folder = ""
-    row = get_run(phase1_id)
-    if row and row.get("folder"):
-        folder = str(row["folder"])
-    (dest / "source.txt").write_text(
-        "E2E User Journey TCs. Copied from runs/" + (folder or source.name) + "\n",
-        encoding="utf-8",
-    )
-    return True
-
-
-def share_e2e_log(phase1_id: str) -> list[str]:
-    """Copy the finished journey log into ticket attempts that are still waiting."""
-    source = run_dir(phase1_id)
-    copied: list[str] = []
-    waiting = {"accepted", "queued"}
-    for row in list_runs():
-        folder = str(row.get("folder") or "")
-        if row.get("kind") == "phase1" or not folder.startswith("tickets/"):
-            continue
-        if row.get("status") not in waiting:
-            continue
-        if _copy_e2e_log(source, runs_root() / folder, phase1_id):
-            copied.append(str(row["id"]))
-    return copied
-
-
-def attach_e2e_log(ticket_folder: Path) -> bool:
-    """Copy the latest journey log into this ticket attempt when it starts."""
-    if (ticket_folder / "e2e" / "run.log").is_file():
-        return False
-    phase1 = latest_finished_phase1()
-    if phase1 is None:
-        return False
-    return _copy_e2e_log(run_dir(str(phase1["id"])), ticket_folder, str(phase1["id"]))
 
 
 RUNNING = frozenset({"preflight", "agent", "execute", "heal", "audit", "verify", "promote"})
@@ -508,7 +445,8 @@ def find_active_sha(sha: str) -> dict[str, Any] | None:
 
 
 def _write_halted(run_id: str, reason: str) -> None:
-    """Write a minimal report when a run stops without a normal verdict."""
+    """Seal a run that stopped without a normal verdict: qa-result.json and the one report."""
+    from app import linear_report
     from app.logbook import Logbook
 
     row = get_run(run_id) or {}
@@ -518,18 +456,6 @@ def _write_halted(run_id: str, reason: str) -> None:
     book.line("── run summary")
     book.line(f"  {row.get('ticket') or run_id}  run {run_id}  verdict HALTED")
     book.line(f"  stopped: {reason[:200]}")
-    (folder / "report.md").write_text(
-        "\n".join([
-            f"# {row.get('ticket') or run_id}",
-            "",
-            "- Status: failed",
-            "- Verdict: HALTED",
-            "",
-            reason,
-            "",
-        ]),
-        encoding="utf-8",
-    )
     (folder / "qa-result.json").write_text(
         json.dumps(
             {
@@ -544,7 +470,8 @@ def _write_halted(run_id: str, reason: str) -> None:
         + "\n",
         encoding="utf-8",
     )
-    publish_folder(run_id, summary=None, verdict=None)
+    linear_report.write(folder, row, verdict="HALTED", issues=[reason])
+    record_outcome(run_id, summary=None, verdict="HALTED")
 
 
 def _write_interrupted(run_id: str, phase: str = "") -> None:
@@ -559,7 +486,7 @@ def cancel_all_runs(reason: str = "cancelled by user", *, skip: set[str] | None 
     """Mark every queued run, and every in-flight run not in `skip`, as failed with a halt report.
 
     A run a worker is executing is in `skip`: the worker stops its processes and seals it,
-    so the folder is not renamed under a process that is still writing into it.
+    so a halt report is not written under a process that is still writing into the folder.
     """
     from app.logbook import Logbook
 

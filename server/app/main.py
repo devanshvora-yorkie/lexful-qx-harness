@@ -1,4 +1,9 @@
-"""FastAPI control plane. A LEX ticket or pull request starts a run. OpenCode starts after preflight."""
+"""FastAPI control plane. A LEX ticket, a pull request or a UAT deploy starts a run; npm run e2e starts an E2E run.
+
+Each request queues one run. A ticket run includes the E2E User Journey stage (QA_PHASE1_ON_START),
+so a ticket never queues a second, separate E2E run. `python -m app.cli` runs one trigger without
+the server, for a container that exists only for that run.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from pydantic import BaseModel
 
 from app.logbook import Logbook
 from app import prune
-from app.pipeline import execute_run, request_cancel, startup_order
+from app.pipeline import create_triggered_run, execute_run, request_cancel, startup_order
 from app.runners import ensure_session
 from app.settings import get_settings
 from app.store import (
@@ -167,20 +172,6 @@ def _enqueue(row: dict[str, Any]) -> dict[str, Any]:
     return {"success": True, "runId": run_id, "ticketKey": row.get("ticket"), "status": "queued"}
 
 
-def _queue_phase1_if_configured() -> str | None:
-    """When QA_PHASE1_ON_START is true, queue E2E before a ticket. Never on container boot."""
-    if not get_settings().phase1_on_start:
-        return None
-    existing = find_active_phase1()
-    if existing:
-        return existing["id"]
-    row = create_run(ticket=None, pr=None, sha=None, kind="phase1")
-    _enqueue(row)
-    log.info("E2E User Journey TCs queued before ticket %s", row["id"])
-    print(f"E2E User Journey TCs queued  {row['id']}", flush=True)
-    return row["id"]
-
-
 def _with_activity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         tail = Logbook(run_dir(row["id"])).tail(1)
@@ -197,7 +188,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "port": settings.port,
         "runs": str(settings.runs),
-        "phase1BeforeTicket": settings.phase1_on_start,
+        "e2eWithTicket": settings.e2e_with_ticket,
         "runningRun": (
             {
                 "id": running["id"],
@@ -285,7 +276,7 @@ def run_phase1() -> dict[str, Any]:
             "runId": existing["id"],
             "status": existing["status"],
         }
-    row = create_run(ticket=None, pr=None, sha=None, kind="phase1")
+    row = create_run(ticket=None, pr=None, sha=None, kind="phase1", trigger="e2e")
     queued = _enqueue(row)
     log.info("E2E User Journey TCs queued %s", row["id"])
     print(f"E2E User Journey TCs queued  {row['id']}", flush=True)
@@ -297,17 +288,13 @@ def run_ticket(ticket_key: str, body: RunBody | None = None) -> dict[str, Any]:
     if not TICKET_RE.match(ticket_key):
         raise HTTPException(status_code=400, detail="Ticket must look like LEX-1234")
     pr = body.pr if body else None
-    phase1_id = _queue_phase1_if_configured()
-    row = create_run(ticket=ticket_key.upper(), pr=pr, sha=None)
-    payload = _enqueue(row)
-    if phase1_id:
-        payload["phase1RunId"] = phase1_id
-    return payload
+    row = create_run(ticket=ticket_key.upper(), pr=pr, sha=None, trigger="ticket")
+    return _enqueue(row)
 
 
 @app.post("/run/pr/{number}", status_code=202, dependencies=[Depends(require_secret)])
 def run_pr(number: int, body: RunBody | None = None) -> dict[str, Any]:
-    row = create_run(ticket=None, pr=number, sha=None)
+    row = create_triggered_run(ticket=None, pr=number, sha=None, trigger="pr")
     return _enqueue(row)
 
 
@@ -323,7 +310,7 @@ def uat_deploy(body: DeployBody) -> dict[str, Any]:
             return {"success": True, "skipped": True, "reason": "sha already accepted", "runId": existing["id"], "sha": body.sha}
     if not pr and not ticket and not body.sha:
         raise HTTPException(status_code=400, detail="Provide pr, ticket, or sha")
-    row = create_run(ticket=ticket, pr=pr, sha=body.sha)
+    row = create_triggered_run(ticket=ticket, pr=pr, sha=body.sha, trigger="uat-deploy")
     queued = _enqueue(row)
     queued["sha"] = body.sha
     return queued

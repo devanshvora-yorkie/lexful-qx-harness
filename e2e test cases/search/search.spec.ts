@@ -49,9 +49,10 @@
  *
  * ── Hygiene
  *      READ-ONLY. Creates no assets and mutates no configuration.
- *      workers=1 (see playwright.config.ts): the UAT front door sits behind a
- *      CloudFront WAF that 403s bursts of automated traffic, so the suite is
- *      deliberately serial.
+ *      The UAT front door sits behind a CloudFront WAF that 403s bursts of
+ *      automated traffic, so this file runs its tests in order on one worker
+ *      (mode 'default' below), beside other files. The Search describe also
+ *      shares consoleErrors between its tests.
  */
 
 import { test, expect } from '@playwright/test'
@@ -71,6 +72,9 @@ const COMPUTER = 'EAA-WS-003'
 const BROAD_TERM = 'EAA'
 const ABSENT_TERM = 'ZZQQXX-NOMATCH-4417'
 const TYPE_NAME = 'Computers'
+
+// In order on one worker, even though playwright.config.ts runs other files test by test.
+test.describe.configure({ mode: 'default' })
 
 // ── Suite ────────────────────────────────────────────────────────────────────
 

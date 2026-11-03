@@ -333,9 +333,21 @@ test.describe('Document editing — negative', () => {
     await drawer.selectOrganization(TEST_ORGANIZATION)
     await expect(drawer.createButton).toBeEnabled()
 
+    // Wait briefly for a submit the app sends, so a record it creates is archived in afterEach.
+    const sent = page
+      .waitForResponse(
+        response =>
+          response.request().method() === 'POST' && response.url().includes(`/v1/assets/${DOCUMENT_TYPE}`),
+        { timeout: 5_000 },
+      )
+      .catch(() => null)
     await drawer.createButton.click()
+    const created = await sent
+    if (created?.ok()) {
+      const body = (await created.json().catch(() => null)) as { id?: string } | null
+      if (body?.id) createdRecords.push({ id: body.id, api: new ApiContext(page) })
+    }
 
-    // The required-name validation blocks the submit — no record is created.
     expect(posts).toHaveLength(0)
     await expect(drawer.dialog).toBeVisible()
     await expect(drawer.dialog.getByRole('heading', { name: /New Documents/i })).toBeVisible()

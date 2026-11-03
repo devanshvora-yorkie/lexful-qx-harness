@@ -14,6 +14,16 @@ from typing import Any
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _SESSION_ID = re.compile(r"\bses_[A-Za-z0-9]{10,}\b")
 _ECHO: set[str] = set()
+_ROUTES: dict[str, Path] = {}
+
+
+def route(folder: Path, into: Path) -> None:
+    """While a stage works in a subfolder (a ticket's e2e/), its run.log lines go to the ticket's run.log."""
+    _ROUTES[str(folder.resolve())] = into
+
+
+def unroute(folder: Path) -> None:
+    _ROUTES.pop(str(folder.resolve()), None)
 
 
 def echo_run(folder: Path) -> None:
@@ -83,14 +93,14 @@ def row(role: str, verb: str, detail: str = "") -> str:
     return f"{role[:16]:<16}  {verb[:14]:<14}  {detail}".rstrip()
 
 
-def plain_error(text: str) -> str | None:
+def plain_error(text: str, role: str = "qa") -> str | None:
     """A readable error row for a non-JSON OpenCode line, or nothing for ordinary output."""
     cleaned = plain(text)
     if not cleaned or cleaned.startswith("{"):
         return None
     lowered = cleaned.lower()
     if lowered.startswith("error") or "not found" in lowered or lowered.startswith("exception"):
-        return row("qa", "error", _clip(_public(cleaned), 240))
+        return row(role, "error", _clip(_public(cleaned), 240))
     return None
 
 
@@ -165,13 +175,13 @@ def _first_sentence(text: str) -> str:
     return _clip(sentence, 160)
 
 
-def format_event(payload: dict[str, Any]) -> str | None:
-    """One readable line for an OpenCode JSON event, or nothing when the event is noise."""
+def format_event(payload: dict[str, Any], role: str = "qa") -> str | None:
+    """One readable line for an OpenCode JSON event, or nothing when the event is noise. `role` names the session."""
     kind = str(payload.get("type") or "")
     if kind == "error":
         error = payload.get("error")
         message = error.get("message") if isinstance(error, dict) else error
-        return row("qa", "error", _clip(_public(str(message or "unknown")), 220))
+        return row(role, "error", _clip(_public(str(message or "unknown")), 220))
     part = payload.get("part") if isinstance(payload.get("part"), dict) else {}
     if kind == "tool_use":
         tool = str(part.get("tool") or "tool")
@@ -179,18 +189,18 @@ def format_event(payload: dict[str, Any]) -> str | None:
         status = str(state.get("status") or "called")
         incoming = state.get("input") if isinstance(state.get("input"), dict) else {}
         if tool in {"task", "agent", "subagent"}:
-            return row("qa", "subagent", _subagent_detail(state, status, incoming))
+            return row(role, "subagent", _subagent_detail(state, status, incoming))
         detail = _tool_detail(tool, incoming)
         if status == "error":
             detail = _clip(f"{detail}  {_public(str(state.get('error') or ''))}".strip(), 200)
         verb = tool if status == "completed" else status
-        return row("qa", verb, detail)
+        return row(role, verb, detail)
     if kind == "step_finish":
-        return row("qa", "step", _step_detail(part))
+        return row(role, "step", _step_detail(part))
     if kind == "text":
         text = part.get("text") or payload.get("text") or ""
         if str(text).strip():
-            return row("qa", "said", _clip(_public(str(text)), 220))
+            return row(role, "said", _clip(_public(str(text)), 220))
     return None
 
 
@@ -258,9 +268,12 @@ def child_message_lines(agent: str, message: dict[str, Any]) -> list[str]:
 
 
 class Logbook:
-    def __init__(self, folder: Path, name: str = "run.log") -> None:
-        # A phase that runs beside another (the UX audit) writes its own log so run.log stays readable.
+    def __init__(self, folder: Path, name: str = "run.log", *, role: str = "qa") -> None:
+        # `role` labels the lines of an agent session: qa, or ux-audit for the audit that runs beside it.
+        if name == "run.log":
+            folder = _ROUTES.get(str(folder.resolve()), folder)
         self.path = folder / name
+        self.role = role
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def line(self, message: str, *, moment: datetime | None = None) -> None:
@@ -284,13 +297,13 @@ class Logbook:
         try:
             payload = json.loads(cleaned)
         except json.JSONDecodeError:
-            note = plain_error(cleaned)
+            note = plain_error(cleaned, self.role)
             if note:
                 self.line(note)
             return
         if not isinstance(payload, dict):
             return
-        text = format_event(payload)
+        text = format_event(payload, self.role)
         if text:
             self.line(text, moment=_when(payload))
 

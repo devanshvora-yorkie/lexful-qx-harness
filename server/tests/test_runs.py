@@ -2,10 +2,12 @@ import contextlib
 import io
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from fastapi import HTTPException
 
@@ -18,19 +20,18 @@ from app.logbook import (
     plain_error,
     session_id_from_text,
 )
+from app import runners
 from app.runners import _preflight_row, _session_expired
 from app.main import health, persona_client_allowed, run_phase1, run_ticket
-from app.bugs import collect_bugs, publish_bugs, render_bugs
+from app.bugs import collect_bugs, publish_bugs, record, render_bugs
 from app.coverage import load_cases, write_coverage_index
 from app.pipeline import (
     _lead_prompt,
     failed_tests,
-    merge_outcomes,
     merge_test_outcomes,
-    outcomes_by_file,
+    outcome_counts,
     test_outcomes_from_report,
     spec_was_patched,
-    specs_for_failures,
     startup_order,
     record_suite_edits,
     suite_files_changed,
@@ -41,21 +42,30 @@ from app.pipeline import (
 )
 from app.runners import checked_in_specs, common_test_dir, personas_requested, planned_specs
 from app.store import (
-    attach_e2e_log,
     create_run,
     find_active_phase1,
     find_active_sha,
     get_run,
     list_runs,
-    publish_folder,
+    record_outcome,
     recover_runs,
-    share_e2e_log,
     relocate_legacy_runs,
     update_run,
 )
 
 
 class LogbookTest(unittest.TestCase):
+    def test_the_ux_audit_writes_its_own_rows_into_run_log(self):
+        said = {"type": "text", "part": {"text": "Checking the create drawer."}}
+        self.assertTrue(format_event(said).startswith("qa "))
+        self.assertTrue(format_event(said, "ux-audit").startswith("ux-audit "))
+        with tempfile.TemporaryDirectory() as raw:
+            book = Logbook(Path(raw), role="ux-audit")
+            book.event(json.dumps(said))
+            text = (Path(raw) / "run.log").read_text(encoding="utf-8")
+        self.assertIn("ux-audit", text)
+        self.assertIn("Checking the create drawer.", text)
+
     def test_tool_and_error_lines(self):
         self.assertIsNone(format_event({"type": "step_start"}))
         shell = format_event({
@@ -225,26 +235,23 @@ class VerdictTest(unittest.TestCase):
     def test_a_required_gap_blocks_signoff(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            (folder / "FEATURE.md").write_text(
-                "## Gaps\n\n"
-                "1. **Exact file-ID matching.** Needs a second file.\n"
-                "2. **Cross-record reference.** Out of scope per PR.\n",
-                encoding="utf-8",
-            )
             (folder / "context-pack.json").write_text(json.dumps({
-                "ticket": {"acceptanceCriteria": "* inline images stay protected after save\n"},
-                "pullRequests": [{"title": "Protect embedded images", "body": "exact file-ID matching and the confirmation dialog"}],
+                "ticket": {"acceptanceCriteria": "* inline images stay protected after save\n* exact file-ID matching\n"},
             }), encoding="utf-8")
+            (folder / "coverage.json").write_text(json.dumps({"criteria": [
+                {"ac": "AC1", "tests": ["TC-LEX-1-001"]},
+                {"ac": "AC2", "gap": "needs a second file with the same id"},
+            ]}), encoding="utf-8")
             (folder / "playwright").mkdir()
-            (folder / "playwright" / "results.json").write_text(json.dumps({
-                "suites": [{"specs": [{"title": "A saved inline image stays protected", "ok": True}]}],
-            }), encoding="utf-8")
+            (folder / "playwright" / "test-outcomes.json").write_text(json.dumps([
+                {"file": "a.spec.ts", "title": "TC-LEX-1-001: a saved inline image stays protected", "status": "passed", "tags": []},
+            ]), encoding="utf-8")
             (folder / "ux-scorecard.json").write_text(json.dumps({
                 "envNotes": ["E2E Demo holds 12 leftover fixtures from this run."],
             }), encoding="utf-8")
             issues = signoff_blockers(folder)
-            self.assertTrue(any(item.startswith("gap:") and "file-ID" in item for item in issues))
-            self.assertFalse(any("Cross-record" in item for item in issues))
+            self.assertTrue(any(item.startswith("gap: AC2") for item in issues))
+            self.assertFalse(any("AC1" in item for item in issues))
             self.assertTrue(any(item.startswith("leftover fixtures:") for item in issues))
 
     def test_product_bugs_stop_the_heal_loop(self):
@@ -385,27 +392,40 @@ class StoreTest(unittest.TestCase):
         failed = get_run(created["id"])
         self.assertEqual(failed["status"], "failed")
         self.assertIn("restarted", failed["error"])
-        report = Path(self.tmp.name) / failed["folder"] / "report.md"
+        report = Path(self.tmp.name) / failed["folder"] / "linear-report.md"
         self.assertIn("restarted", report.read_text(encoding="utf-8"))
+        self.assertFalse((report.parent / "report.md").exists())
         self.assertTrue((report.parent / "qa-result.json").is_file())
 
-    def test_e2e_log_is_stored_on_the_ticket(self):
-        phase1 = create_run(ticket=None, pr=None, sha=None, kind="phase1")
-        phase1_dir = Path(self.tmp.name) / phase1["folder"]
-        (phase1_dir / "run.log").write_text("e2e line\n", encoding="utf-8")
-        (phase1_dir / "report.md").write_text("# journey\n", encoding="utf-8")
-        update_run(phase1["id"], status="completed")
-        waiting = create_run(ticket="LEX-3500", pr=None, sha=None)
-        update_run(waiting["id"], status="queued")
-        self.assertEqual(share_e2e_log(phase1["id"]), [waiting["id"]])
-        saved = Path(self.tmp.name) / waiting["folder"] / "e2e" / "run.log"
-        self.assertEqual(saved.read_text(encoding="utf-8"), "e2e line\n")
-        self.assertTrue((saved.parent / "report.md").is_file())
-        later = create_run(ticket="LEX-3501", pr=None, sha=None)
-        later_dir = Path(self.tmp.name) / later["folder"]
-        self.assertTrue(attach_e2e_log(later_dir))
-        self.assertIn("e2e line", (later_dir / "e2e" / "run.log").read_text(encoding="utf-8"))
-        self.assertFalse(attach_e2e_log(later_dir))
+    def test_a_run_records_what_triggered_it(self):
+        self.assertEqual(create_run(ticket="LEX-3500", pr=None, sha=None)["trigger"], "ticket")
+        self.assertEqual(create_run(ticket=None, pr=12, sha=None)["trigger"], "pr")
+        self.assertEqual(create_run(ticket=None, pr=None, sha="abc", trigger="uat-deploy")["trigger"], "uat-deploy")
+        self.assertEqual(create_run(ticket=None, pr=None, sha=None, kind="phase1")["trigger"], "e2e")
+
+    def test_a_pr_or_deploy_run_starts_under_its_ticket_and_never_moves(self):
+        from app import pipeline
+        with mock.patch.object(runners, "resolve_trigger", return_value={"ticket": "LEX-3642", "pr": 2245}):
+            from_pr = pipeline.create_triggered_run(ticket=None, pr=2245, sha=None, trigger="pr")
+        self.assertTrue(from_pr["folder"].startswith("tickets/LEX-3642/"))
+        self.assertEqual((from_pr["ticket"], from_pr["pr"]), ("LEX-3642", 2245))
+        with mock.patch.object(runners, "resolve_trigger", return_value={"ticket": "LEX-3509", "pr": 2263}):
+            from_deploy = pipeline.create_triggered_run(ticket=None, pr=None, sha="f9251b0ec12ba8bd", trigger="uat-deploy")
+        self.assertTrue(from_deploy["folder"].startswith("tickets/LEX-3509/"))
+        self.assertEqual(from_deploy["pr"], 2263)
+        # GitHub could not be read: the run stays under pull-requests/ or deploys/ for good.
+        with mock.patch.object(runners, "resolve_trigger", return_value={}):
+            unknown_pr = pipeline.create_triggered_run(ticket=None, pr=77, sha=None, trigger="pr")
+            unknown_sha = pipeline.create_triggered_run(ticket=None, pr=None, sha="abcdef1234567890", trigger="uat-deploy")
+        self.assertTrue(unknown_pr["folder"].startswith("pull-requests/pr-77/"))
+        self.assertTrue(unknown_sha["folder"].startswith("deploys/abcdef123456/"))
+        # Preflight later names the ticket: the index learns it, the folder does not move.
+        update_run(unknown_pr["id"], ticket="LEX-1")
+        record_outcome(unknown_pr["id"], summary={"passed": 1, "failed": 0}, verdict="PERFECT")
+        self.assertEqual(get_run(unknown_pr["id"])["folder"], unknown_pr["folder"])
+        self.assertTrue((Path(self.tmp.name) / unknown_pr["folder"] / "manifest.json").is_file())
+        self.assertEqual(relocate_legacy_runs(), [])
+        self.assertEqual(get_run(unknown_pr["id"])["folder"], unknown_pr["folder"])
 
     def test_phase1_folder(self):
         created = create_run(ticket=None, pr=None, sha=None, kind="phase1")
@@ -418,15 +438,18 @@ class StoreTest(unittest.TestCase):
         self.assertTrue((folder / "manifest.json").is_file())
         self.assertFalse((folder / "contents.txt").is_file())
         self.assertFalse((folder / "specs").exists())
-        published = publish_folder(
+        recorded = record_outcome(
             created["id"],
             summary={"passed": 57, "failed": 2, "skipped": 0, "flaky": 0},
             verdict="NEEDS_REVISION",
         )
-        self.assertIn("57-passed_2-failed_needs-revision", published)
-        self.assertTrue((Path(self.tmp.name) / published / "report.md").exists() or (Path(self.tmp.name) / published / "manifest.json").is_file())
-        self.assertFalse(folder.exists())
-        self.assertEqual(get_run(created["id"])["folder"], published)
+        # The folder never moves: the result goes into the index and the manifest.
+        self.assertEqual(recorded, created["folder"])
+        self.assertTrue(folder.is_dir())
+        self.assertEqual(get_run(created["id"])["folder"], created["folder"])
+        self.assertEqual(get_run(created["id"])["result"], "57 passed, 2 failed, needs revision")
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["result"], "57 passed, 2 failed, needs revision")
         update_run(created["id"], status="queued")
         self.assertEqual(find_active_phase1()["id"], created["id"])
         update_run(created["id"], status="completed")
@@ -451,10 +474,8 @@ class StoreTest(unittest.TestCase):
         moved = relocate_legacy_runs()
         self.assertEqual(moved, [run_id])
         folder = get_run(run_id)["folder"]
-        self.assertEqual(
-            folder,
-            "phase-1/2026-10-23_1147Z_f35a_57-passed_2-failed_needs-revision",
-        )
+        self.assertEqual(folder, "phase-1/2026-10-23_1147Z_f35a")
+        self.assertEqual(get_run(run_id)["result"], "57 passed, 2 failed, needs revision")
         target = root / folder
         self.assertEqual((target / "report.md").read_text(encoding="utf-8"), "# hi\n")
         self.assertFalse((target / "contents.txt").is_file())
@@ -486,6 +507,15 @@ class ApiTest(unittest.TestCase):
         again = run_phase1()
         self.assertTrue(again["skipped"])
         self.assertEqual(again["runId"], started["runId"])
+
+    def test_a_ticket_queues_one_run_and_no_separate_e2e_run(self):
+        queued = run_ticket("LEX-3700")
+        rows = list_runs()
+        self.assertEqual([row["id"] for row in rows], [queued["runId"]])
+        self.assertEqual(rows[0]["kind"], "ticket")
+        self.assertEqual(rows[0]["trigger"], "ticket")
+        self.assertTrue(rows[0]["folder"].startswith("tickets/LEX-3700/"))
+        self.assertNotIn("phase1RunId", queued)
 
 
 class PersonaTest(unittest.TestCase):
@@ -567,26 +597,23 @@ class CoverageTest(unittest.TestCase):
             guessed = load_cases(Path(tmp))
             self.assertEqual(guessed[0].type, "positive")
 
-    def test_failed_file_counts_replace_only_that_file(self):
-        def report(file: str, results: list[tuple[str, str]]) -> dict:
-            return {"suites": [{"file": file, "specs": [
-                {"title": title, "ok": status == "expected", "file": file, "tests": [{"status": status}]}
-                for title, status in results
-            ], "suites": []}]}
+    def test_a_rerun_replaces_only_the_tests_it_ran(self):
+        def report(file: str, rows: list[tuple[str, str]], describe: str = "") -> dict:
+            specs = [{"title": title, "file": file, "tests": [{"status": status}]} for title, status in rows]
+            inner = [{"title": describe, "file": file, "specs": specs}] if describe else []
+            return {"suites": [{"title": file, "file": file, "specs": [] if describe else specs, "suites": inner}]}
 
-        before = outcomes_by_file(report("search/search.spec.ts", [("TC-01", "expected"), ("TC-06", "unexpected")]))
-        before.update(outcomes_by_file(report("asset crud/assets-crud.spec.ts", [("AC-011", "expected")])))
-        after = outcomes_by_file(report("search/search.spec.ts", [("TC-01", "expected"), ("TC-06", "expected")]))
-        merged = merge_outcomes(before, after, ["e2e test cases/search/search.spec.ts"])
-        self.assertEqual(merged, {"passed": 3, "failed": 0, "skipped": 0, "flaky": 0})
-        failed = report("search/search.spec.ts", [("TC-06", "unexpected")])
-        self.assertEqual(
-            specs_for_failures(
-                ["e2e test cases/search/search.spec.ts", "e2e test cases/asset crud/assets-crud.spec.ts"],
-                failed,
-            ),
-            ["e2e test cases/search/search.spec.ts"],
-        )
+        before = test_outcomes_from_report(report("search.spec.ts", [("TC-01", "expected"), ("TC-06", "unexpected"), ("TC-07", "unexpected")]))
+        # The heal renamed TC-07 to TC-07b; the rerun ran TC-06 and the new name only.
+        listed = test_outcomes_from_report(report("search.spec.ts", [("TC-01", "skipped"), ("TC-06", "skipped"), ("TC-07b", "skipped")]))
+        merged = merge_test_outcomes(before, report("search.spec.ts", [("TC-06", "expected"), ("TC-07b", "expected")]), listed)
+        self.assertEqual({k: v["status"] for k, v in merged["search.spec.ts"].items()},
+                         {"TC-01": "passed", "TC-06": "passed", "TC-07b": "passed"})
+        self.assertEqual(outcome_counts(merged), {"passed": 3, "failed": 0, "skipped": 0, "flaky": 0})
+        # Two tests with one title in different describes stay apart.
+        both = test_outcomes_from_report(report("a.spec.ts", [("clear selection", "expected")], "Filters"))
+        both["a.spec.ts"].update(test_outcomes_from_report(report("a.spec.ts", [("clear selection", "unexpected")], "Bulk"))["a.spec.ts"])
+        self.assertEqual(sorted(both["a.spec.ts"]), ["Bulk › clear selection", "Filters › clear selection"])
 
     def test_server_messages_carry_facts_and_the_rules_live_in_the_skill(self):
         text = _lead_prompt(Path("/tmp/runs/tickets/LEX-1/attempt"), "LEX-1", {})
@@ -623,98 +650,82 @@ class CoverageTest(unittest.TestCase):
         for file_key, titles in test_outcomes_from_report(smoke_fail).items():
             before.setdefault(file_key, {}).update(titles)
         smoke_pass = report("specs/move-records-smoke.spec.ts", [("TC-002", "expected")])
-        merged = merge_test_outcomes(before, smoke_pass, ["specs/move-records-smoke.spec.ts"])
-        self.assertEqual(merged["move-records-bvt.spec.ts"]["TC-001"], "passed")
-        self.assertEqual(merged["move-records-smoke.spec.ts"]["TC-002"], "passed")
+        merged = merge_test_outcomes(before, smoke_pass)
+        self.assertEqual(merged["move-records-bvt.spec.ts"]["TC-001"]["status"], "passed")
+        self.assertEqual(merged["move-records-smoke.spec.ts"]["TC-002"]["status"], "passed")
+
+    def test_outcomes_keep_the_tags_the_spec_declared(self):
+        report = {"suites": [{"file": "a.spec.ts", "specs": [
+            {"title": "TC-1: a", "file": "a.spec.ts", "tags": ["@negative", "@sanity"], "tests": [{"status": "flaky"}]},
+        ], "suites": []}]}
+        self.assertEqual(test_outcomes_from_report(report), {"a.spec.ts": {"TC-1: a": {"status": "flaky", "tags": ["@negative", "@sanity"]}}})
+        self.assertEqual(failed_tests({"suites": [{"specs": [{"title": "t", "ok": False, "tests": [{"status": "unexpected", "results": [
+            {"status": "failed", "error": {"message": "\u001b[2mexpect(\u001b[22mreceived).toContain"}}]}]}]}]})[0]["error"],
+            "expect(received).toContain")
 
 
 class BugReportTest(unittest.TestCase):
-    def test_bug_record_uses_the_required_format_and_groups_cases(self):
-        text = render_bugs(
-            [{
-                "area": "Documents",
-                "failure": "Create stays enabled when the name is empty",
-                "context": "LEX-3717 document name guard",
-                "severity": "High",
-                "priority": "P3",
-                "severityReason": "A technician can save a document with no name.",
-                "description": "The create drawer enables Create while Name is empty. The grid then shows a blank row.",
-                "affectedTests": [
-                    {"id": "TC-LEX-3717-002", "suite": "Smoke", "title": "Create is blocked while the name is empty", "note": "Create stayed enabled"},
-                    {"id": "TC-LEX-3717-004", "suite": "Regression", "title": "Reload keeps the blank name", "note": "Blank name survived reload"},
-                ],
-                "steps": [
-                    "Navigate to https://e2e-test.uat.lexful.net/docs/d/all/system.document as Admin",
-                    "Leave Name empty and click Create",
-                ],
-                "expected": "Create stays disabled, and no document is written.",
-                "actual": "POST /v1/assets/system.document returns 201.",
-                "rootCause": "Unknown — requires investigation",
-                "evidence": [{"test": "TC-LEX-3717-002", "step": 2, "detail": "expected disabled, received enabled"}],
-                "labels": ["documents", "create"],
-            }],
-            ticket="LEX-3717",
-            url="https://e2e-test.uat.lexful.net",
-            build="unknown",
-            when="2026-10-27",
-            cycle="LEX-3717-cycle-1",
-        )
-        self.assertIn("Title:          Documents — Create stays enabled when the name is empty — LEX-3717 document name guard", text)
-        self.assertIn("Type:           Bug", text)
-        self.assertIn("Severity:       High", text)
-        self.assertIn("Priority:       P1", text)
-        self.assertNotIn("P3", text)
-        self.assertIn("A technician can save a document with no name.", text)
-        self.assertNotIn("Severity reason:", text)
-        self.assertIn("URL:     https://e2e-test.uat.lexful.net", text)
-        self.assertIn("Build:   unknown", text)
-        self.assertIn("Date:    2026-10-27", text)
-        self.assertNotIn("Affected test cases:", text)
-        self.assertNotIn("Execution cycle:", text)
-        self.assertIn("1. Navigate to https://e2e-test.uat.lexful.net/docs/d/all/system.document as Admin", text)
-        self.assertIn("Expected Result:", text)
-        self.assertIn("Actual Result:", text)
-        self.assertIn("Root Cause:", text)
-        self.assertIn("Unknown — requires investigation", text)
-        self.assertIn("- [TC-LEX-3717-002 step 2]: expected disabled, received enabled", text)
-        self.assertNotIn("Fix Version:", text)
-        self.assertIn("qa-generated", text)
-        self.assertIn("regression", text)
-        self.assertNotIn("Affected Test Cases Detail:", text)
+    BUG = {
+        "area": "Documents create drawer",
+        "failure": "Create is enabled while the name is empty, and saves a blank document",
+        "context": "LEX-3717 document name guard",
+        "severity": "High",
+        "priority": "P3",
+        "severityReason": "A technician can save a document with no name.",
+        "description": "The create drawer enables Create while Name is empty. The grid then shows a blank row.",
+        "persona": "admin",
+        "preconditions": ["Organization E2E Demo exists"],
+        "affectedTests": [
+            {"id": "TC-LEX-3717-002", "title": "Create is blocked while the name is empty"},
+            "TC-LEX-3717-004",
+        ],
+        "steps": [
+            "1. Open https://e2e-test.uat.lexful.net/docs/d/all/system.document",
+            "Click New, leave Name empty and click Create",
+        ],
+        "expected": "Create stays disabled, and no document is written.",
+        "actual": "POST /v1/assets/system.document returns 201.",
+        "rootCause": "Unknown",
+        "evidence": [{"test": "TC-LEX-3717-002", "step": 2, "detail": "expected disabled, received enabled"}],
+        "confidence": "confirmed",
+    }
 
-    def test_skipped_and_spec_failures_are_not_filed(self):
+    def test_a_bug_reads_as_a_ticket(self):
+        filed = record(self.BUG, source="triage", ticket="LEX-3717", url="https://e2e-test.uat.lexful.net",
+                       build="4d9b9cf2", when="2026-10-27", screenshots=["bug-evidence/bug-1.png"])
+        # The title says what is wrong. The ticket and the test ids are in the body, not the title.
+        self.assertEqual(filed["title"], "Documents create drawer: Create is enabled while the name is empty, and saves a blank document")
+        self.assertEqual((filed["severity"], filed["priority"]), ("High", "P1"))
+        self.assertEqual(filed["steps"][0], "Open https://e2e-test.uat.lexful.net/docs/d/all/system.document")
+        self.assertEqual(filed["affectedTests"], ["TC-LEX-3717-002", "TC-LEX-3717-004"])
+        text = render_bugs([filed])
+        for part in (
+            "## Documents create drawer: Create is enabled while the name is empty, and saves a blank document",
+            "| High | P1 | confirmed | LEX-3717 · TC-LEX-3717-002, TC-LEX-3717-004 |",
+            "**What happens**", "- Signed in as: admin", "**Before you start**", "- Organization E2E Demo exists",
+            "**Steps to reproduce**", "1. Open https://e2e-test.uat.lexful.net/docs/d/all/system.document",
+            "2. Click New, leave Name empty and click Create", "**Expected**", "**Actual**",
+            "**Why it matters**", "A technician can save a document with no name.",
+            "- TC-LEX-3717-002 2: expected disabled, received enabled", "![bug-1.png](bug-evidence/bug-1.png)",
+        ):
+            self.assertIn(part, text)
+        self.assertNotIn("P3", text)
+        self.assertNotIn("LEX-3717 document name guard", filed["title"])
+
+    def test_a_bug_without_steps_says_so_instead_of_inventing_them(self):
+        text = render_bugs([record({"area": "Search", "failure": "x"}, source="triage", ticket="LEX-1", url="u", build="b")])
+        self.assertIn("Not recorded by the agent. Replay the affected test: none.", text)
+        self.assertNotIn("Repeat the actions", text)
+
+    def test_skipped_and_deprecated_bugs_are_not_filed(self):
         bugs = collect_bugs({
-            "failures": [
-                {"class": "spec", "action": "patched", "title": "renamed button"},
-                {"class": "bug", "action": "skipped", "title": "deprecated path"},
-                {"class": "bug", "action": "reported", "title": "Deprecated: old drawer", "deprecated": True},
-            ],
+            "failures": [{"class": "spec", "action": "patched", "title": "renamed button"}],
             "bugs": [
                 {"title": "Deprecated case", "deprecated": True, "severity": "Low"},
+                {"failure": "not reproduced", "status": "skipped"},
             ],
-        }, [{"title": "renamed button", "file": "e2e test cases/search/search.spec.ts", "error": "locator"}])
+        })
         self.assertEqual(bugs, [])
-
-    def test_classification_and_a_missing_fixture_are_not_product_bugs(self):
-        bugs = collect_bugs({
-            "failures": [{
-                "classification": "spec",
-                "action": "reported",
-                "test": "TC-LEX-2328-001: Embedded badge shows on an image",
-                "reason": "Environment blocker. The page was never opened.",
-            }],
-            "bugs": [],
-        }, [{
-            "title": "TC-LEX-2328-001: Embedded badge shows on an image attachment",
-            "file": "specs/lex-2328-bvt.spec.ts",
-            "error": "locator was not on the page",
-        }])
-        self.assertEqual(bugs, [])
-        self.assertEqual(collect_bugs({}, [{
-            "title": "TC-LEX-2328-002: delete stays disabled",
-            "file": "specs/lex-2328-smoke.spec.ts",
-            "error": "Error: fixture not configured: missing embeddedImage",
-        }]), [])
 
     def test_a_gap_is_not_filed_even_when_the_healer_also_wrote_a_bug(self):
         bugs = collect_bugs({
@@ -729,49 +740,143 @@ class BugReportTest(unittest.TestCase):
                 "affectedTests": ["TC-LEX-2328-011"],
                 "severity": "Low",
             }],
-        }, [{
-            "title": "TC-LEX-2328-011: Overview tab shows Embedded",
-            "file": "specs/lex-2328-regression.spec.ts",
-            "error": "locator not found: Overview",
-        }])
+        })
         self.assertEqual(bugs, [])
 
-    def test_unclassified_failure_still_gets_a_record(self):
+    def test_an_unclassified_failure_is_an_open_issue_not_a_bug(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            wrote = publish_bugs(
-                folder,
-                ticket="LEX-3717",
-                run_id="LEX-3717-1",
-                url="https://e2e-test.uat.lexful.net",
-                build="unknown",
-                failed=1,
-                triage={},
-                still_failing=[{
-                    "title": "TC-LEX-3717-003: reload drops the tag",
-                    "file": "runs/tickets/LEX-3717/specs/documents-sanity.spec.ts",
-                    "error": "expected tag, received none",
-                }],
-                when="2026-10-27",
-                cycle=2,
-            )
-            self.assertTrue(wrote)
-            text = (folder / "bugs.md").read_text(encoding="utf-8")
-            self.assertIn("Severity:       Medium", text)
-            self.assertIn("Priority:       P2", text)
-            self.assertIn("- [TC-LEX-3717-003 step 1]: expected tag, received none", text)
-            self.assertIn("Medium until the impact is confirmed.", text)
-            self.assertFalse(publish_bugs(
-                folder,
-                ticket="LEX-3717",
-                run_id="LEX-3717-1",
-                url="https://e2e-test.uat.lexful.net",
-                build="unknown",
-                failed=0,
-                triage={"bugs": [{"area": "Documents", "failure": "gone", "severity": "High"}]},
-                still_failing=[],
-            ))
+            filed = publish_bugs(folder, ticket="LEX-3717", run_id="LEX-3717-1", url="u", build="b", failed=1,
+                                 triage={"failures": [{"class": "spec", "title": "TC-LEX-3717-003", "action": "reported"}]})
+            self.assertFalse(filed)
+            self.assertFalse((folder / "bugs.md").exists())
+            self.assertFalse(publish_bugs(folder, ticket="LEX-3717", run_id="r", url="u", build="b", failed=0,
+                                          triage={"bugs": [{"area": "Documents", "failure": "gone", "severity": "High"}]}))
 
+
+
+class E2EStageTest(unittest.TestCase):
+    """The E2E User Journey stage of a ticket run, with Playwright replaced by a stub."""
+
+    def setUp(self):
+        root = Path(__file__).resolve().parents[2] / "runs"
+        root.mkdir(exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(dir=root)
+        os.environ["QA_RUNS_DIR"] = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_stage_lives_in_the_ticket_run_and_logs_to_its_run_log(self):
+        from unittest import mock
+        from app import pipeline, runners, summary
+        from app.store import run_dir
+
+        row = create_run(ticket="LEX-3700", pr=None, sha="abc", trigger="uat-deploy")
+        folder = run_dir(row["id"])
+
+        def fake_playwright(run_folder, specs, **_):
+            Logbook(run_folder).row("playwright", "result", "stub")
+            report = {"stats": {"expected": 2}, "suites": [{"file": "search.spec.ts", "specs": [
+                {"title": "TC-01: finds", "file": "search.spec.ts", "tags": ["positive", "smoke"], "tests": [{"status": "expected"}]},
+                {"title": "TC-02: empty", "file": "search.spec.ts", "tags": ["negative", "smoke"], "tests": [{"status": "expected"}]},
+            ]}]}
+            (run_folder / "playwright").mkdir(parents=True, exist_ok=True)
+            (run_folder / "playwright" / "results.json").write_text(json.dumps(report), encoding="utf-8")
+            return {"exitCode": 0, "summary": {"passed": 2, "failed": 0, "skipped": 0, "flaky": 0}}
+
+        with mock.patch.object(runners, "checked_in_specs", return_value=["e2e test cases/search/search.spec.ts"]), \
+                mock.patch.object(runners, "write_cli_config", return_value=None), \
+                mock.patch.object(runners, "run_playwright", side_effect=fake_playwright):
+            pipeline._e2e_stage(row["id"], row, folder, Logbook(folder))
+        e2e = folder / "e2e"
+        self.assertEqual(json.loads((e2e / "qa-result.json").read_text())["verdict"], "PERFECT")
+        outcomes = json.loads((e2e / "playwright" / "test-outcomes.json").read_text())
+        self.assertEqual([o["tags"] for o in outcomes], [["positive", "smoke"], ["negative", "smoke"]])
+        log = (folder / "run.log").read_text()
+        self.assertIn("── E2E User Journey TCs", log)
+        self.assertIn("playwright        result          stub", log)
+        self.assertFalse((e2e / "run.log").exists())
+        phases = [p["name"] for p in summary.get(row["id"]).phases]
+        self.assertIn("e2e playwright", phases)
+        self.assertEqual(runners._key(e2e), runners._key(folder))
+        self.assertEqual([r["id"] for r in list_runs()], [row["id"]])
+
+
+
+class HealRerunTest(unittest.TestCase):
+    """What runs again after a heal, with Playwright replaced by a stub."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def report(rows):
+        return {"suites": [{"title": f, "file": f, "specs": [
+            {"title": t, "file": f, "tests": [{"status": st}]} for ff, t, st in rows if ff == f], "suites": []}
+            for f in sorted({r[0] for r in rows})]}
+
+    def test_only_the_tests_that_did_not_pass_run_again(self):
+        from unittest import mock
+        from app import pipeline, runners
+        specs = ["e2e test cases/asset crud/assets-crud.spec.ts", "e2e test cases/search/search.spec.ts"]
+        outcomes = test_outcomes_from_report(self.report([
+            ("assets-crud.spec.ts", "AC-01 opens", "expected"), ("assets-crud.spec.ts", "AC-02 (saves)", "unexpected"),
+            ("search.spec.ts", "TC-01", "expected")]))
+        calls = []
+
+        def fake_run(folder, files, grep="", **_):
+            calls.append((files, grep))
+            (folder / "playwright").mkdir(parents=True, exist_ok=True)
+            (folder / "playwright" / "results.json").write_text(json.dumps(self.report([
+                ("assets-crud.spec.ts", "AC-02 (saves)", "expected"), ("assets-crud.spec.ts", "AC-03 new", "expected")])))
+            return {"exitCode": 0, "summary": {}}
+
+        listing = self.report([("assets-crud.spec.ts", "AC-01 opens", "skipped"), ("assets-crud.spec.ts", "AC-02 (saves)", "skipped"),
+                               ("assets-crud.spec.ts", "AC-03 new", "skipped")])
+        with mock.patch.object(runners, "list_tests", return_value=listing), mock.patch.object(runners, "run_playwright", side_effect=fake_run):
+            merged = pipeline._rerun_not_passed(self.folder, specs, outcomes, Logbook(self.folder), 1)
+        files, grep = calls[0]
+        self.assertEqual(files, ["e2e test cases/asset crud/assets-crud.spec.ts"])
+        self.assertEqual(sorted(grep.split("|")), sorted([re.escape("AC-02 (saves)"), re.escape("AC-03 new")]))
+        self.assertNotIn("AC-01", grep)
+        self.assertEqual(outcome_counts(merged), {"passed": 4, "failed": 0, "skipped": 0, "flaky": 0})
+
+    def test_the_confirm_pass_runs_edited_folders_and_files_still_failing(self):
+        from unittest import mock
+        from app import pipeline, runners
+        from app.settings import get_settings
+        root = get_settings().root
+        specs = ["e2e test cases/asset crud/assets-crud.spec.ts", "e2e test cases/asset crud/move-records.spec.ts",
+                 "e2e test cases/search/search.spec.ts", "e2e test cases/document editing/doceditspec.spec.ts"]
+        outcomes = test_outcomes_from_report(self.report([("doceditspec.spec.ts", "TC-DOC-010", "unexpected"),
+                                                          ("search.spec.ts", "TC-01", "expected")]))
+        seen = []
+
+        def fake_run(folder, files, **_):
+            seen.extend(files)
+            (folder / "playwright").mkdir(parents=True, exist_ok=True)
+            (folder / "playwright" / "results.json").write_text(json.dumps(self.report([("doceditspec.spec.ts", "TC-DOC-010", "unexpected")])))
+            return {"exitCode": 1, "summary": {}}
+
+        with mock.patch.object(runners, "run_playwright", side_effect=fake_run):
+            pipeline._confirm_after_heals(self.folder, specs, outcomes, {(root / "e2e test cases/asset crud").resolve()}, Logbook(self.folder))
+        self.assertEqual(seen, [specs[0], specs[1], specs[3]])
+
+class CliTest(unittest.TestCase):
+    def test_bad_arguments_exit_64_without_creating_a_run(self):
+        from app.cli import main
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["QA_RUNS_DIR"] = tmp
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main([]), 64)
+                self.assertEqual(main(["--ticket", "ABC-1"]), 64)
+                self.assertEqual(main(["--e2e", "--sha", "abc"]), 64)
+            self.assertEqual(list_runs(), [])
 
 if __name__ == "__main__":
     unittest.main()

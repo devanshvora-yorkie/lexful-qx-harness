@@ -10,8 +10,11 @@ export default defineConfig({
   expect: {
     timeout: 10000,
   },
-  // Files run in parallel workers (QA_PW_WORKERS); tests inside one file keep their order.
-  fullyParallel: false,
+  // Each test goes to the next free worker (QA_PW_WORKERS of them), so one long file no longer runs alone
+  // on one worker while the others idle. The worker count, not this, decides how many browsers hit UAT.
+  // A file whose tests depend on each other declares test.describe.configure({ mode: 'serial' }), and a
+  // file that must keep its order declares mode 'default'. QA_PW_FULLY_PARALLEL=false restores file-level.
+  fullyParallel: process.env.QA_PW_FULLY_PARALLEL !== 'false',
   forbidOnly: !!process.env.CI,
   // One retry for a transient UAT 403. A second failure is a real result for the healer.
   retries: 1,

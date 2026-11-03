@@ -15,13 +15,17 @@ services:
       AWS_REGION: ${AWS_REGION:-us-east-1}
       # OpenCode reads the bearer token. .env stores it as BEDROCK_API_KEY.
       AWS_BEARER_TOKEN_BEDROCK: ${BEDROCK_API_KEY:-}
-      # E2E before each ticket when true. false = ticket only. npm run e2e always queues E2E explicitly.
+      # true: each ticket run starts with the E2E User Journey TCs, stored in that run's e2e/ folder.
+      # false: ticket only. npm run e2e runs the checked-in suite on its own, stored in runs/phase-1/.
       QA_PHASE1_ON_START: ${QA_PHASE1_ON_START:-true}
       # UI/UX audit. Set QA_RUN_UX_AUDIT=false to run functional QA only.
       QA_RUN_UX_AUDIT: ${QA_RUN_UX_AUDIT:-true}
       QA_HEAL_FRESH_SESSION: ${QA_HEAL_FRESH_SESSION:-true}
-      # Playwright workers: spec files run in parallel, tests inside a file stay in order.
+      # Playwright workers: how many browsers hit UAT at once. Raising it raises CloudFront 403 blocks.
       QA_PW_WORKERS: ${QA_PW_WORKERS:-3}
+      # true: each test goes to the next free worker, so a long file does not run alone. A file that needs
+      # its order declares test.describe.configure({ mode: 'serial' | 'default' }). false: one file per worker.
+      QA_PW_FULLY_PARALLEL: ${QA_PW_FULLY_PARALLEL:-true}
       # Runs executed at the same time. Each run gets its own git worktree; the suite is locked.
       QA_MAX_PARALLEL_RUNS: ${QA_MAX_PARALLEL_RUNS:-1}
       # Resume an OpenCode session this many times after a dropped connection or idle kill.

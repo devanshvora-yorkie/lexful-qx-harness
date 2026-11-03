@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.pipeline import _cost_section, phase_costs
+from app.pipeline import phase_costs
 
 
 def step(output, read, cost):
@@ -23,14 +23,22 @@ class CostTest(unittest.TestCase):
             phases = phase_costs(folder)
             self.assertEqual(phases["Explore + Author"], {"steps": 2, "output": 150, "cacheRead": 3000, "cost": 0.75})
             self.assertEqual(phases["Heal"]["steps"], 2)
-            text = "\n".join(_cost_section(folder))
-            self.assertIn("| UX audit | 1 |", text)
-            self.assertIn("**$1.00**", text)
-            self.assertTrue((folder / "cost.json").is_file())
+            self.assertEqual(phases["UX audit"]["steps"], 1)
 
-    def test_no_logs_no_section(self):
+    def test_the_e2e_stage_of_a_ticket_run_is_counted_apart(self):
         with tempfile.TemporaryDirectory() as raw:
-            self.assertEqual(_cost_section(Path(raw)), [])
+            folder = Path(raw)
+            (folder / "opencode").mkdir()
+            (folder / "opencode" / "heal-1.jsonl").write_text(step(10, 0, 0.2) + "\n")
+            (folder / "e2e" / "opencode").mkdir(parents=True)
+            (folder / "e2e" / "opencode" / "heal-1.jsonl").write_text(step(10, 0, 0.3) + "\n")
+            phases = phase_costs(folder)
+            self.assertEqual(phases["Heal"]["cost"], 0.2)
+            self.assertEqual(phases["E2E Heal"]["cost"], 0.3)
+
+    def test_no_logs_no_phases(self):
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertEqual(phase_costs(Path(raw)), {})
 
 
 if __name__ == "__main__":

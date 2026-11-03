@@ -3,13 +3,21 @@ import process from 'node:process';
 const base = process.env.QA_SERVER_URL || `http://127.0.0.1:${process.env.QA_SERVER_PORT || '8787'}`;
 const phase1 = process.argv.includes('--phase1');
 const ticket = process.argv.find((arg) => /^LEX-\d+$/i.test(arg))?.toUpperCase();
+const prIndex = process.argv.indexOf('--pr');
+const pr = prIndex >= 0 ? Number(process.argv[prIndex + 1]) : null;
 const forceNew = process.argv.includes('--new');
 const resume = process.argv.includes('--resume');
 const active = new Set(['accepted', 'queued', 'preflight', 'agent', 'execute', 'heal', 'audit', 'verify', 'promote']);
 const done = new Set(['completed', 'needs_revision', 'halted', 'failed']);
 
-if (!phase1 && !ticket) {
-  console.error('Usage: npm run ticket -- LEX-3500    Feature Specific TCs');
+if (prIndex >= 0 && (!Number.isInteger(pr) || pr <= 0)) {
+  console.error('Usage: npm run ticket -- --pr 2263   a pull request number');
+  process.exit(1);
+}
+
+if (!phase1 && !ticket && !pr) {
+  console.error('Usage: npm run ticket -- --pr 2263   the ticket is read from the PR title, branch or body');
+  console.error('       npm run ticket -- LEX-3500    Feature Specific TCs');
   console.error('       npm run ticket -- LEX-3500 --resume   continue a failed run from Playwright');
   console.error('       npm run e2e                  E2E User Journey TCs only');
   process.exit(1);
@@ -36,15 +44,6 @@ async function readJson(path, options = {}) {
     throw new Error(body.detail || `HTTP ${response.status}`);
   }
   return body;
-}
-
-async function e2eBeforeTicket() {
-  try {
-    const health = await readJson('/health');
-    return health.phase1BeforeTicket !== false;
-  } catch {
-    return true;
-  }
 }
 
 function appendLog(seen, text) {
@@ -112,7 +111,6 @@ async function follow(id, label) {
 }
 
 let runId;
-let phase1RunId;
 
 try {
   if (!phase1 && resume && ticket) {
@@ -131,16 +129,18 @@ try {
     const inFlight = (listed.runs || []).find((row) => active.has(row.status));
     if (inFlight) {
       console.error(`${ticket} is already running as ${inFlight.id} (${inFlight.status}).`);
-      console.error(`One worker runs at a time. A new --new run would sit behind it (E2E included).`);
+      console.error(`One worker runs at a time. A new --new run would sit behind it.`);
       console.error(`Follow the active run:  npm run ticket -- ${ticket}`);
       console.error(`Or wait until it finishes, then use --new again.`);
       process.exit(1);
     }
   }
   if (!forceNew && !runId) {
-    const listed = await readJson(phase1 ? '/runs' : `/runs?ticket=${ticket}`);
+    const listed = await readJson(phase1 || pr ? '/runs' : `/runs?ticket=${ticket}`);
     const current = (listed.runs || []).find((row) => (
-      active.has(row.status) && (phase1 ? row.kind === 'phase1' : true)
+      active.has(row.status)
+      && (phase1 ? row.kind === 'phase1' : true)
+      && (!pr || row.pr === pr)
     ));
     if (current) {
       runId = current.id;
@@ -148,13 +148,10 @@ try {
     }
   }
   if (!runId) {
-    const started = await readJson(phase1 ? '/run/phase1' : `/run/${ticket}`, { method: 'POST' });
+    const path = phase1 ? '/run/phase1' : ticket ? `/run/${ticket}` : `/run/pr/${pr}`;
+    const started = await readJson(path, { method: 'POST' });
     runId = started.runId;
-    phase1RunId = started.phase1RunId || null;
     console.log(`${started.skipped ? 'following' : 'started'} ${runId} (${started.status})`);
-    if (phase1RunId && phase1RunId !== runId) {
-      console.log(`E2E queued first  ${phase1RunId}`);
-    }
   }
 } catch (error) {
   console.error(`Cannot reach ${base}. Start it with: npm run serve`);
@@ -165,7 +162,7 @@ try {
 try {
   const health = await readJson('/health');
   const busy = health.runningRun;
-  if (busy && busy.id !== runId && busy.id !== phase1RunId) {
+  if (busy && busy.id !== runId) {
     const name = busy.ticket ? `${busy.ticket}  ${busy.id}` : busy.id;
     console.log(`Worker busy: ${name} (${busy.status}). Queued runs stream when it is their turn.`);
   }
@@ -173,22 +170,9 @@ try {
   // health is optional for the hint
 }
 
-if (!phase1 && (await e2eBeforeTicket())) {
-  let e2eId = phase1RunId;
-  if (!e2eId) {
-    const listed = await readJson('/runs');
-    const e2e = (listed.runs || []).find((row) => row.kind === 'phase1' && active.has(row.status));
-    e2eId = e2e?.id;
-  }
-  if (e2eId && e2eId !== runId) {
-    await follow(e2eId, 'E2E User Journey TCs');
-    console.log('');
-    console.log('E2E User Journey TCs finished. Feature Specific TCs continues.');
-  }
-}
-
+// A ticket run's log already carries its E2E User Journey stage, so following the ticket is enough.
 const code = await follow(
   runId,
-  phase1 ? 'E2E User Journey TCs' : `Feature Specific TCs  ${ticket}`,
+  phase1 ? 'E2E User Journey TCs' : `Feature Specific TCs  ${ticket || `PR #${pr}`}`,
 );
 process.exit(code);

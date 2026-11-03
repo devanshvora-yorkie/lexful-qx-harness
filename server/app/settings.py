@@ -54,10 +54,11 @@ class Settings:
     playwright_timeout_seconds: int
     heal_attempts: int
     qa_url: str
-    phase1_on_start: bool  # QA_PHASE1_ON_START: queue E2E before each ticket, not on container boot
+    e2e_with_ticket: bool  # QA_PHASE1_ON_START: each ticket run starts with the E2E User Journey stage, stored in its e2e/
     run_ux_audit: bool = True
     heal_fresh_session: bool = True  # QA_HEAL_FRESH_SESSION: heals read the run files, not the Explore conversation
-    pw_workers: int = 3  # QA_PW_WORKERS: Playwright workers. Files run in parallel; tests inside a file stay serial
+    pw_workers: int = 3  # QA_PW_WORKERS: Playwright workers, the browsers that hit UAT at once
+    pw_fully_parallel: bool = True  # QA_PW_FULLY_PARALLEL: each test goes to the next free worker; false = one file per worker
     max_parallel_runs: int = 1  # QA_MAX_PARALLEL_RUNS: runs the server executes at the same time
     agent_retries: int = 1  # QA_AGENT_RETRIES: resumes of an OpenCode session after a dropped connection
     agent_user: str = "qa"  # QA_AGENT_USER: OpenCode and Playwright run as this user. Empty keeps the server user
@@ -92,10 +93,11 @@ def get_settings() -> Settings:
         playwright_timeout_seconds=int(os.getenv("QA_PLAYWRIGHT_TIMEOUT_SECONDS", "2700")),
         heal_attempts=int(os.getenv("QA_HEAL_ATTEMPTS", "3")),
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
-        phase1_on_start=_flag("QA_PHASE1_ON_START", default=True),
+        e2e_with_ticket=_flag("QA_PHASE1_ON_START", default=True),
         run_ux_audit=_flag("QA_RUN_UX_AUDIT", default=True),
         heal_fresh_session=_flag("QA_HEAL_FRESH_SESSION", default=True),
         pw_workers=_int("QA_PW_WORKERS", 3, low=1),
+        pw_fully_parallel=_flag("QA_PW_FULLY_PARALLEL", default=True),
         max_parallel_runs=_int("QA_MAX_PARALLEL_RUNS", 1, low=1),
         agent_retries=_int("QA_AGENT_RETRIES", 1),
         agent_user=os.getenv("QA_AGENT_USER", "qa").strip(),

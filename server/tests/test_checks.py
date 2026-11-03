@@ -54,9 +54,11 @@ class CoverageAndHypothesesTest(unittest.TestCase):
         (folder / "context-pack.json").write_text(json.dumps(pack))
         return folder
 
-    def test_no_coverage_file_falls_back(self):
+    def test_no_coverage_file_is_a_blocker_not_a_guess(self):
         with tempfile.TemporaryDirectory() as raw:
-            self.assertIsNone(checks.coverage_blockers(self._folder(raw), []))
+            issues = checks.coverage_blockers(self._folder(raw), [])
+            self.assertEqual(len(issues), 1)
+            self.assertIn("coverage.json is missing", issues[0])
 
     def test_each_criterion_is_mapped_and_its_tests_passed(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -87,7 +89,12 @@ class CoverageAndHypothesesTest(unittest.TestCase):
             (folder / "feature-map.md").write_text("# Map\n## Risks\n1. alias search\n2. reset on close\n## Unknowns\n- x\n")
             line, blockers = checks.hypothesis_report(folder)
             self.assertIn("0 tried", line)
-            self.assertIn("lists 2 risk(s)", blockers[0])
+            self.assertIn("hypotheses.json is missing", blockers[0])
+            (folder / "hypotheses.json").write_text(json.dumps({"hypotheses": [
+                {"id": "H1", "outcome": "planned"}, {"id": "H2", "outcome": "unreached"},
+            ]}))
+            line, blockers = checks.hypothesis_report(folder)
+            self.assertIn("lists 2, none confirmed or refuted", blockers[0])
             (folder / "hypotheses.json").write_text(json.dumps({"hypotheses": [
                 {"id": "H1", "outcome": "refuted"}, {"id": "H2", "outcome": "confirmed"},
             ]}))

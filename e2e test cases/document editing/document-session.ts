@@ -29,7 +29,7 @@ export function accountHeader() {
   return accountId
 }
 
-/** CloudFront intermittently answers 403. Retry the navigation. */
+/** CloudFront intermittently answers 403. Retry the navigation, spacing the attempts out. */
 export async function gotoApp(page: Page, url: string) {
   let lastStatus = 0
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -39,6 +39,7 @@ export async function gotoApp(page: Page, url: string) {
       lastStatus === 403 ||
       (await page.getByText('Request blocked').isVisible().catch(() => false))
     if (!blocked) return
+    await new Promise(resolve => setTimeout(resolve, 2000 * attempt))
   }
   throw new Error(`UAT blocked ${url} (HTTP ${lastStatus})`)
 }

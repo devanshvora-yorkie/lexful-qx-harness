@@ -1,4 +1,10 @@
-"""Ticket run: preflight, coordinator, Playwright, then at most three heals."""
+"""One run, from preflight to the sealed folder.
+
+A ticket run: preflight, the E2E User Journey stage (stored in <run>/e2e/), Explore and Author,
+Playwright with up to three heals, the affected checked-in cases, verify, the UX audit, promote.
+A standalone E2E run: sign in, then the E2E User Journey stage in its own folder under runs/phase-1/.
+What each agent phase does is in the skill; the server only sends facts and checks the files.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from app import checks, linear_report, prune, runners, store, summary as run_summary
-from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings
+from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings, triage_files
 from app.coverage import load_cases, write_coverage_index
-from app.logbook import Logbook, echo_run, plain
+from app.logbook import Logbook, echo_run, plain, route, unroute
 from app.settings import get_settings
-from app.ux_report import write_ux_report
+from app.ux_report import check_ux_report, write_ux_report
 
 log = logging.getLogger("qa.pipeline")
 
@@ -76,45 +82,17 @@ def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: 
     return "NEEDS_REVISION"
 
 
-_GAP_SKIP = ("out of scope", "not changed", "existing draft", "existing behavior")
-_STOP_WORDS = frozenset(
-    "a an the and or of to for in on at by with from into over under than then this that those "
-    "these it its is are was were be been being as if not no nor but so such per via when while "
-    "before after until about your our their they them we you do does did has have had can may "
-    "will just also only same each both any all some".split()
-)
-
-
 def signoff_blockers(folder: Path) -> list[str]:
-    """Ticket requirements still open after a green Playwright run."""
-    feature = _read_text(folder / "FEATURE.md")
-    required = _required_text(folder)
-    required_words = _content_words(required)
-    issues: list[str] = []
-    structured = checks.coverage_blockers(folder, _passing_title_list(folder))
-    if structured is not None:
-        # coverage.json maps every criterion to test ids or a gap; the server checks the ids passed.
-        issues.extend(structured)
-    else:
-        passed = _content_words(_passing_titles(folder))
-        for criterion in _acceptance_lines(folder):
-            words = _content_words(criterion)
-            if not words:
-                continue
-            needed = 1 if len(words) < 3 else 2
-            if len(words & passed) < needed:
-                issues.append(f"acceptance criterion not covered by a passing test (no coverage.json): {criterion}")
+    """Ticket requirements still open after a green Playwright run.
+
+    The agent's hand-off files are the contract (skill §2e): coverage.json maps every acceptance
+    criterion to passing tests, a gap or `na`; hypotheses.json records every risk tried. The server
+    checks those files. It does not guess coverage from the wording of titles.
+    """
+    issues = checks.coverage_blockers(folder, _passing_title_list(folder))
     _line, hypothesis_blockers = checks.hypothesis_report(folder)
     issues.extend(hypothesis_blockers)
-    for gap in ([] if structured is not None else _feature_gaps(feature)):
-        lowered = gap.lower()
-        if any(phrase in lowered for phrase in _GAP_SKIP):
-            continue
-        overlap = _content_words(gap) & required_words
-        if len(overlap) >= 2 or any(len(word) >= 8 for word in overlap):
-            issues.append(f"gap: {gap}")
-    for note in _leftover_notes(folder):
-        issues.append(f"leftover fixtures: {note}")
+    issues.extend(f"leftover fixtures: {note}" for note in _leftover_notes(folder))
     return issues
 
 
@@ -127,94 +105,15 @@ def heal_stopped_on_bugs(triage: dict[str, Any]) -> bool:
     return bool(kinds) and all(kind == "bug" for kind in kinds)
 
 
-def _content_words(text: str) -> set[str]:
-    return {
-        word for word in re.findall(r"[a-z0-9][a-z0-9-]{4,}", text.lower())
-        if word not in _STOP_WORDS
-    }
-
-
-def _feature_gaps(text: str) -> list[str]:
-    lines = text.splitlines()
-    start = next((index + 1 for index, line in enumerate(lines) if line.strip().lower() == "## gaps"), None)
-    if start is None:
-        return []
-    items: list[str] = []
-    for line in lines[start:]:
-        if line.startswith("## "):
-            break
-        stripped = line.strip()
-        if not stripped or stripped.lower().startswith("these are"):
-            continue
-        cleaned = re.sub(r"^(\d+\.|[-*])\s*", "", stripped)
-        cleaned = cleaned.replace("**", "").strip()
-        if cleaned:
-            items.append(cleaned)
-    return items
-
-
-def _acceptance_lines(folder: Path) -> list[str]:
-    pack = _read_json(folder / "context-pack.json")
-    ticket = pack.get("ticket") if isinstance(pack.get("ticket"), dict) else {}
-    text = str(ticket.get("acceptanceCriteria") or "")
-    rows: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith(("*", "-", "•")) or re.match(r"\d+\.", stripped):
-            rows.append(re.sub(r"^(\d+\.|[-*•])\s*", "", stripped))
-    if not rows and text.strip():
-        rows.append(text.strip())
-    return rows
-
-
-def _required_text(folder: Path) -> str:
-    pack = _read_json(folder / "context-pack.json")
-    ticket = pack.get("ticket") if isinstance(pack.get("ticket"), dict) else {}
-    parts = [
-        str(ticket.get("summary") or ""),
-        str(ticket.get("description") or ""),
-        str(ticket.get("acceptanceCriteria") or ""),
-    ]
-    pull_requests = pack.get("pullRequests")
-    if isinstance(pull_requests, list):
-        for pull_request in pull_requests:
-            if isinstance(pull_request, dict):
-                parts.append(str(pull_request.get("title") or ""))
-                parts.append(str(pull_request.get("body") or ""))
-    return "\n".join(parts)
-
-
 def _passing_title_list(folder: Path) -> list[str]:
-    """Final passing titles after every heal (test-outcomes.json), else from the last report."""
-    path = folder / "playwright" / "test-outcomes.json"
-    if path.is_file():
-        try:
-            rows = json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            rows = []
-        if isinstance(rows, list):
-            return [str(r.get("title")) for r in rows if isinstance(r, dict) and r.get("status") in {"passed", "flaky"}]
-    return _passing_titles(folder).split(" \x1f ")
-
-
-def _passing_titles(folder: Path) -> str:
-    report = _read_json(folder / "playwright" / "results.json")
-    titles: list[str] = []
-
-    def walk(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
-        for spec in node.get("specs") or []:
-            if isinstance(spec, dict) and spec.get("ok") is True:
-                titles.append(str(spec.get("title") or ""))
-        for child in node.get("suites") or []:
-            walk(child)
-
-    for suite in report.get("suites") or []:
-        walk(suite)
-    return " \x1f ".join(titles)
+    """Final passing titles after every heal, from test-outcomes.json."""
+    try:
+        rows = json.loads((folder / "playwright" / "test-outcomes.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [str(r.get("title")) for r in rows if isinstance(r, dict) and r.get("status") in {"passed", "flaky"}]
 
 
 def _leftover_notes(folder: Path) -> list[str]:
@@ -229,12 +128,6 @@ def _leftover_notes(folder: Path) -> list[str]:
         if "leftover" in lowered and ("fixture" in lowered or "attachment" in lowered):
             found.append(text)
     return found
-
-
-def _read_text(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _suite_passed(exit_code: int, summary: dict[str, int]) -> bool:
@@ -293,7 +186,7 @@ def failed_tests(report: dict[str, Any]) -> list[dict[str, str]]:
                         unexpected = True
                     error = result.get("error")
                     if isinstance(error, dict) and error.get("message") and not message:
-                        message = str(error["message"]).split("\n", 1)[0][:240]
+                        message = plain(str(error["message"]).split("\n", 1)[0])[:240]
             if unexpected:
                 found.append({
                     "title": str(spec.get("title") or "unnamed"),
@@ -308,8 +201,13 @@ def failed_tests(report: dict[str, Any]) -> list[dict[str, str]]:
     return found
 
 
-def test_outcomes_from_report(report: dict[str, Any]) -> dict[str, dict[str, str]]:
-    """Spec file basename -> test title -> passed|failed|flaky|skipped."""
+def test_outcomes_from_report(report: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Spec file basename -> test name -> {status: passed|failed|flaky|skipped, tags: ['positive', 'smoke']}.
+
+    The name is the describe titles and the test title (`Bulk Actions › clear selection`), so two tests with
+    the same title in different describes stay apart. The tags are the ones the spec declares, as Playwright
+    reports them.
+    """
 
     def status_for(test: dict[str, Any]) -> str:
         raw = test.get("status")
@@ -321,143 +219,88 @@ def test_outcomes_from_report(report: dict[str, Any]) -> dict[str, dict[str, str
             return "skipped"
         return "failed"
 
-    found: dict[str, dict[str, str]] = {}
+    found: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def walk(node: Any, current: str) -> None:
+    def walk(node: Any, current: str, path: tuple[str, ...]) -> None:
         if not isinstance(node, dict):
             return
         current = str(node.get("file") or current)
+        if node.get("title") and str(node.get("title")) != str(node.get("file") or ""):
+            path = (*path, str(node["title"]))
         for spec in node.get("specs") or []:
             if not isinstance(spec, dict):
                 continue
             file_key = _spec_name(str(spec.get("file") or current))
-            title = str(spec.get("title") or "").strip() or "unnamed"
+            title = test_key(path, str(spec.get("title") or ""))
+            tags = [str(tag) for tag in spec.get("tags") or []]
             tests = [item for item in (spec.get("tests") or []) if isinstance(item, dict)]
             bucket = found.setdefault(file_key, {})
             if tests:
                 for test in tests:
-                    bucket[title] = status_for(test)
+                    bucket[title] = {"status": status_for(test), "tags": tags}
             elif spec.get("ok") is False:
-                bucket[title] = "failed"
+                bucket[title] = {"status": "failed", "tags": tags}
         for child in node.get("suites") or []:
-            walk(child, current)
+            walk(child, current, path)
 
     for suite in report.get("suites") or []:
-        walk(suite, "")
+        walk(suite, "", ())
     return found
 
 
+def test_key(describes: tuple[str, ...], title: str) -> str:
+    return " › ".join([*describes, title.strip() or "unnamed"])
+
+
+def test_title(key: str) -> str:
+    """The test's own title, without its describes: what Playwright's --grep matches inside the full title."""
+    return key.rsplit(" › ", 1)[-1]
+
+
 def merge_test_outcomes(
-    before: dict[str, dict[str, str]],
+    before: dict[str, dict[str, dict[str, Any]]],
     report: dict[str, Any],
-    rerun_specs: list[str],
-) -> dict[str, dict[str, str]]:
-    after = test_outcomes_from_report(report)
-    merged = {name: dict(titles) for name, titles in before.items()}
-    replaced = {_spec_name(spec) for spec in rerun_specs}
-    for file_key, titles in after.items():
-        if file_key in replaced or file_key not in merged:
-            merged[file_key] = dict(titles)
-        else:
-            merged[file_key].update(titles)
+    listed: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Each test the rerun ran replaces its earlier result; every other test keeps its result.
+
+    `listed` is what the rerun files hold now (test_outcomes_from_report of a `--list` report): a test a
+    heal renamed or removed from those files is dropped instead of staying failed forever.
+    """
+    merged = {name: dict(tests) for name, tests in before.items()}
+    for file_key, tests in test_outcomes_from_report(report).items():
+        merged.setdefault(file_key, {}).update(tests)
+    for file_key, tests in (listed or {}).items():
+        merged[file_key] = {name: row for name, row in merged.get(file_key, {}).items() if name in tests}
     return merged
 
 
-def write_test_outcomes_json(folder: Path, outcomes: dict[str, dict[str, str]]) -> None:
+def outcome_counts(outcomes: dict[str, dict[str, dict[str, Any]]]) -> dict[str, int]:
+    """passed, failed, skipped, flaky over every test's latest result."""
+    totals = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
+    for tests in outcomes.values():
+        for row in tests.values():
+            status = str(row.get("status"))
+            totals[status if status in totals else "failed"] += 1
+    return totals
+
+
+def write_test_outcomes_json(
+    folder: Path, outcomes: dict[str, dict[str, dict[str, Any]]], target: Path | None = None,
+) -> None:
+    """playwright/test-outcomes.json: the final result and tags of every test, after every heal."""
     rows = [
-        {"file": file_key, "title": title, "status": status}
+        {"file": file_key, "title": title, "status": row["status"], "tags": row.get("tags") or []}
         for file_key in sorted(outcomes)
-        for title, status in sorted(outcomes[file_key].items())
+        for title, row in sorted(outcomes[file_key].items())
     ]
-    target = folder / "playwright" / "test-outcomes.json"
+    target = target or folder / "playwright" / "test-outcomes.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
 
 def _spec_name(file: str) -> str:
     return Path(file).name
-
-
-def outcomes_by_file(report: dict[str, Any]) -> dict[str, dict[str, int]]:
-    """Pass and fail counts keyed by spec file name. A heal re-run replaces one file's counts."""
-    found: dict[str, dict[str, int]] = {}
-
-    def add(file: str, counts: dict[str, int]) -> None:
-        key = _spec_name(file)
-        if not key:
-            return
-        bucket = found.setdefault(key, {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0})
-        for name in bucket:
-            bucket[name] += counts[name]
-
-    def count_spec(spec: dict[str, Any]) -> dict[str, int]:
-        counts = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
-        tests = [item for item in (spec.get("tests") or []) if isinstance(item, dict)]
-        if not tests:
-            if spec.get("ok") is False:
-                counts["failed"] += 1
-            return counts
-        for test in tests:
-            status = test.get("status")
-            if status == "expected":
-                counts["passed"] += 1
-            elif status == "flaky":
-                counts["flaky"] += 1
-            elif status == "skipped":
-                counts["skipped"] += 1
-            elif status in {"unexpected", "failed"}:
-                counts["failed"] += 1
-        return counts
-
-    def walk(node: Any) -> None:
-        if not isinstance(node, dict):
-            return
-        for spec in node.get("specs") or []:
-            if isinstance(spec, dict):
-                add(str(spec.get("file") or node.get("file") or ""), count_spec(spec))
-        for child in node.get("suites") or []:
-            walk(child)
-
-    for suite in report.get("suites") or []:
-        walk(suite)
-    return found
-
-
-def specs_for_failures(specs: list[str], report: dict[str, Any]) -> list[str]:
-    """Spec files that still have a hard failure. A flaky pass stays out of the re-run."""
-    failed_names = {_spec_name(item["file"]) for item in failed_tests(report) if item.get("file")}
-    return [spec for spec in specs if _spec_name(spec) in failed_names]
-
-
-def replace_outcomes(
-    before: dict[str, dict[str, int]],
-    after: dict[str, dict[str, int]],
-    rerun_specs: list[str],
-) -> dict[str, dict[str, int]]:
-    """Keep files that were not re-run. A later heal must start from this map, not from the partial report."""
-    merged = {name: dict(counts) for name, counts in before.items()}
-    replaced = {_spec_name(spec) for spec in rerun_specs}
-    for name, counts in after.items():
-        if name in replaced or name not in merged:
-            merged[name] = dict(counts)
-    return merged
-
-
-def sum_outcomes(files: dict[str, dict[str, int]]) -> dict[str, int]:
-    totals = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
-    for counts in files.values():
-        for key in totals:
-            totals[key] += int(counts.get(key) or 0)
-    return totals
-
-
-def merge_outcomes(
-    before: dict[str, dict[str, int]],
-    after: dict[str, dict[str, int]],
-    rerun_specs: list[str],
-) -> dict[str, int]:
-    """Keep counts for files that were not re-run. Replace the files the healer just ran."""
-    return sum_outcomes(replace_outcomes(before, after, rerun_specs))
 
 
 def spec_was_patched(triage: dict[str, Any]) -> bool:
@@ -484,6 +327,20 @@ def suspicious_patches(triage: dict[str, Any]) -> list[str]:
     return lines
 
 
+def create_triggered_run(*, ticket: str | None, pr: int | None, sha: str | None, trigger: str) -> dict[str, Any]:
+    """Create a run in the folder it keeps for good.
+
+    A PR number or a deployed commit is resolved to its ticket first, so the run starts under
+    runs/tickets/<ticket>/ and is never moved. When GitHub names no ticket it stays under
+    pull-requests/ or deploys/, and preflight's answer is recorded in the index only.
+    """
+    if not ticket and (pr or sha):
+        found = runners.resolve_trigger(pr=pr, sha=None if pr else sha)
+        ticket = found.get("ticket") or None
+        pr = pr or found.get("pr")
+    return store.create_run(ticket=ticket, pr=pr, sha=sha, trigger=trigger)
+
+
 def execute_run(run_id: str) -> None:
     row = store.get_run(run_id)
     if row is None:
@@ -498,41 +355,31 @@ def execute_run(run_id: str) -> None:
             with SUITE_LOCK:
                 _execute_phase1(run_id, row, folder, book)
         else:
-            store.attach_e2e_log(folder)
-            if (folder / "e2e" / "run.log").is_file():
-                book.row("server", "e2e", "E2E User Journey log saved in e2e/run.log")
             _execute(run_id, row, folder, book)
     except RunCancelled:
         reason = "cancelled by user"
         book.row("server", "cancelled", "processes stopped; sealing the run")
         store.update_run(run_id, status="failed", error=reason)
-        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[reason])
         _seal(run_id, None, "HALTED", issues=[reason], error=reason, status="cancelled")
     except Exception as exc:
         book.row("server", "failed", str(exc)[:220])
         log.exception("run failed")
         store.update_run(run_id, status="failed", error=str(exc)[:500])
-        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[str(exc)[:500]])
         _seal(run_id, None, "HALTED", issues=[str(exc)[:500]], error=str(exc)[:200])
     finally:
         with _CANCELLED_LOCK:
             _CANCELLED.discard(run_id)
         run_summary.drop(run_id)
-        if row.get("kind") == "phase1":
-            try:
-                store.share_e2e_log(run_id)
-            except Exception:
-                log.exception("e2e log was not copied into the ticket folder")
 
 
-def _explore_and_author(
-    run_id: str, row: dict[str, Any], folder: Path, book: Logbook, settings: Any
-) -> tuple[str, dict[str, Any], str, float] | None:
-    """Preflight, then the qa agent walks and writes the specs. None means the run was sealed here."""
+def _preflight(run_id: str, row: dict[str, Any], folder: Path, book: Logbook, settings: Any) -> tuple[str, dict[str, Any]] | None:
+    """Tools, session, Linear and GitHub context, and the deployment check. None means the run was sealed here."""
     store.update_run(run_id, status="preflight")
     _begin(run_id, book, "preflight")
     book.row("server", "preflight", "started")
-    code = runners.run_preflight(folder, ticket=row.get("ticket"), pr=row.get("pr"), sha=row.get("sha"))
+    # A named ticket stays the ticket: its PRs come from the context pack. A PR or a deploy keeps its PR primary.
+    pr = None if row.get("trigger") == "ticket" else row.get("pr")
+    code = runners.run_preflight(folder, ticket=row.get("ticket"), pr=pr, sha=row.get("sha"))
     preflight = _read_json(folder / "preflight.json")
     preflight_ok = code == 0 and bool(preflight.get("ok"))
     ticket = str(preflight.get("ticket") or row.get("ticket") or "")
@@ -545,7 +392,6 @@ def _explore_and_author(
         store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket or None, "HALTED", summary, [detail])
-        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
         _seal(run_id, summary, "HALTED", issues=[detail])
         return None
 
@@ -562,7 +408,37 @@ def _explore_and_author(
         book.row("server", "deployment", deployment[:220])
         run_summary.get(run_id).note("deployment", deployment)
     _end(run_id, "preflight")
-    store.update_run(run_id, status="agent", ticket=ticket, pr=preflight.get("primaryPr"))
+    store.update_run(run_id, ticket=ticket or None, pr=preflight.get("primaryPr"))
+    return ticket, preflight
+
+
+def _e2e_stage(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
+    """E2E User Journey TCs as the first stage of a ticket run. Its files go to <run>/e2e/, its log lines to run.log.
+
+    The checked-in suite runs against the build this ticket is tested on, so its result belongs to this run.
+    A ticket run never starts a separate E2E run folder.
+    """
+    e2e = folder / "e2e"
+    if (e2e / "qa-result.json").is_file():
+        book.row("server", "e2e", "already ran in this folder; continuing")
+        return
+    e2e.mkdir(parents=True, exist_ok=True)
+    book.phase("E2E User Journey TCs")
+    route(e2e, folder)
+    try:
+        with SUITE_LOCK:
+            summary, verdict, _issues = _e2e_suite(run_id, row, e2e, book, stage="e2e ", context=folder)
+    finally:
+        unroute(e2e)
+    run_summary.get(run_id).note("e2e", f"{verdict}  {_counts(summary)}")
+    book.phase(f"Feature Specific TCs  {row.get('ticket') or run_id}")
+
+
+def _explore_and_author(
+    run_id: str, folder: Path, book: Logbook, ticket: str, preflight: dict[str, Any], settings: Any,
+) -> tuple[str, float] | None:
+    """The qa agent maps the feature, walks the app and writes the specs. None means the run was sealed here."""
+    store.update_run(run_id, status="agent")
     _begin(run_id, book, "explore + author")
     covered = write_coverage_index(settings.root / "e2e test cases", folder / "e2e-coverage.md")
     book.row("server", "coverage", f"{covered} checked-in cases")
@@ -596,11 +472,10 @@ def _explore_and_author(
         store.update_run(run_id, status="failed", error=reason)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket, "HALTED", summary, [reason])
-        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[reason])
         _seal(run_id, summary, "HALTED", issues=[reason])
         return None
     _end(run_id, "explore + author")
-    return ticket, preflight, session_id, started
+    return session_id, started
 
 
 def _plan_then_explore(
@@ -669,10 +544,16 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         started = 0.0
         store.update_run(run_id, status="agent", resume=False, error=None)
     else:
-        explored = _explore_and_author(run_id, row, folder, book, settings)
+        checked = _preflight(run_id, row, folder, book, settings)
+        if checked is None:
+            return
+        ticket, preflight = checked
+        if settings.e2e_with_ticket:
+            _e2e_stage(run_id, store.get_run(run_id) or row, folder, book)
+        explored = _explore_and_author(run_id, folder, book, ticket, preflight, settings)
         if explored is None:
             return
-        ticket, preflight, session_id, started = explored
+        session_id, started = explored
         book.row("qa", "finished", "coordinator returned")
     specs = runners.planned_specs(folder, started)
     if not specs:
@@ -681,7 +562,6 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, ticket, "HALTED", summary, [detail])
-        _write_report(folder, store.get_run(run_id) or row, verdict="HALTED", summary=None, issues=[detail])
         _seal(run_id, summary, "HALTED", issues=[detail])
         return
 
@@ -694,7 +574,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
                 target=_run_ux_audit, args=(run_id, folder, ticket, preflight, ux_state, True), daemon=True,
             )
             _begin(run_id, book, "ui-ux audit", parallel=True)
-            book.row("server", "ux-audit", "started beside Playwright. Its log is ux-audit.log")
+            book.row("server", "ux-audit", "started beside Playwright. Its lines are marked ux-audit")
             ux_thread.start()
     elif ticket:
         book.row("server", "ux-audit", "off  QA_RUN_UX_AUDIT=false  functional QA only")
@@ -753,10 +633,9 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
 
     store.update_run(run_id, status=status, error=None)
     if _record_bugs(folder, store.get_run(run_id) or row, summary):
-        book.row("server", "bugs", "bugs.md")
+        book.row("server", "bugs", "bugs.json and bugs.md")
     _note_findings(run_id, folder)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
-    _write_report(folder, store.get_run(run_id) or row, verdict=verdict, summary=summary, issues=issues)
     _seal(run_id, summary, verdict, issues=issues)
 
 
@@ -775,7 +654,6 @@ def _run_ux_audit(
             title=f"{ticket} ux-audit",
             log_name="ux-audit.jsonl",
             agent="ux-auditor",
-            book_name="ux-audit.log" if parallel else "run.log",
         )
         state["code"] = code
         runners.export_session(folder, session, "session-ux.json")
@@ -794,8 +672,15 @@ def _finish_ux(run_id: str, folder: Path, ticket: str, book: Logbook, state: dic
     findings_file = folder / "ux-findings.json"
     wrote = findings_file.is_file() and findings_file.stat().st_mtime >= started - 1
     error = str(state.get("error") or ("" if code == 0 else f"opencode exited {code}"))
+    contract: list[str] = []
     if wrote:
         write_ux_report(folder, ticket)
+        contract = check_ux_report(folder)
+        if contract:
+            for failure in contract[:5]:
+                book.row("server", "ux-contract", f"FAIL  {failure[:200]}")
+        elif (folder / "ux-report.html").is_file():
+            book.row("server", "ux-contract", "ux-report.html passed the report contract check")
     card = _read_json(folder / "ux-scorecard.json")
     if not wrote:
         card = {"ticket": ticket, "verdict": "NOT RUN", "score": None, "error": error or "the auditor wrote no ux-findings.json"}
@@ -814,11 +699,14 @@ def _finish_ux(run_id: str, folder: Path, ticket: str, book: Logbook, state: dic
         return f"UX audit did not run to the end: {error or 'no findings written'}"
     if code != 0:
         return f"UX audit stopped early, findings are partial: {error}"
+    if contract:
+        more = f" (and {len(contract) - 1} more)" if len(contract) > 1 else ""
+        return f"ux-report.html failed the report contract check: {contract[0][:200]}{more}"
     return ""
 
 
 def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> None:
-    """Run E2E User Journey TCs against UAT. Heal locators. Keep bugs in this folder."""
+    """E2E User Journey TCs on their own (npm run e2e): sign in, run and heal the suite, seal under runs/phase-1/."""
     settings = get_settings()
     echo_run(folder)
     book.phase("E2E User Journey TCs")
@@ -840,72 +728,48 @@ def _execute_phase1(run_id: str, row: dict[str, Any], folder: Path, book: Logboo
         store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, None, "HALTED", summary, [detail], extra=_phase1_meta())
-        _write_report(
-            folder,
-            store.get_run(run_id) or row,
-            verdict="HALTED",
-            summary=summary,
-            issues=[detail],
-            extra=_phase1_report_lines(),
-        )
         _seal(run_id, summary, "HALTED", issues=[detail])
         return
-
     book.row("server", "session", f"ok  {preflight.get('appUrl') or settings.qa_url}")
+    _end(run_id, "session")
+    summary, verdict, issues = _e2e_suite(run_id, row, folder, book)
+    status = "completed" if verdict == "PERFECT" else "halted" if verdict == "HALTED" else "needs_revision"
+    store.update_run(run_id, status=status, error=None)
+    _note_findings(run_id, folder)
+    _seal(run_id, summary, verdict, issues=issues)
+
+
+def _e2e_suite(
+    run_id: str, row: dict[str, Any], folder: Path, book: Logbook, *, stage: str = "", context: Path | None = None,
+) -> tuple[dict[str, int], str, list[str]]:
+    """Run the checked-in suite with `folder` as its run directory, heal it, verify and file its bugs.
+
+    Shared by the standalone E2E run and the E2E stage of a ticket run. It writes qa-result.json,
+    playwright/test-outcomes.json, triage and bugs into `folder` and does not seal anything.
+    `context` is the folder whose context pack names the deployed build (the ticket run).
+    """
+    settings = get_settings()
     specs = runners.checked_in_specs()
     if not specs:
         detail = 'no specs under "e2e test cases"'
         book.row("server", "halted", detail)
-        store.update_run(run_id, status="halted", error=detail)
         summary = {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
         _write_qa_result(folder, None, "HALTED", summary, [detail], extra=_phase1_meta())
-        _write_report(
-            folder,
-            store.get_run(run_id) or row,
-            verdict="HALTED",
-            summary=summary,
-            issues=[detail],
-            extra=_phase1_report_lines(),
-        )
-        _seal(run_id, summary, "HALTED", issues=[detail])
-        return
-
+        return summary, "HALTED", [detail]
     book.row("server", "specs", f'{len(specs)} files in "e2e test cases"')
-    summary = _execute_and_heal(
-        run_id,
-        folder,
-        "checked-in",
-        specs,
-        settings.heal_attempts,
-        "",
-        book,
-        classify=True,
-    )
-    hidden = _healer_hid_a_bug(folder)
+    runners.write_cli_config(folder)
+    summary = _execute_and_heal(run_id, folder, "checked-in", specs, settings.heal_attempts, "", book,
+                                classify=True, stage=stage)
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
     issues = _phase1_issues(folder, summary)
-    if hidden and verdict == "PERFECT":
+    if _healer_hid_a_bug(folder) and verdict == "PERFECT":
         verdict = "NEEDS_REVISION"
-    status = "completed" if verdict == "PERFECT" else "needs_revision"
-    book.row(
-        "server",
-        "verdict",
-        f"{verdict}  passed {summary['passed']}  failed {summary['failed']}  skipped {summary.get('skipped', 0)}  not sent to Linear",
-    )
-    store.update_run(run_id, status=status, error=None)
-    if _record_bugs(folder, store.get_run(run_id) or row, summary):
-        book.row("server", "bugs", "bugs.md")
+    book.row("server", "verdict", f"{stage}{verdict}  {_counts(summary)}")
+    # A bug in the checked-in suite is not this ticket's bug: it is filed under the E2E suite.
+    if _record_bugs(folder, {"id": run_id, "ticket": None, "sha": row.get("sha")}, summary, context=context or folder):
+        book.row("server", "bugs", f"{stage}bugs.json and bugs.md")
     _write_qa_result(folder, None, verdict, summary, issues, specs, extra=_phase1_meta())
-    _write_report(
-        folder,
-        store.get_run(run_id) or row,
-        verdict=verdict,
-        summary=summary,
-        issues=issues,
-        extra=_phase1_report_lines() + _triage_section(folder),
-    )
-    _note_findings(run_id, folder)
-    _seal(run_id, summary, verdict, issues=issues)
+    return summary, verdict, issues
 
 
 def _seal(
@@ -917,7 +781,7 @@ def _seal(
     error: str = "",
     status: str = "",
 ) -> None:
-    """Write the run summary, then put the final counts in the folder name."""
+    """Write the run summary and reports, record the result in the index, and prune. The folder stays put."""
     folder = store.run_dir(run_id)
     book = Logbook(folder)
     row = store.get_run(run_id) or {}
@@ -934,41 +798,30 @@ def _seal(
         )
     except Exception:
         log.exception("run summary was not written")
-    if row.get("kind") != "phase1":
-        try:
-            linear_report.write(folder, row, verdict=verdict or "HALTED", issues=issues or [])
-        except Exception:
-            log.exception("linear report was not written")
+    try:
+        linear_report.write(folder, row, verdict=verdict or "HALTED", issues=issues or [])
+    except Exception:
+        log.exception("linear report was not written")
     try:
         runners.cleanup_source(folder)
     except Exception:
         log.exception("worktree was not removed")
-    target = ""
     try:
-        target = store.publish_folder(run_id, summary=summary, verdict=verdict)
-        Logbook(store.runs_root() / target).row("server", "folder", f"runs/{target}")
+        target = store.record_outcome(run_id, summary=summary, verdict=verdict)
+        Logbook(folder).row("server", "folder", f"runs/{target}")
     except Exception:
-        log.exception("run folder was not renamed")
+        log.exception("run outcome was not recorded")
     try:
-        sealed = store.runs_root() / target if target else folder
         finished = (status or str(row.get("status") or "")) in {"completed", "needs_revision"}
-        freed = prune.prune_run(sealed, finished=finished)
+        freed = prune.prune_run(folder, finished=finished)
         if freed:
-            Logbook(sealed).row("server", "prune", f"removed {prune.mib(freed)} of scratch and duplicate files")
+            Logbook(folder).row("server", "prune", f"removed {prune.mib(freed)} of scratch and duplicate files")
     except Exception:
         log.exception("run folder was not pruned")
 
 
 def _phase1_meta() -> dict[str, Any]:
     return {"name": "E2E User Journey TCs", "linear": False, "suite": "e2e test cases"}
-
-
-def _phase1_report_lines() -> list[str]:
-    return [
-        "E2E User Journey TCs ran the checked-in Playwright specs in `e2e test cases` against UAT.",
-        "Logged in this folder and on the harness terminal. Not sent to Linear.",
-        "",
-    ]
 
 
 def _opencode_failure(folder: Path, log_name: str, code: int) -> str:
@@ -988,15 +841,22 @@ def _execute_and_heal(
     book: Logbook,
     *,
     classify: bool = False,
+    stage: str = "",
 ) -> dict[str, int]:
+    """Playwright on every spec, then up to `heal_attempts` heals. `stage` prefixes the phase names ("e2e ").
+
+    After a heal only the tests that did not pass run again (and any test the heal added or renamed),
+    not their whole files. Once the heals are done, every spec in a folder a heal edited, and every file
+    that still fails, runs in full one time, so a page-object fix that broke a passing test is caught.
+    """
     store.update_run(run_id, status="execute")
-    _begin(run_id, book, "playwright")
+    _begin(run_id, book, f"{stage}playwright")
     book.row("playwright", "started", f"{len(specs)} files  {', '.join(specs)}"[:240])
     result = runners.run_playwright(folder, specs)
     _check_cancel(run_id)
     summary = result["summary"]
     book.row("playwright", "result", _counts(summary))
-    _end(run_id, "playwright", "ok" if not result.get("setupError") else "failed", _counts(summary))
+    _end(run_id, f"{stage}playwright", "ok" if not result.get("setupError") else "failed", _counts(summary))
     test_outcomes = test_outcomes_from_report(_read_json(folder / "playwright" / "results.json"))
     if result.get("setupError"):
         book.row("playwright", "error", str(result["setupError"]))
@@ -1005,15 +865,15 @@ def _execute_and_heal(
     if _suite_passed(result["exitCode"], summary):
         write_test_outcomes_json(folder, test_outcomes)
         return summary
-    baseline = outcomes_by_file(_read_json(folder / "playwright" / "results.json"))
     attempts_used: dict[str, int] = {}
+    edited: set[Path] = set()
     verifier_hints_now: dict[str, str] = {}
     fresh_heal = not classify and get_settings().heal_fresh_session
     if fresh_heal:
         session_id = ""  # round 1 starts clean; later rounds resume that small session
     for attempt in range(1, heal_attempts + 1):
         store.update_run(run_id, status="heal", healAttempts=attempt)
-        _begin(run_id, book, f"heal {attempt} of {heal_attempts}")
+        _begin(run_id, book, f"{stage}heal {attempt} of {heal_attempts}")
         who = "qa E2E heal" if classify else "qa feature heal"
         book.row("server", "heal", f"{attempt} of {heal_attempts}  {who}  {len(specs)} files")
         failing_now = failed_tests(_read_json(folder / "playwright" / "results.json"))
@@ -1053,7 +913,7 @@ def _execute_and_heal(
             # A checked-in case that fails is outdated until a person-style reproduction says otherwise.
             if get_settings().verify_findings and any(isinstance(b, dict) for b in triage.get("bugs") or []):
                 verifier_hints_now = _verify_findings(
-                    run_id, folder, "checked-in", book, {}, label=f"verify bugs after heal {attempt}")
+                    run_id, folder, "checked-in", book, {}, label=f"{stage}verify bugs after heal {attempt}")
                 triage = latest_triage(folder)[0]
         if heal_code != 0:
             reason = _opencode_failure(folder, f"heal-{attempt}.jsonl", heal_code)
@@ -1071,35 +931,87 @@ def _execute_and_heal(
                 break
             continue
         book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
-        previous_report = _read_json(folder / "playwright" / "results.json")
-        rerun = specs_for_failures(specs, previous_report) or specs
-        if not baseline:
-            baseline = outcomes_by_file(previous_report)
+        base = _suite_root() if classify else folder / "specs"
+        edited.update((base / name).resolve().parent for name in changed)
         store.update_run(run_id, status="execute")
-        _begin(run_id, book, f"playwright after heal {attempt}")
-        book.row("playwright", "started", f"re-running {len(rerun)} failed file(s) after heal {attempt}"[:240])
-        result = runners.run_playwright(folder, rerun)
+        _begin(run_id, book, f"{stage}playwright after heal {attempt}")
+        test_outcomes = _rerun_not_passed(folder, specs, test_outcomes, book, attempt)
         _check_cancel(run_id)
-        latest_report = _read_json(folder / "playwright" / "results.json")
-        if rerun != specs and baseline:
-            baseline = replace_outcomes(
-                baseline,
-                outcomes_by_file(latest_report),
-                rerun,
-            )
-            test_outcomes = merge_test_outcomes(test_outcomes, latest_report, rerun)
-            summary = sum_outcomes(baseline)
-        else:
-            summary = result["summary"]
-            baseline = outcomes_by_file(latest_report)
-            test_outcomes = test_outcomes_from_report(latest_report)
+        summary = outcome_counts(test_outcomes)
         book.row("playwright", "result", _counts(summary))
         _end(run_id, None, "ok", _counts(summary))
-        if _suite_passed(result["exitCode"], summary):
-            write_test_outcomes_json(folder, test_outcomes)
-            return summary
+        if verdict_for(summary, preflight_ok=True, produced_specs=True) == "PERFECT":
+            break
+    if edited:
+        store.update_run(run_id, status="execute")
+        _begin(run_id, book, f"{stage}playwright confirm")
+        test_outcomes = _confirm_after_heals(folder, specs, test_outcomes, edited, book)
+        _check_cancel(run_id)
+        summary = outcome_counts(test_outcomes)
+        book.row("playwright", "result", _counts(summary))
+        _end(run_id, None, "ok", _counts(summary))
     write_test_outcomes_json(folder, test_outcomes)
     return summary
+
+
+def _not_passed(outcomes: dict[str, dict[str, dict[str, Any]]]) -> dict[str, set[str]]:
+    """Spec file -> the tests whose latest result is failed or skipped."""
+    found = {
+        file_key: {name for name, row in tests.items() if row.get("status") in {"failed", "skipped"}}
+        for file_key, tests in outcomes.items()
+    }
+    return {file_key: names for file_key, names in found.items() if names}
+
+
+def _rerun_not_passed(
+    folder: Path, specs: list[str], outcomes: dict[str, dict[str, dict[str, Any]]], book: Logbook, attempt: int,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """After a heal, run the tests that did not pass, and any test the heal added or renamed. Nothing else.
+
+    The files are listed first (`playwright test --list`), so a renamed test runs under its new name and a
+    removed one leaves the record. When the list cannot be read, the failing files run whole.
+    """
+    pending = _not_passed(outcomes)
+    files = [spec for spec in specs if _spec_name(spec) in pending] or specs
+    listing = runners.list_tests(files)
+    if listing is None:
+        book.row("playwright", "started", f"re-running {len(files)} file(s) in full after heal {attempt} (the test list could not be read)"[:240])
+        runners.run_playwright(folder, files)
+        report = _read_json(folder / "playwright" / "results.json")
+        return merge_test_outcomes(outcomes, report, test_outcomes_from_report(report))
+    listed = test_outcomes_from_report(listing)
+    wanted = sorted({
+        test_title(name)
+        for file_key, tests in listed.items()
+        for name in tests
+        if name in pending.get(file_key, set()) or name not in outcomes.get(file_key, {})
+    })
+    if not wanted:
+        book.row("server", "heal", f"heal {attempt} removed the tests that did not pass; nothing to re-run")
+        return merge_test_outcomes(outcomes, {}, listed)
+    book.row("playwright", "started", f"re-running {len(wanted)} test(s) that did not pass, in {len(files)} file(s), after heal {attempt}"[:240])
+    runners.run_playwright(folder, files, grep="|".join(re.escape(title) for title in wanted))
+    return merge_test_outcomes(outcomes, _read_json(folder / "playwright" / "results.json"), listed)
+
+
+def _confirm_after_heals(
+    folder: Path, specs: list[str], outcomes: dict[str, dict[str, dict[str, Any]]], edited: set[Path], book: Logbook,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """One full run of every spec in a folder a heal edited, and of every file that still fails.
+
+    The heal reruns only ran what had failed. A page object or helper the heal changed is shared by the
+    other specs in its folder, so they run once more before the result is final. The last results.json
+    then holds every remaining failure, which the bug screenshots are taken from.
+    """
+    root = get_settings().root
+    pending = _not_passed(outcomes)
+    files = [spec for spec in specs if (root / spec).resolve().parent in edited or _spec_name(spec) in pending]
+    if not files:
+        return outcomes
+    book.row("playwright", "started", f"confirming {len(files)} file(s) in full after the heals: {', '.join(files)}"[:240])
+    runners.run_playwright(folder, files)
+    report = _read_json(folder / "playwright" / "results.json")
+    return merge_test_outcomes(outcomes, report, test_outcomes_from_report(report))
 
 
 def _counts(summary: dict[str, int]) -> str:
@@ -1160,11 +1072,16 @@ def _deployment_line(folder: Path) -> str:
 
 
 def write_history(folder: Path, ticket: str) -> int:
-    """history.md: earlier runs of this ticket, their verdict, bugs and open issues. Returns how many."""
-    root = get_settings().runs / "tickets" / ticket
-    if not ticket or not root.is_dir():
+    """history.md: earlier runs of this ticket, their verdict, bugs and open issues. Returns how many.
+
+    Runs come from the index, so a run of this ticket started from a PR or a deploy is listed
+    wherever its folder is. Each heading is the run folder, for the UX audit's prior findings.
+    """
+    if not ticket:
         return 0
-    earlier = sorted((p for p in root.iterdir() if p.is_dir() and p.resolve() != folder.resolve()), reverse=True)[:5]
+    rows = sorted(store.list_runs(ticket), key=lambda row: str(row.get("createdAt") or ""), reverse=True)
+    folders = (store.run_dir(str(row["id"])) for row in rows if row.get("id"))
+    earlier = [p for p in folders if p.is_dir() and p.resolve() != folder.resolve()][:5]
     lines = [f"# Earlier runs of {ticket}", "", "Newest first. Retest what failed or was filed before; do not trust an old pass.", ""]
     count = 0
     for run in earlier:
@@ -1173,13 +1090,13 @@ def write_history(folder: Path, ticket: str) -> int:
             continue
         count += 1
         counts = result.get("test_results") or {}
-        lines.append(f"## {run.name}")
+        lines.append(f"## {_display(run)}")
         lines.append(f"- Verdict: {result.get('verdict')}  passed {counts.get('passed', 0)}  failed {counts.get('failed', 0)}")
         for issue in (result.get("open_issues") or [])[:5]:
             lines.append(f"- Open: {str(issue)[:200]}")
-        bugs = _read_text(run / "bugs.md")
-        for title in re.findall(r"^#+\s*(.+)$", bugs, re.MULTILINE)[:6]:
-            lines.append(f"- Bug filed: {title[:160]}")
+        for bug in (_read_json(run / "bugs.json").get("bugs") or [])[:6]:
+            if isinstance(bug, dict):
+                lines.append(f"- Bug filed: {str(bug.get('title') or '')[:160]}")
         triage, _cycle = latest_triage(run)
         for item in (triage.get("failures") or [])[:6]:
             if isinstance(item, dict):
@@ -1215,6 +1132,8 @@ def _run_affected_cases(run_id: str, folder: Path, book: Logbook) -> list[str]:
     healed = 0
     if failing and get_settings().heal_attempts > 0:
         healed, failing, notes = _heal_affected_cases(run_id, folder, book, files, grep)
+    write_test_outcomes_json(folder, test_outcomes_from_report(_read_json(folder / "affected" / "playwright" / "results.json")),
+                             target=folder / "affected" / "test-outcomes.json")
     line = f"{len(cases)} run, {len(failing)} failed" + (f", {healed} fixed by heal" if healed else "")
     run_summary.get(run_id).note("affected", line)
     _end(run_id, "affected E2E cases", "ok" if not failing else "failed", line)
@@ -1355,6 +1274,16 @@ def _affected_titles(bug: dict[str, Any]) -> list[str]:
     return [str(item) for item in raw if isinstance(item, str) and item.strip()]
 
 
+def _confirm(item: dict[str, Any], result: dict[str, Any]) -> None:
+    """A reproduced defect is confirmed, and keeps the steps and persona the verifier actually used."""
+    item["confidence"] = "confirmed"
+    item["verifier"] = str(result.get("notes") or "reproduced")[:300]
+    if isinstance(result.get("steps"), list) and result["steps"]:
+        item["steps"] = [str(step) for step in result["steps"]]
+    if result.get("persona"):
+        item["persona"] = str(result["persona"])
+
+
 def apply_verification(folder: Path) -> str:
     """Confirm what was reproduced. What was not reproduced is not filed: a finding is skipped, a triage
     bug is skipped and its failures become spec work, so the healer fixes the test or its data."""
@@ -1372,8 +1301,7 @@ def apply_verification(folder: Path) -> str:
         if result is None:
             continue
         if result.get("reproduced") is True:
-            item["confidence"] = "confirmed"
-            item["verifier"] = str(result.get("notes") or "reproduced")[:300]
+            _confirm(item, result)
             confirmed += 1
         elif result.get("reproduced") is False:
             item["status"] = "skipped"
@@ -1381,9 +1309,9 @@ def apply_verification(folder: Path) -> str:
             dropped += 1
     if data:
         findings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    triage_files = sorted(folder.glob("triage-*.json"))
-    if triage_files:
-        triage = _read_json(triage_files[-1])
+    rounds = triage_files(folder)
+    if rounds:
+        triage = _read_json(rounds[-1])
         bugs = [b for b in triage.get("bugs") or [] if isinstance(b, dict)]
         kept = 0
         for index, bug in enumerate(triage.get("bugs") or [], start=1):
@@ -1392,8 +1320,7 @@ def apply_verification(folder: Path) -> str:
                 kept += 1 if isinstance(bug, dict) and bug.get("status") != "skipped" else 0
                 continue
             if result.get("reproduced") is True:
-                bug["confidence"] = "confirmed"
-                bug["verifier"] = str(result.get("notes") or "reproduced")[:300]
+                _confirm(bug, result)
                 confirmed += 1
                 kept += 1
             else:
@@ -1414,16 +1341,15 @@ def apply_verification(folder: Path) -> str:
                     failure["class"] = "spec"
                     failure["action"] = "reported"
                     failure["reason"] = "verifier could not reproduce a product defect"
-        triage_files[-1].write_text(json.dumps(triage, indent=2) + "\n", encoding="utf-8")
+        rounds[-1].write_text(json.dumps(triage, indent=2) + "\n", encoding="utf-8")
     return f"{confirmed} confirmed, {dropped} not reproduced"
 
 
 def _note_findings(run_id: str, folder: Path) -> None:
     """Counts for the run summary."""
     notes = run_summary.get(run_id)
-    bugs = _read_text(folder / "bugs.md")
-    filed = len(re.findall(r"^Title:", bugs, re.MULTILINE))
-    notes.note("bugs", f"{filed} in bugs.md" if bugs else "none")
+    filed = len(_read_json(folder / "bugs.json").get("bugs") or [])
+    notes.note("bugs", f"{filed} in bugs.json" if filed else "none")
     findings = [f for f in _read_json(folder / "api-findings.json").get("findings") or [] if isinstance(f, dict)]
     if findings:
         confirmed = sum(1 for f in findings if str(f.get("confidence") or "").lower() == "confirmed")
@@ -1479,20 +1405,6 @@ def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -
 
 def _promote_prompt(folder: Path, ticket: str) -> str:
     return _message("promote", folder, f"Ticket: {ticket}")
-
-
-def _promoted_section(folder: Path) -> list[str]:
-    promoted = _read_json(folder / "promoted.json")
-    cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
-    if not cases:
-        return []
-    lines = ["## Promoted into e2e test cases", ""]
-    for case in cases:
-        if not isinstance(case, dict):
-            continue
-        lines.append(f"- `{case.get('id', '')}` {case.get('title', '')}".rstrip())
-    lines.append("")
-    return lines
 
 
 def _ux_audit_prompt(
@@ -1798,36 +1710,33 @@ def _take_triage(folder: Path, attempt: int) -> dict[str, Any]:
     return data
 
 
-def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int]) -> bool:
-    triage, cycle = latest_triage(folder)
-    pack = _read_json(folder / "context-pack.json")
+def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int], *, context: Path | None = None) -> bool:
+    """File the healer's bugs and the run's findings into bugs.json and bugs.md.
+
+    A ticket's bugs say `found by` that ticket; the checked-in suite's bugs say E2E User Journey TCs.
+    """
+    triage, _round = latest_triage(folder)
+    pack = _read_json((context or folder) / "context-pack.json")
     url = str(pack.get("appUrl") or get_settings().qa_url)
     deployment = pack.get("deployment") if isinstance(pack.get("deployment"), dict) else {}
     build = str(row.get("sha") or deployment.get("build") or "unknown")
+    found_by = str(row.get("ticket") or "E2E User Journey TCs")
     filed = publish_bugs(
         folder,
-        ticket=str(row.get("ticket") or ""),
+        ticket=found_by,
         run_id=str(row.get("id") or folder.name),
         url=url,
         build=build,
         failed=int(summary.get("failed") or 0),
         triage=triage,
-        still_failing=failed_tests(_read_json(folder / "playwright" / "results.json")),
-        cycle=cycle,
     )
-    probed = publish_findings(
-        folder,
-        ticket=str(row.get("ticket") or ""),
-        run_id=str(row.get("id") or folder.name),
-        url=url,
-        build=build,
-    )
+    probed = publish_findings(folder, ticket=found_by, run_id=str(row.get("id") or folder.name), url=url, build=build)
     return filed or probed > 0
 
 
 def _healer_hid_a_bug(folder: Path) -> list[str]:
     lines: list[str] = []
-    for path in sorted(folder.glob("triage-*.json")):
+    for path in triage_files(folder):
         lines.extend(suspicious_patches(_read_triage(path)))
     return lines
 
@@ -1835,7 +1744,7 @@ def _healer_hid_a_bug(folder: Path) -> list[str]:
 def patched_but_failing(folder: Path) -> list[str]:
     """Cases the last heal called patched that the final Playwright report still fails: the patch did not work."""
     failing = {item["title"] for item in failed_tests(_read_json(folder / "playwright" / "results.json"))}
-    triages = sorted(folder.glob("triage-*.json"))
+    triages = triage_files(folder)
     last = _read_triage(triages[-1]) if triages else {}
     out: list[str] = []
     for item in last.get("failures") or []:
@@ -1855,7 +1764,7 @@ def _phase1_issues(folder: Path, summary: dict[str, int]) -> list[str]:
         and summary.get("passed", 0) > 0
     ):
         return issues
-    triages = sorted(folder.glob("triage-*.json"))
+    triages = triage_files(folder)
     last = _read_triage(triages[-1]) if triages else {}
     lines: list[str] = []
     failures = last.get("failures")
@@ -1874,32 +1783,6 @@ def _phase1_issues(folder: Path, summary: dict[str, int]) -> list[str]:
     if not lines:
         lines.append(_open_issue(summary))
     return issues + lines
-
-
-def _triage_section(folder: Path) -> list[str]:
-    triages = sorted(folder.glob("triage-*.json"))
-    if not triages:
-        return []
-    lines = ["## Healer triage", ""]
-    for path in triages:
-        data = _read_triage(path)
-        failures = data.get("failures")
-        lines.append(f"### {path.name}")
-        lines.append("")
-        if not isinstance(failures, list) or not failures:
-            lines.append("- healer returned no classified failures")
-            lines.append("")
-            continue
-        for item in failures:
-            if not isinstance(item, dict):
-                continue
-            reason = _failure_reason(item)
-            text = f"- {failure_kind(item) or 'note'} / {item.get('action')}: {_failure_title(item)}"
-            if reason:
-                text += f" — {reason}"
-            lines.append(text)
-        lines.append("")
-    return lines
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1984,10 +1867,16 @@ _PHASE_OF_LOG = (
 
 
 def phase_costs(folder: Path) -> dict[str, dict[str, float]]:
-    """Per phase steps, output tokens, cache-read tokens, and cost, from the OpenCode logs of this run."""
+    """Per phase steps, output tokens, cache-read tokens, and cost, from the OpenCode logs of this run.
+
+    A ticket run's E2E stage keeps its logs in e2e/opencode; they are counted as "E2E <phase>".
+    """
     phases: dict[str, dict[str, float]] = {}
-    for log in sorted((folder / "opencode").glob("*.jsonl")):
-        label = next((name for prefix, name in _PHASE_OF_LOG if log.stem.startswith(prefix)), log.stem)
+    logs = [("", log) for log in sorted((folder / "opencode").glob("*.jsonl"))]
+    if folder.name != "e2e":
+        logs += [("E2E ", log) for log in sorted((folder / "e2e" / "opencode").glob("*.jsonl"))]
+    for stage, log in logs:
+        label = stage + next((name for prefix, name in _PHASE_OF_LOG if log.stem.startswith(prefix)), log.stem)
         row = phases.setdefault(label, {"steps": 0, "output": 0, "cacheRead": 0, "cost": 0.0})
         for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
@@ -2002,125 +1891,3 @@ def phase_costs(folder: Path) -> dict[str, dict[str, float]]:
             row["cacheRead"] += (tokens.get("cache") or {}).get("read") or 0
             row["cost"] += part.get("cost") or 0
     return phases
-
-
-def _cost_section(folder: Path) -> list[str]:
-    phases = phase_costs(folder)
-    if not phases:
-        return []
-    (folder / "cost.json").write_text(json.dumps(phases, indent=2) + "\n", encoding="utf-8")
-    total = sum(row["cost"] for row in phases.values())
-    lines = ["## Cost", "", "| Phase | Steps | Output tokens | Cache-read tokens | Cost |", "|---|---|---|---|---|"]
-    for label, row in phases.items():
-        lines.append(f"| {label} | {int(row['steps'])} | {int(row['output']):,} | {int(row['cacheRead']):,} | ${row['cost']:.2f} |")
-    lines.extend([f"| **Total** | | | | **${total:.2f}** |", ""])
-    return lines
-
-
-def _checks_section(folder: Path) -> list[str]:
-    """Deployment, hypotheses, affected E2E cases, verifier results and heal expectation edits."""
-    lines: list[str] = []
-    deployment = _deployment_line(folder)
-    if deployment:
-        lines.append(f"- Deployment: {deployment}")
-    if (folder / "hypotheses.json").is_file():
-        lines.append(f"- Risk hypotheses: {checks.hypothesis_report(folder)[0]}")
-    affected = _read_json(folder / "affected" / "playwright" / "results.json")
-    if affected:
-        stats = affected.get("stats") or {}
-        lines.append(f"- Affected E2E cases: passed {stats.get('expected', 0)}, failed {stats.get('unexpected', 0)}, flaky {stats.get('flaky', 0)}")
-    verified = [r for r in _read_json(folder / "verify.json").get("results") or [] if isinstance(r, dict)]
-    if verified:
-        yes = sum(1 for r in verified if r.get("reproduced") is True)
-        lines.append(f"- Verifier: {yes} of {len(verified)} reproduced")
-    edits = checks.assertion_edits(folder)
-    for edit in edits[:8]:
-        lines.append(f"- Heal changed an expectation: {edit}")
-    return ["## Checks", "", *lines, ""] if lines else []
-
-
-def _ux_report_section(folder: Path) -> list[str]:
-    card = _read_json(folder / "ux-scorecard.json")
-    if not card and not (folder / "ux-report.html").is_file():
-        return []
-    findings = _read_findings(folder / "ux-findings.json")
-    counts = card.get("counts") if isinstance(card.get("counts"), dict) else card
-    lines = [
-        "## UI/UX audit",
-        "",
-        f"- UX verdict: **{card.get('verdict', 'PASS')}**",
-        f"- Score: {card.get('score') if card.get('score') is not None else 'not scored'} / 100",
-        *([f"- Audit error: {card.get('error')}"] if card.get("error") else []),
-        f"- Findings: S0={counts.get('S0', 0)}, S1={counts.get('S1', 0)}, S2={counts.get('S2', 0)}, S3={counts.get('S3', 0)}, Observations={counts.get('O', 0)}",
-        "- Report: `ux-report.html`",
-        "- Findings file: `ux-findings.json`",
-    ]
-    if findings:
-        lines.append("")
-        lines.append("### Key UX Findings")
-        lines.append("")
-        for f in findings[:10]:
-            if isinstance(f, dict):
-                sev = f.get("severity") or "O"
-                cid = f.get("checkId") or f.get("id") or "UX"
-                title = f.get("title") or f.get("issue") or ""
-                lines.append(f"- **[{sev}] {cid}**: {title}")
-    lines.append("")
-    return lines
-
-
-def _model_line() -> str:
-    settings = get_settings()
-    if settings.sub_model == settings.main_model:
-        return settings.main_model
-    return f"{settings.main_model}  subagents {settings.sub_model}"
-
-
-def _write_report(
-    folder: Path,
-    row: dict[str, Any],
-    *,
-    verdict: str,
-    summary: dict[str, int] | None,
-    issues: list[str],
-    extra: list[str] | None = None,
-) -> None:
-    counts = summary or {"passed": 0, "failed": 0, "skipped": 0, "flaky": 0}
-    suite = "E2E User Journey TCs" if row.get("kind") == "phase1" else "Feature Specific TCs"
-    lines = [
-        f"# {row.get('ticket') or row.get('id')}",
-        "",
-        f"- Suite: {suite}",
-        f"- Run: `{row.get('id')}`",
-        f"- Status: {row.get('status')}",
-        f"- Verdict: {verdict}",
-        f"- Model: {_model_line()}",
-        f"- Passed: {counts['passed']}",
-        f"- Failed: {counts['failed']}",
-        f"- Skipped: {counts['skipped']}",
-        "",
-    ]
-    if extra:
-        lines.extend(extra)
-        if extra[-1] != "":
-            lines.append("")
-    if issues:
-        lines.append("## Open issues")
-        lines.extend(f"- {issue}" for issue in issues)
-        lines.append("")
-    bugs = folder / "bugs.md"
-    if bugs.is_file():
-        lines.extend(["## Bugs", "", bugs.read_text(encoding="utf-8").rstrip(), ""])
-    lines.extend(_checks_section(folder))
-    lines.extend(checks.signals_section(folder))
-    ux_section = _ux_report_section(folder)
-    if ux_section:
-        lines.extend(ux_section)
-    cost_section = _cost_section(folder)
-    if cost_section:
-        lines.extend(cost_section)
-    promoted = _promoted_section(folder)
-    if promoted:
-        lines.extend(promoted)
-    lines.append("Artifacts in this folder include `preflight.json`, `opencode/`, `playwright/`, and `qa-result.json`. Product bugs are in `bugs.md` when a failure remains. The Stytch session is `runs/cache/stytch/session.json`.")
-    (folder / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

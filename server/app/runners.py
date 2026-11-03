@@ -101,7 +101,13 @@ _PROCS: dict[str, set[int]] = {}
 
 
 def _key(run_dir: Path) -> str:
-    """Date, time and short id: the part of the folder name that survives the rename at seal."""
+    """Date, time and short id: the run folder's name (older runs also carry their counts after it).
+
+    A stage that works in a subfolder of the run (the ticket's e2e/) shares the run's key, so
+    cancelling the run stops its processes too.
+    """
+    if run_dir.name == "e2e":
+        run_dir = run_dir.parent
     parts = run_dir.name.split("_")
     return "_".join(parts[:3]) if len(parts) >= 3 else run_dir.name
 
@@ -239,12 +245,27 @@ def worktree_root(folder: Path) -> Path:
     return get_settings().root / "runs" / "source" / "worktrees" / _key(folder)
 
 
-def prepare_source(folder: Path) -> Path | None:
-    """One read-only clone per product repo, and a worktree of it for this run.
+def _deployed_targets(pack: dict[str, Any], pulls: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """(UAT environments, sha) for each build UAT runs of this repo's pull requests, from preflight's deployment check."""
+    numbers = {p.get("number") for p in pulls}
+    deployment = pack.get("deployment") if isinstance(pack.get("deployment"), dict) else {}
+    by_sha: dict[str, list[str]] = {}
+    for item in deployment.get("components") or []:
+        if isinstance(item, dict) and item.get("deployedSha") and item.get("pr") in numbers:
+            envs = by_sha.setdefault(str(item["deployedSha"]), [])
+            if item.get("env") and item["env"] not in envs:
+                envs.append(str(item["env"]))
+    return [(", ".join(envs) or "uat", sha) for sha, envs in by_sha.items()]
 
-    Each pull request is fetched as refs/heads/pr-<n>. The run's worktree is the primary PR
-    when it is still open, otherwise main, so two runs never fight over one checkout. Returns
-    the first worktree, or None when git or GitHub is unavailable; the agent then greps the pack.
+
+def prepare_source(folder: Path) -> Path | None:
+    """One read-only clone per product repo, refreshed on every run, and worktrees of it for this run.
+
+    Every run fetches main and each pull request (refs/heads/pr-<n>), so the clone is never stale.
+    The worktree is the code UAT runs: one per distinct sha the deployment record names for the PRs
+    (docu-app-uat and docu-service-uat can run different commits). Without a deployment record it is
+    the primary PR while it is open, otherwise main. Returns the first worktree, or None when git or
+    GitHub is unavailable; the agent then greps the pack.
     """
     settings = get_settings()
     try:
@@ -259,12 +280,12 @@ def prepare_source(folder: Path) -> Path | None:
     for full_name, pulls in _repos_of(pack).items():
         repo = full_name.split("/")[-1]
         clone = settings.root / "runs" / "source" / repo
-        tree = worktree_root(folder) / repo
 
         def git(args: list[str], timeout: int = 300, where: Path = clone) -> bool:
             done = subprocess.run(["git", "-C", str(where), *args], capture_output=True, text=True, timeout=timeout, env=env)
             return done.returncode == 0
 
+        trees: list[tuple[Path, str, str]] = []
         try:
             with _repo_lock(repo):
                 if not (clone / ".git").is_dir():
@@ -276,30 +297,42 @@ def prepare_source(folder: Path) -> Path | None:
                 if not git(["fetch", "-q", "--force", "origin", *refs], timeout=600):
                     lines.append(f"{full_name}: fetch failed, grep the context pack instead")
                     continue
-                primary = next((p for p in pulls if p["number"] == pack.get("primaryPr")), None)
-                ref = f"pr-{primary['number']}" if primary and primary.get("state") == "open" else "origin/main"
+                targets = []
+                for envs, sha in _deployed_targets(pack, pulls):
+                    # A deployed commit is normally on main; fetch it by sha when it is not.
+                    if git(["cat-file", "-e", f"{sha}^{{commit}}"]) or git(["fetch", "-q", "origin", sha], timeout=300):
+                        targets.append((f"{repo}@{sha[:8]}", sha, f"deployed on {envs} ({sha[:8]})"))
+                if not targets:
+                    primary = next((p for p in pulls if p["number"] == pack.get("primaryPr")), None)
+                    ref = f"pr-{primary['number']}" if primary and primary.get("state") == "open" else "origin/main"
+                    targets = [(repo, ref, f"{ref}: no deployed sha in the deployment record")]
                 git(["worktree", "prune"])
-                if tree.exists():
-                    git(["worktree", "remove", "--force", str(tree)])
-                tree.parent.mkdir(parents=True, exist_ok=True)
-                if not git(["worktree", "add", "-q", "--detach", str(tree), ref], timeout=600):
-                    lines.append(f"{full_name}: worktree failed, grep the context pack instead")
-                    continue
+                for name, ref, note in targets:
+                    tree = worktree_root(folder) / name
+                    if tree.exists():
+                        git(["worktree", "remove", "--force", str(tree)])
+                    tree.parent.mkdir(parents=True, exist_ok=True)
+                    if git(["worktree", "add", "-q", "--detach", str(tree), ref], timeout=600):
+                        trees.append((tree, ref, note))
         except (OSError, subprocess.TimeoutExpired):
             lines.append(f"{full_name}: git unavailable, grep the context pack instead")
             continue
-        first = first or tree
+        if not trees:
+            lines.append(f"{full_name}: worktree failed, grep the context pack instead")
+            continue
+        first = first or trees[0][0]
         branches = ", ".join(f"pr-{p['number']} ({'merged' if p.get('merged') else p.get('state')})" for p in pulls)
+        worktrees = "\n".join(f"  Worktree: {_relative_to_root(tree)}  ({note})" for tree, _ref, note in trees)
         lines.append(
-            f"{full_name}\n  Worktree for this run: {_relative_to_root(tree)} (checked out at {ref})\n"
-            f"  Branches: origin/main; {branches or 'no PRs in this repo'}\n"
-            f"  History and other branches: git -C {_relative_to_root(tree)} log|show|blame|grep|diff"
+            f"{full_name}\n{worktrees}\n"
+            f"  Branches: origin/main (fetched now); {branches or 'no PRs in this repo'}\n"
+            f"  History and other branches: git -C {_relative_to_root(trees[0][0])} log|show|blame|grep|diff"
         )
     if first is None:
         return None
     (folder / "source-info.md").write_text(
-        "Read-only source for this run. Browse with Read, Grep, Glob and git log|show|blame|grep|diff.\n"
-        "Never checkout, fetch, commit, or edit.\n\n" + "\n\n".join(lines) + "\n",
+        "Read-only source for this run, checked out at the commits UAT runs. Browse with Read, Grep, Glob\n"
+        "and git log|show|blame|grep|diff. Never checkout, fetch, commit, or edit.\n\n" + "\n\n".join(lines) + "\n",
         encoding="utf-8",
     )
     return first
@@ -311,7 +344,7 @@ def cleanup_source(folder: Path) -> None:
     if not root.is_dir():
         return
     for tree in root.iterdir():
-        clone = get_settings().root / "runs" / "source" / tree.name
+        clone = get_settings().root / "runs" / "source" / tree.name.split("@", 1)[0]
         try:
             subprocess.run(["git", "-C", str(clone), "worktree", "remove", "--force", str(tree)],
                            capture_output=True, timeout=120)
@@ -483,7 +516,7 @@ def run_opencode(
 ) -> tuple[int, str]:
     """Run one OpenCode turn. A transient failure resumes the same session up to QA_AGENT_RETRIES times."""
     settings = get_settings()
-    book = Logbook(run_dir, book_name)
+    book = Logbook(run_dir, book_name, role="ux-audit" if agent == "ux-auditor" else "qa")
     code, session = _run_opencode_once(
         run_dir, session_id=session_id, prompt=prompt, title=title, log_name=log_name,
         resume=resume, agent=agent, model=model, book=book,
@@ -705,6 +738,26 @@ def _preflight_row(line: str) -> str | None:
     return None
 
 
+def resolve_trigger(*, pr: int | None = None, sha: str | None = None) -> dict[str, Any]:
+    """The ticket (and pull request) GitHub names for a PR number or a deployed commit, before the run exists.
+
+    The run folder is chosen from this once and never moves. {} when GitHub cannot be read.
+    """
+    if not pr and not sha:
+        return {}
+    command = ["node", "scripts/resolve-trigger.mjs", *(["--pr", str(pr)] if pr else ["--sha", str(sha)])]
+    try:
+        done = subprocess.run(command, cwd=get_settings().root, capture_output=True, text=True, timeout=60)
+        found = json.loads(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else {}
+    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return {}
+    if not isinstance(found, dict) or found.get("error"):
+        return {}
+    ticket = str(found.get("ticket") or "").upper() or None
+    number = found.get("pr") if isinstance(found.get("pr"), int) else pr
+    return {"ticket": ticket, "pr": number}
+
+
 def run_preflight(
     run_dir: Path,
     *,
@@ -718,12 +771,14 @@ def run_preflight(
     if session_only:
         # Sign in only. The checked-in suite does not read or write Linear.
         command.append("--session-only")
-    elif ticket:
-        command.append(ticket)
-    elif pr:
-        command.extend(["--pr", str(pr)])
-    elif sha:
-        command.extend(["--sha", sha])
+    else:
+        # A run started from a PR or a deploy knows its ticket from the trigger; the PR stays the primary one.
+        if ticket:
+            command.append(ticket)
+        if pr:
+            command.extend(["--pr", str(pr)])
+        if sha:
+            command.extend(["--sha", sha])
     log_path = run_dir / "preflight.log"
     env = os.environ.copy()
     env["QA_RUN_DIR"] = str(run_dir)
@@ -856,6 +911,28 @@ def list_specs(specs: list[str]) -> tuple[bool, str]:
     return False, (lines[0] if lines else "playwright could not load the specs")[:240]
 
 
+def list_tests(specs: list[str]) -> dict[str, Any] | None:
+    """The tests in `specs` as Playwright's JSON report shape, without running them (`--list`).
+
+    A heal can rename or add a test; the server lists the files to know which tests exist now.
+    None when Playwright cannot load them.
+    """
+    if not specs:
+        return {}
+    env = _agent_env({k: v for k, v in os.environ.items() if k not in SECRET_ENV and k != "QA_RUN_DIR"})
+    env["QA_TEST_DIR"] = str(common_test_dir(specs))
+    try:
+        hand_over(get_settings().root / "e2e test cases")
+        done = subprocess.run(
+            ["node_modules/.bin/playwright", "test", "--list", "--reporter=json", "--project=e2e", *specs],
+            cwd=get_settings().root, capture_output=True, text=True, timeout=120, env=env, **_as_agent(),
+        )
+        report = json.loads(done.stdout) if done.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
 def run_playwright(
     run_dir: Path,
     specs: list[str],
@@ -942,19 +1019,23 @@ def _run_playwright_once(
     book = Logbook(run_dir)
     log_path = out / "playwright" / "output.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    # Files run in parallel workers; tests inside one file stay in order (fullyParallel is off).
-    count = max(1, min(workers or settings.pw_workers, len(specs)))
+    # Tests go to the next free worker (playwright.config.ts fullyParallel), so one file can use every worker;
+    # Playwright starts no more workers than it has tests. With QA_PW_FULLY_PARALLEL=false a file is the unit.
+    wanted = workers or settings.pw_workers
+    count = max(1, wanted if settings.pw_fully_parallel else min(wanted, len(specs)))
     command = ["npx", "playwright", "test", f"--workers={count}", "--project=e2e", *specs]
     if grep:
         command.extend(["--grep", grep])
     env = _playwright_env(out)
     env["QA_TEST_DIR"] = str(common_test_dir(specs))
     env["QA_PW_WORKERS"] = str(count)
+    env["QA_PW_FULLY_PARALLEL"] = "true" if settings.pw_fully_parallel else "false"
     hand_over(out, settings.root / "e2e test cases")
     book.row(
         "playwright",
         "running",
-        f"{len(specs)} files on {count} worker(s). Each finished case is logged as done/total. A retry stays on that case.",
+        f"{len(specs)} files on {count} worker(s), {'each test to the next free worker' if settings.pw_fully_parallel else 'one file per worker'}. "
+        "Each finished case is logged as done/total. A retry stays on that case.",
     )
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 80, 200, 0, 0))

@@ -1,4 +1,7 @@
-"""Score the UX audit from the auditor's JSON and render ux-report.html with the kit's generator."""
+"""Score the UX audit from the auditor's JSON, render ux-report.html with the kit's generator, and check it.
+
+The check is the kit's scripts/check_report_contract.py against .agents/ux/report-contract.md.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "scripts" / "generate_ux_report.py"
+CONTRACT_CHECK = ROOT / "scripts" / "check_report_contract.py"
 
 PENALTY = {"S0": 40, "S1": 25, "S2": 10, "S3": 3, "O": 0}
 SEVERITY_ORDER = ("S0", "S1", "S2", "S3", "O")
@@ -54,7 +58,8 @@ def score_findings(findings: list[dict[str, Any]]) -> tuple[dict[str, int], int,
     deducted = sum(counts[key] * PENALTY[key] for key in SEVERITY_ORDER)
     score = max(0, 100 - deducted)
     if counts["S0"] or counts["S1"]:
-        verdict = "BLOCKING FAIL"
+        # The report contract's word for a release-blocking S0/S1 finding.
+        verdict = "BLOCKED"
     elif counts["S2"] or counts["S3"]:
         verdict = "PASS WITH ADVISORIES"
     else:
@@ -124,9 +129,10 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
         "verdict": verdict,
         "rubric": rubric(counts, score, verdict),
     }
-    notes = previous.get("envNotes")
-    if isinstance(notes, list) and notes:
-        card["envNotes"] = notes
+    # What the auditor knows and the server does not: the journey scopes the report's checks matrix.
+    for key in ("envNotes", "journey", "generatedAt"):
+        if previous.get(key):
+            card[key] = previous[key]
     card_path.write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
     report = folder / "ux-report.html"
     report.unlink(missing_ok=True)
@@ -135,6 +141,27 @@ def write_ux_report(folder: Path, ticket: str) -> Path | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return report if report.is_file() else None
+
+
+def check_ux_report(folder: Path) -> list[str]:
+    """Contract failures of the rendered ux-report.html, one line each. [] when it passes or was not rendered."""
+    if not (folder / "ux-report.html").is_file():
+        return []
+    try:
+        done = subprocess.run(
+            [sys.executable, str(CONTRACT_CHECK), str(folder), "--json"],
+            capture_output=True, text=True, timeout=120,
+        )
+        result = json.loads(done.stdout or "{}")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ["the report contract check could not run"]
+    if not isinstance(result, dict):
+        return ["the report contract check returned no result"]
+    failures = [item for item in result.get("failures") or [] if isinstance(item, dict)]
+    lines = [f"{item.get('rule')}: {item.get('message')}" for item in failures]
+    if not lines and done.returncode != 0:
+        lines = [f"the report contract check exited {done.returncode}"]
+    return lines
 
 
 def _unique_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:

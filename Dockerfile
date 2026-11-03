@@ -16,6 +16,8 @@ ENV PATH="/root/.opencode/bin:${PATH}"
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV CI=1
+# `python -m app.cli` (one run, then exit) resolves the server package from here.
+ENV PYTHONPATH=/opt/lexful-qa-opencode/server
 
 WORKDIR /opt/lexful-qa-opencode
 
@@ -53,4 +55,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
   CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health')"
 
 ENTRYPOINT ["docker/entrypoint.sh"]
+# Default: the API server (docker compose up). A GitHub runner that starts one container per UAT deploy
+# overrides the command with one run instead:  server/.venv/bin/python -m app.cli --sha <sha>
+# See docs/github-runner.md.
 CMD ["server/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--app-dir", "server", "--host", "0.0.0.0", "--port", "8787"]

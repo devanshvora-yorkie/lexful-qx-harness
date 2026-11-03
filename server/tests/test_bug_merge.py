@@ -26,14 +26,18 @@ class BugMergeTest(unittest.TestCase):
                                                  "affectedTests": ["TC-7"]}]}
             _write(folder / "triage-1.json", triage)
             filed = bugs.publish_bugs(folder, ticket="LEX-1", run_id="r", url="u", build="b", failed=1,
-                                      triage=triage, still_failing=[])
+                                      triage=triage)
             self.assertTrue(filed)
             bug = json.loads((folder / "bugs.json").read_text())["bugs"][0]
             self.assertEqual(bug["expected"], "No prompt")
             self.assertEqual(bug["actual"], "Prompt shown")
             self.assertEqual(bug["steps"][0], "Open New")
             self.assertIn("bug-evidence/finding-F1.png", bug["screenshots"])
-            self.assertNotIn("The test failed", (folder / "bugs.md").read_text())
+            self.assertEqual(bug["title"], "Docs: Cancel prompts after clear")
+            self.assertEqual(bug["severity"], "Low")
+            text = (folder / "bugs.md").read_text()
+            self.assertIn("1. Open New", text)
+            self.assertNotIn("The test failed", text)
 
     def test_patched_case_that_still_fails_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:

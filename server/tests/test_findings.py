@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.bugs import is_setup_failure, publish_findings
+from app.bugs import publish_findings
 
 
 class FindingsTest(unittest.TestCase):
@@ -19,10 +19,14 @@ class FindingsTest(unittest.TestCase):
                 {"area": "Auth", "failure": "no evidence", "expected": "x", "actual": "y"},
             ]}))
             self.assertEqual(publish_findings(folder, ticket="LEX-1", run_id="r", url="u", build="b"), 2)
+            filed = {b["title"]: b for b in json.loads((folder / "bugs.json").read_text())["bugs"]}
+            self.assertEqual(filed["Auth: preview answers 200 to viewer"]["confidence"], "confirmed")
+            self.assertEqual(filed["Auth: limit ignored"]["confidence"], "suspected")
             text = (folder / "bugs.md").read_text()
-            self.assertIn("preview answers 200 to viewer", text)
-            self.assertIn("[suspected] limit ignored", text)
+            self.assertIn("## Auth: preview answers 200 to viewer", text)
             self.assertNotIn("no evidence", text)
+            # Most severe first.
+            self.assertLess(text.index("preview answers"), text.index("limit ignored"))
 
     def test_a_finding_claimed_by_a_triage_bug_is_not_filed_twice(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -35,11 +39,6 @@ class FindingsTest(unittest.TestCase):
     def test_no_file_files_nothing(self):
         with tempfile.TemporaryDirectory() as raw:
             self.assertEqual(publish_findings(Path(raw), ticket="T", run_id="r", url="u", build="b"), 0)
-
-    def test_environment_failures_are_not_product_bugs(self):
-        self.assertTrue(is_setup_failure("CloudFront 403 ERROR Request blocked"))
-        self.assertTrue(is_setup_failure("LEX-2328 fixture not configured"))
-        self.assertFalse(is_setup_failure("expected 403 got 200"))
 
 
 if __name__ == "__main__":

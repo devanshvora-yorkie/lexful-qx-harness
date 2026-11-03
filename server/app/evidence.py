@@ -9,7 +9,6 @@ Two sources, both real captures and neither made up by the server:
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,9 @@ MAX_PER_BUG = 3
 
 
 def slug(ref: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", ref.strip()).strip("-") or "item"
+    """`finding:F1` -> `finding-F1`, the file name the verify phase saves its screenshot under."""
+    kept = "".join(char if char.isalnum() or char in "_.-" else "-" for char in ref.strip())
+    return "-".join(part for part in kept.split("-") if part) or "item"
 
 
 def _results(folder: Path) -> dict[str, Any]:

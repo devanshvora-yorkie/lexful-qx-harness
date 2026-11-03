@@ -1,7 +1,7 @@
 ---
 name: ux-audit
 description: "Use when auditing a live Lexful UAT journey (search, asset CRUD, document editing) for UX quality — flow, clarity, style-guide consistency, accessibility, navigation. Produces an interactive, self-contained HTML audit report."
-version: 0.22.0
+version: 0.27.0
 status: "DRAFT — unsigned. HTML Output Mode Active."
 config:
   output_mode: html_preview
@@ -21,8 +21,8 @@ Before classifying findings, consult the current files in the kit:
 3. `.agents/ux/checks.yaml` — machine-readable check IDs, severity guidance, confidence, verification method and solution guidance.
 4. `.agents/ux/traceability.md` — known QA coverage, intended behavior, known issues and false-positive guardrails.
 5. `.agents/skills/design-system/SKILL.md` and its `references/` files — implementation mapping and Fluent-aligned design guidance for the existing shadcn/ui + Radix + Tailwind stack.
-6. `.agents/ux/audit-preview-reference.html` — visual/layout reference for the interactive report. It contains example run data; never carry example IDs, findings, scores, screenshots, counts or product details into a real run.
-7. Prior ticket run findings (`runs/tickets/<ticket>/*/ux-findings.json`) — when auditing a re-run, heal, or regression pass on an existing ticket, review prior findings to verify which issues stakeholders have resolved.
+6. `.agents/ux/audit-preview-reference.html` — the **output of `scripts/generate_ux_report.py`** for a sample run (LEX-3475), shipped as the layout reference. It is a generated file, not a hand-authored design: if it disagrees with the generator, the generator is right and the template is stale. Regenerate it rather than editing it. Never carry its example IDs, findings, scores, screenshots, counts or product details into a real run.
+7. Prior ticket run findings (`ux-findings.json` in the run folders `history.md` lists) — when auditing a re-run, heal, or regression pass on an existing ticket, review prior findings to verify which issues stakeholders have resolved.
 
 If sources disagree, respect Lexful's product facts and QA traceability first, then the UX Rulebook and machine-readable checks for classification, and the Fluent/shadcn skill for implementation suggestions. Do not invent rule IDs or pattern IDs. If no exact mapping exists, use a clearly labelled `Unmapped / candidate` tag and explain why; do not imply a confirmed rule match.
 
@@ -53,7 +53,7 @@ This rule is explicit and overrides any ambiguous wording in older templates or 
 - Rate observed behavior, not an idealized redesign. Low confidence must be explicit.
 
 ### Ticket Re-Run Resolution Verification Protocol (Mandatory)
-When auditing a ticket that has prior audit findings from an earlier run (found in `runs/tickets/<ticket>/*/ux-findings.json`):
+When auditing a ticket that has prior audit findings from an earlier run (found in `ux-findings.json` in the run folders `history.md` lists):
 1. **Never re-detect resolved issues as active defects:** If stakeholders or developers resolved an issue previously reported on this ticket (e.g. focus return fixed, accessible label added, loading feedback smoothed, gate explained), the auditor **must not** log or detect it as an active S0, S1, S2, or S3 defect.
 2. **Live verification & evidence:** Actively inspect the control, journey step, or accessibility property on live UAT. Capture a fresh verification screenshot (`explore/ux/resolved-<id>.png` or `ux-evidence/resolved-<id>.png`) proving the fixed behavior on UAT.
 3. **Lifecycle Status `Resolved`:** Set `status: "Resolved"`, `severity: "O"`, `deduction: 0`, and `releaseBlocking: false`. Provide a `resolutionNote` detailing how the fix was verified (e.g., "Verified fixed on live UAT: focus now returns correctly to the opener button after drawer close; screenshot attached").
@@ -99,32 +99,63 @@ Show tags on each finding as compact, filterable chips with distinct visual styl
 Never fabricate IDs. If a mapping is plausible but unconfirmed, mark it `Candidate mapping` and lower confidence accordingly.
 
 ## 6. Interactive HTML report — required deliverable
-Generate a **complete, valid, interactive HTML report (`ux-report.html`)** for every completed audit run. The report is the primary deliverable; do not replace it with a prose-only summary. Use the supplied `.agents/ux/audit-preview-reference.html` as the visual reference for structure, dark theme, gradients, typography, glass-like cards, badges, score gauge, stat cards, tab navigation, finding cards, tables, and responsive layout. Preserve its visual language and useful interactions while replacing all example content with the current run's real data.
+Generate a **complete, valid, interactive HTML report (`ux-report.html`)** for every completed audit run. The report is the primary deliverable; do not replace it with a prose-only summary. `.agents/ux/audit-preview-reference.html` is a **generated** report for a sample run: it shows the target structure, dark theme, gradients, typography, glass-like cards, badges, score gauge, stat cards, tab navigation, finding cards, tables and responsive layout. Reproduce it by running the generator, not by copying the file and swapping content.
+
+**The normative contract is `.agents/ux/report-contract.md`, and the reference implementation is `scripts/generate_ux_report.py`.** Run the generator (`python3 scripts/generate_ux_report.py <run_dir>`) rather than hand-writing the markup; the template is a generated artifact of that script, so it cannot drift from it; where the template and the contract disagree, the contract wins.
 
 The report must work as a local HTML file without a build step. Inline the report CSS and JavaScript. Do not require a server-side runtime. External font loading may be retained as a progressive enhancement, with sensible system-font fallbacks. Escape all dynamic strings before inserting them into HTML. Do not embed credentials, tokens, private tenant data, or unnecessary personal data.
 
 ### Required page structure
 1. **Top navigation / run metadata:** kit/audit name, run ID, timestamp, target/environment, journey, audit status and QA status if available.
 2. **Hero / executive summary:** concise scope and summary, release verdict, score gauge, and explanation that S2/S3 are non-blocking.
-3. **Metric cards:** final score, total deductions, counts by severity, automated checks passed/failed/skipped, confidence/evidence coverage, and detected design stack where known. Never invent unavailable metrics; show `N/A` or `Not collected`.
-4. **Interactive tabs or equivalent accessible navigation:**
-   - **UI/UX Defects (S0–S3):** A dedicated section strictly for S0–S3 defect findings, featuring severity filter pills (`All Defects`, `S0`, `S1`, `S2`, `S3`), deduction details, and defect finding cards. If 0 defects exist, render an explicit positive empty state.
-   - **UX Observations & Verification (O):** A separate, dedicated section for all Observation (`O`) and `Resolved` items (positive verifications, intended behaviors, stakeholder resolutions, design suggestions, or items held for review). Includes an informational callout banner emphasizing that observations and resolved items carry **0 deduction points** and **zero release-blocking impact**, plus status filter pills (`All Observations`, `Reported`, `Resolved`, `Held for review`, `Not evaluated`, `Withdrawn`).
-   - **Visual Evidence & Lightbox:** Screenshot and trace evidence with captions and an interactive lightbox.
-   - **Evaluated Checks Matrix:** Table of evaluated and not-evaluated checks from the UX Rulebook.
-   - **Scoring & Deduction Ledger:** Transparent points deduction ledger with running subtotals and non-blocking calibration rules.
-5. **Finding & observation card layout:**
+3. **Metric cards (exactly 4 — equally divided 25% width layout):**
+   - **Card 1: DEFECTS (S0–S3)** — counts per severity, scored-defect total, and the in-scope / pre-existing split.
+   - **Card 2: UX OBSERVATIONS** — observation count, non-scoring, journey name.
+   - **Card 3: TOTAL DEDUCTIONS** — deducted points (`−{pts}` or `0 pts`), scored-finding count, non-blocking note.
+   - **Card 4: DESIGN STACK** — `shadCN + Fluent UI`, Fluent-aligned indicator.
+   - *Below the cards:* the **integrity strip** — checks exercised out of the matrix and why the rest are `N/A`; the verdict with its arithmetic (`deductions` from 100 = `score`); and how many matrix items remain open.
+   - *Removed cards:* `FINAL SCORE`, `HEAL REVIEW (H1–H6)`, `PLAYWRIGHT SUITE (NOT UX)`, `EVIDENCE COVERAGE`, and `CONFIDENCE` are omitted.
+4. **Interactive tabs (Exactly 4 tabs — equally divided 25% width layout):**
+   - **UI/UX Defects (S0–S3):** A dedicated section strictly for active S0–S3 defect findings, featuring severity filter pills (`All Defects`, `S0`, `S1`, `S2`, `S3`), search input, and defect finding cards. If 0 defects exist, render an explicit positive empty state.
+   - **UX Observations & Verification (O):** A separate, dedicated section for all Observation (`O`) and `Resolved` items (positive verifications, intended behaviors, stakeholder resolutions, design suggestions, or items held for review). Includes an informational callout banner emphasizing that observations carry **0 deduction points** and **zero release-blocking impact**, plus status filter pills (`All Observations`, `Reported`, `Resolved`, `Held for review`).
+   - **Acceptance Criteria & Scope Matrix:** one row per acceptance criterion, per scope statement and one for the validation claim, each linked to the findings that evidence it. Status is one of `VERIFIED`, `VERIFIED WITH ADVISORY`, `PARTIAL`, `DEFECT FOUND`, `UNVERIFIED`, `OUTSTANDING`, `BLOCKED`, with a one-line reason. Never empty without a stated reason.
+   - **Evaluated Checks Matrix:** the checks from `.agents/ux/checks.yaml` whose `journey` matches this ticket plus the `All` (A11Y) set. `DEFECT`/`OBSERVATION` only when a finding cites the check; everything else `N/A` with the reason. The tally line under the table reads `N exercised (x pass, y observation, z defect) · N not applicable`.
+   - *Removed tabs:* `Visual Evidence & Lightbox` (gallery tab removed; lightbox modal retained on inline card thumbnails), `Scoring & Deduction Ledger`, and `Healer Review (H1–H6)` are omitted to streamline review.
+5. **Finding & observation card layout (Side-by-side evidence & tag minimalism):**
+   - **Side-by-Side Evidence Screenshot:** The finding body is divided into two responsive side-by-side columns:
+     - *Left column:* Observed defect/behavior description, Expected Behavior (emerald callout), Observed Actual (rose callout), and Reproduction Steps.
+     - *Right column:* Evidence screenshot preview container with image filename, rounded glass styling, zoom hover, and modal click-to-lightbox overlay.
    Each card must visibly feature:
-   - Header with ID, severity badge (`.badge-s0` to `.badge-s3`, `.badge-obs`, or `.badge-resolved`), deduction points (0 for Resolved and O), confidence, and status.
-   - Prominent badge chips for **Rulebook Check** (`.tag-rule`), **Bad UX Pattern** (`.tag-pattern`), **Lens** (`.tag-lens`), **QA Trace** (`.tag-qa`), and **Design Stack** (`.tag-stack`).
-   - **Inline Evidence Screenshot (`.finding-image-preview`):** An embedded visual evidence preview containing the screenshot image, relative path label, and a one-click lightbox zoom trigger so reviewers can immediately see and verify what was observed in the HTML report.
-   - `Observed defect & evidence` (or `Observed behavior & details` for observations).
-   - `Expected vs. actual` behavior.
-   - `Reproduction steps & QA trace`.
-   - `Recommended resolution` (or `Recommended design direction` for observations).
-   - `shadcn/ui implementation` — concrete component/composition props and Tailwind styling.
-   - `Fluent design alignment` — Fluent UX principle/pattern alignment.
+   - Header with ID, severity badge (`.badge-s0` to `.badge-s3`, `.badge-obs`, or `.badge-resolved`), and a prominent right-aligned **Deduction Points Pill** highlighted with color ranges:
+     - `0 pts Deduction`: Green (`#34d399`, bg `rgba(16,185,129,0.12)`)
+     - `1–5 pts Deduction`: Amber/Yellow (`#fbbf24`, bg `rgba(245,158,11,0.15)`)
+     - `6–15 pts Deduction`: Orange (`#fb923c`, bg `rgba(251,146,60,0.16)`)
+     - `16–30 pts Deduction`: Rose/Red (`#f43f5e`, bg `rgba(244,63,94,0.18)`)
+     - `31+ pts Deduction`: Crimson/Blocker (`#fda4af`, bg `rgba(225,29,72,0.28)`)
+   - **Strict tag minimalism:** Show ONLY:
+     1. `Severity level` (e.g. `Severity: S3`)
+     2. `Bad UX Pattern` (e.g. `.tag-pattern` `Pattern: BP-63`)
+     3. `Pillar` (e.g. `.tag-pillar` `Pillar: Clarity & trust` — replaces the previous "Lens" wording)
+     4. `AC Tag` (e.g. `.tag-ac` `AC: AC1-d`)
+     - *All other tags (`Confidence`, `Status`, `QA Trace`, `Rule/CheckId`, `Design Stack`) are removed from card tags to eliminate visual noise.*
+   - **Highlighted Expected vs. Actual callouts:**
+     - `.callout-expected`: Emerald/green bordered box with uppercase `EXPECTED BEHAVIOR` header.
+     - `.callout-actual`: Rose/red bordered box with uppercase `OBSERVED ACTUAL` header.
+     - Separates expected criteria from observed bugs with maximum visual contrast and readability.
+   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion, featuring interactive click-to-enlarge, dedicated zoom controls (Zoom In, Zoom Out, Fit to Screen), mouse-wheel zoom, and toggle zoom (1.75x).
+   - `Reproduction steps` and `Recommended resolution / design direction`.
+   - `shadcn/ui implementation` and `Fluent design alignment` guidance blocks.
 6. **Footer:** Report generation timestamp, ticket ID, engine metadata, and reviewer sign-off notice.
+
+### Report integrity rules (v0.25 — normative)
+These come from `.agents/ux/report-contract.md`. Where anything in this section contradicts them, the contract wins.
+- **Ticket-driven, every run.** Read the ticket's problem, scope, acceptance criteria and validation claim from `context-pack.json`. The Acceptance Criteria & Scope Matrix has one row per criterion, per scope statement, and one for the validation claim. Never ship it empty without a stated reason, and never invent a criterion.
+- **One verdict.** Derive it from severity: any S0/S1 → `BLOCKED`; any S2/S3 → `PASS WITH ADVISORIES`; otherwise `PASS`. The nav badge, hero card, integrity strip and footer must all read the same string.
+- **Checks are journey-scoped.** Show the checks from `.agents/ux/checks.yaml` whose `journey` matches this ticket, plus the `All` (A11Y) set. A check is `DEFECT`/`OBSERVATION` only when a finding cites it; everything else is `N/A` with the reason. Never credit `PASS` for a rule this run did not exercise, and never paste a result sentence describing a different journey.
+- **No placeholders, no raw data.** Never render "No expected vs actual documented", a `{'what': …}` dict, or an "Unmapped / candidate" pattern chip. Resolution is three labelled fields: What to change / Developer / Design.
+- **Expected and Observed on every card.** `expectedVsActual` is a mandatory finding field.
+- **Full ticket in the hero**, never truncated, plus an integrity strip stating checks exercised, the verdict arithmetic, and matrix items still open.
+- **Mechanical gate.** `python3 scripts/check_report_contract.py <run_dir>` reads the finished HTML and exits non-zero on any contract breach (two verdicts, verdict/severity disagreement, count mismatches, matrix row without a reason, missing Expected/Observed, placeholder strings, raw dicts, boilerplate results, truncated ticket, missing integrity strip). The pipeline runs it after the generator and records a failure as a run issue — never hand over a report that fails the gate.
 
 ### Recommended solutions and design-system adaptations
 - Recommendations must be concrete, feasible, and proportional to severity.
@@ -163,6 +194,11 @@ Implement working, keyboard-accessible:
 - Recommendations are advisory. The AI does not modify product data. Use UAT and synthetic/demo data only; read-only by default; credentials must never appear in prompts, reports, or screenshots. A named human reviewer signs off.
 
 ## Changelog
+- **v0.27.0 — 2026-11-02:** Added `scripts/check_report_contract.py`, a mechanical gate over the generated HTML: verdict consistency and severity agreement, stat-card vs rendered-card counts, matrix rows without status or reason, checks tally vs table, integrity strip vs tally, Expected/Observed and resolution fields per card, duplicate ids, placeholders, raw dicts, boilerplate results and truncated ticket text. Wired into `server/app/pipeline.py` so a failing report is recorded as a run issue. Validated against the original LEX-3475 report (14 failures) and the current template (clean).
+- **v0.26.0 — 2026-11-02:** `.agents/ux/audit-preview-reference.html` is now the **generated** output of `scripts/generate_ux_report.py` (sample run LEX-3475) in both kit trees, replacing the hand-maintained reference. It carries a reference-template banner, implements the contract's ticket-driven layout, and is regenerated rather than edited, so the template can no longer drift from the generator. Skill and prompt wording updated to match; `server/app/pipeline.py` and the generator docstring now point at the contract instead of the old template.
+- **v0.25.0 — 2026-11-02:** Made the report ticket-driven on every run. Added `.agents/ux/report-contract.md` and `scripts/generate_ux_report.py` as the normative contract and reference implementation. Acceptance Criteria & Scope Matrix is now built from the ticket (criteria + scope statements + validation claim) with explicit statuses; Evaluated Checks Matrix is journey-scoped from `.agents/ux/checks.yaml` with honest `N/A` rows instead of boilerplate passes; one verdict derived from severity; Expected/Observed mandatory on every finding; resolution rendered as What/Developer/Design instead of a raw dict; integrity strip added; ticket text no longer truncated; corrected the summary-card spec to 4 cards.
+- **v0.24.0 — 2026-11-02:** Standardized LEX-3757 preview design across all reports: separated S0–S3 defects and UX Observations into distinct top summary cards to eliminate line wrapping; fixed Design Stack card to `shadCN + Fluent UI`; positioned evidence screenshots side-by-side with defect descriptions and Expected/Actual callouts.
+- **v0.23.0 — 2026-11-02:** Streamlined HTML report layout: condensed to 3 summary cards with Findings by Severity first; streamlined to 4 equal-width tabs (Defects, Observations, AC Matrix, Checks Matrix); removed evidence, ledger, and healer tabs; enforced card tag minimalism (only Severity, Pattern, Pillar, AC); added highlighted Expected vs Actual callouts and range-colored deduction pills.
 - **v0.22.0 — 2026-10-29:** Introduced Ticket Re-Run Resolution Verification Protocol: when re-running on a ticket, check prior findings; if stakeholders resolved the defect, verify on live UAT with a screenshot, mark `status: "Resolved"`, do NOT re-detect as a defect, and apply 0 score deductions; added `Resolved` status filter and badge.
 - **v0.21.0 — 2026-10-29:** Mandated live evidence screenshots (`.png`) for all UX observations (`O`); required explicit `screenshot` path and caption in finding/observation schema; required inline `.finding-image-preview` screenshot thumbnails within every observation card on `ux-report.html` with click-to-lightbox support.
 - **v0.20.0 — 2026-10-28:** Clarified that S2/S3 are strictly non-blocking and must never fail/abort the audit or report; formalized scoring/deduplication; required traceable UX-rule and bad-pattern tags; added separate observation impact/resolution and shadcn/Fluent recommendation sections; expanded the interactive HTML report contract.

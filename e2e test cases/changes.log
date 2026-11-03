@@ -573,3 +573,100 @@ The server appends one entry per heal and one per promotion from a ticket run (w
   - skipped: TC-LEX-3700-016: an undeclared interface key is dropped on write and the declared primary and notes are kept — API internal-write check, not a journey
   - skipped: TC-LEX-3700-017: the Interfaces editor on Configuration create renders Primary and Notes from the schema — system.configuration create surface, not asset crud; new in this ticket
 
+2026-11-03T09:42:14Z  pr-2245-20261103T092858Z-bc40  heal 1
+  files: e2e test cases/asset crud/assets-crud.spec.ts, e2e test cases/document editing/document-session.ts
+  - spec / patched: details tab shows editable fields — environment: CloudFront 403 'Request blocked' on /docs/d/all/servers for every attempt during the run. The shared openServersListing helper retried three times, then carried on to a heading assertion that could only fail on the block page. ...
+  - spec / patched (5 tests): overview tab shows linked items; search is case-insensitive; bulk action buttons appear when rows selected; +2 more — environment: same CloudFront 403 block at the servers listing (openServersListing, line 127). Patched by the same gotoServersListing change. No expectation changed.
+  - spec / patched: TC-DOC-005: Set an expiry date on a document — environment: gotoApp in document-session.ts failed three times with CloudFront 403 'Request blocked' on /docs/d/all/system.document. Live replay: the same URL returned 200 three times earlier in this session, then 403 on every path from the...
+  - spec / patched (5 tests): TC-DOC-006: Assign a tag to a document; TC-DOC-007: Switch the body editor between Markdown and HTML modes; TC-DOC-008: Archive a document from the record drawer; +2 more — environment: CloudFront 403 block on /docs/d/all/system.document (gotoApp). Patched by the same gotoApp change. No expectation changed.
+
+--- e2e test cases/asset crud/assets-crud.spec.ts
++++ e2e test cases/asset crud/assets-crud.spec.ts
+@@ -65,12 +65,18 @@
+ 
+ async function gotoServersListing(page: import('@playwright/test').Page) {
+-  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
++  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times,
++  // spacing the attempts out because the blocks come in bursts. Still blocked is an environment failure,
++  // so say so instead of letting a heading assertion fail later.
++  let lastStatus = 0;
+   for (let attempt = 1; attempt <= 3; attempt++) {
+     const response = await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
++    lastStatus = response?.status() ?? 0;
+     const blocked =
+-      response?.status() === 403 ||
++      lastStatus === 403 ||
+       (await page.getByText('Request blocked').isVisible().catch(() => false));
+-    if (!blocked) break;
++    if (!blocked) return;
++    await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+   }
++  throw new Error(`UAT blocked ${SERVERS_URL} (HTTP ${lastStatus})`);
+ }
+
+--- e2e test cases/document editing/document-session.ts
++++ e2e test cases/document editing/document-session.ts
+@@ -30,5 +30,5 @@
+ }
+ 
+-/** CloudFront intermittently answers 403. Retry the navigation. */
++/** CloudFront intermittently answers 403. Retry the navigation, spacing the attempts out. */
+ export async function gotoApp(page: Page, url: string) {
+   let lastStatus = 0
+@@ -40,4 +40,5 @@
+       (await page.getByText('Request blocked').isVisible().catch(() => false))
+     if (!blocked) return
++    await new Promise(resolve => setTimeout(resolve, 2000 * attempt))
+   }
+   throw new Error(`UAT blocked ${url} (HTTP ${lastStatus})`)
+
+2026-11-03T09:46:54Z  pr-2245-20261103T092858Z-bc40  heal 2
+  files: e2e test cases/document editing/doceditspec.spec.ts
+  - bug / reported: TC-DOC-010: Creating with an empty document name is rejected — product: with the Name field empty, the New Documents drawer sends the create request anyway. The case expects the submit to be blocked with no POST. Reproduced twice live with current data (09:44 and 09:45 UTC, admin, E2E Demo): the Name i...
+
+--- e2e test cases/document editing/doceditspec.spec.ts
++++ e2e test cases/document editing/doceditspec.spec.ts
+@@ -334,7 +334,19 @@
+     await expect(drawer.createButton).toBeEnabled()
+ 
++    // Wait briefly for a submit the app sends, so a record it creates is archived in afterEach.
++    const sent = page
++      .waitForResponse(
++        response =>
++          response.request().method() === 'POST' && response.url().includes(`/v1/assets/${DOCUMENT_TYPE}`),
++        { timeout: 5_000 },
++      )
++      .catch(() => null)
+     await drawer.createButton.click()
+-
+-    // The required-name validation blocks the submit — no record is created.
++    const created = await sent
++    if (created?.ok()) {
++      const body = (await created.json().catch(() => null)) as { id?: string } | null
++      if (body?.id) createdRecords.push({ id: body.id, api: new ApiContext(page) })
++    }
++
+     expect(posts).toHaveLength(0)
+     await expect(drawer.dialog).toBeVisible()
+
+2026-11-03T09:50:10Z  pr-2245-20261103T092858Z-bc40  heal 3
+  no file changes
+  - bug / reported: TC-DOC-010: Creating with an empty document name is rejected — product, unchanged from heal attempt 2: with the Name field empty the New Documents drawer still sends the create POST, which UAT answers 201 with name 'New document'. Reproduced twice in attempt 2 (09:44 and 09:45 UTC). No heal is possible...
+
+2026-11-03T10:27:00Z  pr-2245-20261103T092858Z-bc40  promote from LEX-3642
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-001: roles and permission catalog refuse a legacy account with NOT_ENABLED for every persona — API-only contract; not a UI journey
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-003: viewer and support hold no workflow permissions on a legacy account — API-only; depends on legacy account mode
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-008: access check accepts 100 actions and refuses 101 before the legacy gate — API-only; depends on legacy account mode
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-009: account owners refuse a legacy account with NOT_ENABLED for every persona — API-only; depends on legacy account mode
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-014: /auth/me reports authorization_mode legacy for every persona — API-only; asserts the account mode itself, which is ticket rollout state
+  - skipped: LEX-3642 legacy gates: API › TC-LEX-3642-017: field access on the password type lists password as revealable for every persona; viewer cannot update it — API-only; depends on legacy field_access rules
+  - skipped: LEX-3642 property delete: API › TC-LEX-3642-007: a property with data is archived on delete and re-adding it returns PROPERTY_ARCHIVED — API-only; not a page journey; new ticket behavior
+  - skipped: LEX-3642 property delete: API › TC-LEX-3642-015: viewer and support cannot delete a property — API-only; not a page journey
+  - skipped: LEX-3642 property delete: API › TC-LEX-3642-016: a property with no data is removed on delete and can be added again — API-only; not a page journey
+  - skipped: LEX-3642 record drawer and create form › TC-LEX-3642-004: admin quick view masks the password; viewer full record is read-only with a masked password — Depends on legacy field_access (account mode); overlaps AC-039/AC-040 password drawer coverage
+  - skipped: LEX-3642 record drawer and create form › TC-LEX-3642-005: new password form shows every field and keeps Create disabled until an organization is chosen — Pins a field-list snapshot that goes stale; new-form behavior tied to this ticket's rollout
+
+
+2026-11-03T11:05:44Z  harness  test-level parallel (fullyParallel)
+  - asset crud/assets-crud.spec.ts: the seed cleanup moved from test.afterAll to a worker fixture (seedCleanup), so seeds are created once per worker and archived when the worker stops instead of after every test
+  - search/search.spec.ts: test.describe.configure({ mode: 'default' }) keeps its tests in order on one worker (CloudFront WAF, shared consoleErrors)

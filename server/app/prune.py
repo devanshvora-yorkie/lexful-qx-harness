@@ -1,9 +1,11 @@
-"""Remove what nobody reads from a finished run folder.
+"""Keep only what a reader needs once a run is sealed.
 
-A sealed run keeps what a reader and the next run use: reports, bugs and their screenshots, the
-specs, the plan and walk notes, the UX audit, the cost record, the test results and the model's
-transcript (compressed). It drops files the server regenerates or that only mattered while the
-run was alive. A halted or failed run keeps everything, because it may be resumed or debugged.
+A finished run keeps its record: linear-report.md and .html (the one report), ux-report.html, bugs
+and their screenshots, the specs, the plan and walk notes, what each test did (test-outcomes.json),
+the triage and verify notes, and the transcripts of the sessions that wrote specs, healed them or
+confirmed bugs. Everything else either only mattered while the run was alive or is already in one
+of those files. A halted or failed run keeps everything except Playwright's traces and videos,
+because it may be resumed or debugged.
 """
 
 from __future__ import annotations
@@ -12,18 +14,26 @@ import gzip
 import shutil
 from pathlib import Path
 
-# Rebuilt from run.log, summary.json and the index, or the same data in another file.
+# Only while the run was alive, or the same data is in summary.json, bugs.json or linear-report.md.
 ALWAYS = (
     "contents.txt", "toolchain.log", "preflight.log", "prompt.md", "ux-prompt.md", "promote-prompt.md",
-    "verify-prompt.md", "heal-*.md",
+    "verify-prompt.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "api-probes.jsonl",
+    "ux-audit.log", "e2e-coverage.md", "planned-specs.json", "report.html",
 )
-# Only while the model was working: raw page snapshots and the browser config. The walk scripts stay: bugs cite them.
+# Raw page snapshots and the browser config. The walk scripts stay: bugs cite them.
 EXPLORE_SCRATCH = ("*.yml", "*.yaml", "*.txt", "pw-cli.json")
-# Playwright's own debugging output. Failure screenshots and error-context.md stay.
+# Playwright's debugging output, removed from every run.
 PLAYWRIGHT_HEAVY = ("html", "report")
 HEAVY_FILES = ("*.zip", "*.webm", "*.mp4", "*.trace")
-# Duplicates of opencode/*.jsonl, and the child-session index.
-OPENCODE_DUPLICATES = ("session*.json", "children.json", "children")
+# What a sealed run keeps of playwright/: the final result of every test. Failure screenshots that
+# show a bug were copied into bug-evidence/ when the bug was filed.
+PLAYWRIGHT_KEEP = ("test-outcomes.json",)
+# Transcripts kept (gzipped): the session that wrote the specs (agent), the heals, and the verifier.
+TRANSCRIPTS_KEPT = ("heal-", "verify-")
+# The E2E User Journey stage of a ticket run keeps what ran, what failed and the bugs it filed.
+E2E_KEEP = ("qa-result.json", "playwright", "bugs.json", "bugs.md", "bug-evidence", "verify.json", "summary.json")
+# The checked-in cases a ticket's diff touches: what ran and what the heal said about them.
+AFFECTED_KEEP = ("test-outcomes.json", "triage.json")
 
 
 def _remove(path: Path) -> int:
@@ -51,38 +61,78 @@ def _gzip(path: Path) -> int:
         return 0
 
 
+def _transcript_kept(path: Path) -> bool:
+    """agent.jsonl, heal-2.jsonl, verify-1-retry1.jsonl.gz yes; agent-plan, promote, ux-audit no."""
+    stem = path.name.split(".", 1)[0].split("-retry", 1)[0]
+    return stem == "agent" or stem.startswith(TRANSCRIPTS_KEPT)
+
+
+def _heavy(playwright: Path) -> int:
+    freed = 0
+    for name in PLAYWRIGHT_HEAVY:
+        freed += _remove(playwright / name)
+    for pattern in HEAVY_FILES:
+        for path in playwright.rglob(pattern):
+            freed += _remove(path)
+    return freed
+
+
+def _keep_only(folder: Path, names: tuple[str, ...]) -> int:
+    freed = 0
+    for child in folder.iterdir() if folder.is_dir() else []:
+        if child.name not in names and not child.name.startswith("triage"):
+            freed += _remove(child)
+    return freed
+
+
+def _playwright(folder: Path) -> int:
+    playwright = folder / "playwright"
+    return _keep_only(playwright, PLAYWRIGHT_KEEP) if playwright.is_dir() else 0
+
+
+def _opencode(folder: Path) -> int:
+    freed = 0
+    opencode = folder / "opencode"
+    if not opencode.is_dir():
+        return 0
+    for child in opencode.iterdir():
+        if child.is_dir() or not child.name.endswith((".jsonl", ".jsonl.gz")) or not _transcript_kept(child):
+            freed += _remove(child)
+    for path in opencode.glob("*.jsonl"):
+        freed += _gzip(path)
+    return freed
+
+
 def prune_run(folder: Path, *, finished: bool = True) -> int:
     """Bytes freed. `finished` is False for a halted or failed run: only Playwright's heavy output goes."""
     freed = 0
-    playwright = folder / "playwright"
-    if playwright.is_dir():
-        for name in PLAYWRIGHT_HEAVY:
-            freed += _remove(playwright / name)
-        for pattern in HEAVY_FILES:
-            for path in playwright.rglob(pattern):
-                freed += _remove(path)
+    for playwright in (folder / "playwright", folder / "e2e" / "playwright", folder / "affected" / "playwright"):
+        if playwright.is_dir():
+            freed += _heavy(playwright)
     if not finished:
         return freed
     for pattern in ALWAYS:
         for path in folder.glob(pattern):
             freed += _remove(path)
+    if (folder / "linear-report.md").is_file():
+        # linear-report.md is the one report. Older runs also wrote report.md.
+        freed += _remove(folder / "report.md")
     explore = folder / "explore"
     if explore.is_dir():
         for pattern in EXPLORE_SCRATCH:
             for path in explore.glob(pattern):
                 freed += _remove(path)
-    opencode = folder / "opencode"
-    if opencode.is_dir():
-        for pattern in OPENCODE_DUPLICATES:
-            for path in opencode.glob(pattern):
-                freed += _remove(path)
-        for path in opencode.glob("*.jsonl"):
-            freed += _gzip(path)
-    # The brief is the digest the agent worked from; the full diffs are in GitHub.
-    freed += _remove(folder / "context-pack.json")
+    freed += _playwright(folder)
+    freed += _opencode(folder)
+    e2e = folder / "e2e"
+    if e2e.is_dir():
+        freed += _keep_only(e2e, E2E_KEEP)
+        freed += _playwright(e2e)
+    affected = folder / "affected"
+    if affected.is_dir():
+        freed += _keep_only(affected, AFFECTED_KEEP)
     # An empty folder says nothing.
-    for name in ("explore", "opencode", "playwright"):
-        sub = folder / name
+    for sub in (explore, folder / "opencode", folder / "playwright", e2e, affected):
         if sub.is_dir() and not any(sub.iterdir()):
             sub.rmdir()
     return freed

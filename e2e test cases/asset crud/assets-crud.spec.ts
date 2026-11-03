@@ -10,7 +10,7 @@
  * Page objects live in this folder. Auth is ../../auth-helper.
  * Paths are relative to QA_ENV_URL (/docs/assets, /docs/d/all/servers).
  */
-import { test, expect } from '@playwright/test';
+import { test as base, expect } from '@playwright/test';
 import { injectAuthCookies, getLexfulCookies } from '../../auth-helper';
 import { AssetsListingPOM } from './assets-listing-pom';
 import { ServersListingPOM } from './servers-listing-pom';
@@ -20,7 +20,8 @@ import { CreateAssetPOM } from './create-asset-pom';
 const SERVERS_URL = '/docs/d/all/servers';
 const ASSETS_URL = '/docs/assets';
 const API_BASE = process.env.STYTCH_API_URL || 'https://api.uat.lexful.net';
-// The seeded servers are created through the API the first time the listing opens, and archived in afterAll.
+// The seeded servers are created through the API the first time a test in this worker opens the listing,
+// and archived when the worker stops (the seedCleanup worker fixture below). Each worker has its own prefix.
 // They carry the field values the Server Detail Drawer tests assert on. Both names share one prefix:
 // the grid virtualizes its rows, so a seed outside the rendered window cannot be clicked. Each describe
 // searches on the prefix first, which brings both seeds into the grid.
@@ -34,44 +35,58 @@ let seedAccountId = '';
 let seedServerIds: string[] = [];
 let seedBackupIds: string[] = [];
 
-test.afterAll(async ({ playwright }) => {
-  if (!seedServerIds.length && !seedBackupIds.length) return;
-  const cookies = await getLexfulCookies();
-  const api = await playwright.request.newContext({
-    extraHTTPHeaders: {
-      Cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; '),
-      'X-Account-Id': seedAccountId,
-    },
-  });
-  try {
-    // Servers first: they reference the backup record.
-    for (const [type, ids] of [
-      ['servers', seedServerIds],
-      ['backups', seedBackupIds],
-    ] as const) {
-      for (const id of ids) {
-        const response = await api.delete(`${API_BASE}/v1/assets/${type}/${id}`);
-        if (response.status() !== 204 && response.status() !== 404) {
-          throw new Error(`Could not archive seeded ${type} ${id}: HTTP ${response.status()}`);
+// Tests run one at a time on whichever worker is free (fullyParallel). afterAll would run after every test
+// and re-seed for each one, so the seeds are archived by a worker fixture instead: once, when the worker stops.
+const test = base.extend<{}, { seedCleanup: void }>({
+  seedCleanup: [
+    async ({ playwright }, use) => {
+      await use();
+      if (!seedServerIds.length && !seedBackupIds.length) return;
+      const cookies = await getLexfulCookies();
+      const api = await playwright.request.newContext({
+        extraHTTPHeaders: {
+          Cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; '),
+          'X-Account-Id': seedAccountId,
+        },
+      });
+      try {
+        // Servers first: they reference the backup record.
+        for (const [type, ids] of [
+          ['servers', seedServerIds],
+          ['backups', seedBackupIds],
+        ] as const) {
+          for (const id of ids) {
+            const response = await api.delete(`${API_BASE}/v1/assets/${type}/${id}`);
+            if (response.status() !== 204 && response.status() !== 404) {
+              throw new Error(`Could not archive seeded ${type} ${id}: HTTP ${response.status()}`);
+            }
+          }
         }
+      } finally {
+        seedServerIds = [];
+        seedBackupIds = [];
+        await api.dispose();
       }
-    }
-  } finally {
-    seedServerIds = [];
-    seedBackupIds = [];
-    await api.dispose();
-  }
+    },
+    { scope: 'worker', auto: true },
+  ],
 });
 
 async function gotoServersListing(page: import('@playwright/test').Page) {
-  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times.
+  // CloudFront answers 403 "Request blocked" intermittently on UAT. Retry the navigation up to three times,
+  // spacing the attempts out because the blocks come in bursts. Still blocked is an environment failure,
+  // so say so instead of letting a heading assertion fail later.
+  let lastStatus = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const response = await page.goto(SERVERS_URL, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    lastStatus = response?.status() ?? 0;
     const blocked =
-      response?.status() === 403 ||
+      lastStatus === 403 ||
       (await page.getByText('Request blocked').isVisible().catch(() => false));
-    if (!blocked) break;
+    if (!blocked) return;
+    await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
   }
+  throw new Error(`UAT blocked ${SERVERS_URL} (HTTP ${lastStatus})`);
 }
 
 async function createSeedServers(page: import('@playwright/test').Page) {
