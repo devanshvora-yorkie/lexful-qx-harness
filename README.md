@@ -31,6 +31,10 @@ docker compose up --build -d
 
 With `LOCAL_MODE=true` the API does not require `HARNESS_DEPLOY_SECRET`. Set `LOCAL_MODE=false` and a secret before exposing the port.
 
+## Set up the QA machine
+
+`./build.sh` does the whole setup on the machine that will run the harness: it checks the tools and the keys in `.env`, builds the image, starts the API, and with `./build.sh --runner` registers the machine as the GitHub Actions runner that runs the harness after each UAT deploy. `./build.sh --check` only checks. `./build.sh --update` pulls first. The trigger, the requirements and what Lexful configures in `docu-stack` are in [docs/setup.md](docs/setup.md).
+
 ## Feature Specific TCs
 
 From this directory, after the container is up:
@@ -44,7 +48,7 @@ That starts the run and streams the log. Preflight signs in, builds the context 
 
 Every run folder has one report, `linear-report.md`, written as the comment for the Linear issue, and `linear-report.html`, the same report for a browser with the full test list and the screenshots. It shows what triggered the run (ticket, pull request or UAT deployment), the E2E stage (ran, passed, failed, flaky, the cases updated in place and the cases added to the suite), the ticket's tests (generated, passed, failed and the pass ratio, by type and by suite), the bugs, and the UX audit's suggested changes, with links to `ux-report.html`, `bugs.md` and the screenshots. Each bug in `bugs.md` is written as a ticket: title, severity, environment, steps to reproduce, expected, actual, evidence. A bug is filed only after a fresh session followed its steps and took a screenshot; what it could not reproduce is not filed. Nothing is posted to Linear yet. On the checked-in suite, a failing case is treated as outdated: the heal updates locators, copy and seeded data in `e2e test cases/` in place and records each edit in `e2e test cases/changes.log`. A sealed run is pruned of scratch files; transcripts are kept as `.jsonl.gz`.
 
-A GitHub runner that starts one container per UAT deployment runs the same thing without the server: `python -m app.cli --sha <deployed sha>` runs one run and exits with the verdict. See `docs/github-runner.md`.
+A GitHub runner that starts one container per UAT deployment runs the same thing without the server: `python -m app.cli --sha <deployed sha>` runs one run and exits with the verdict. See `docs/setup.md`.
 
 The log ends with a `── run summary` block: each phase with its status and time, where the run stopped, the test counts, bugs, findings, hypotheses, UX result, promote result and cost. The same data is in `summary.json` in the run folder.
 

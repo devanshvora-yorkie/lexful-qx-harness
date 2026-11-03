@@ -57,5 +57,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
 ENTRYPOINT ["docker/entrypoint.sh"]
 # Default: the API server (docker compose up). A GitHub runner that starts one container per UAT deploy
 # overrides the command with one run instead:  server/.venv/bin/python -m app.cli --sha <sha>
-# See docs/github-runner.md.
+# See docs/setup.md.
 CMD ["server/.venv/bin/python", "-m", "uvicorn", "app.main:app", "--app-dir", "server", "--host", "0.0.0.0", "--port", "8787"]

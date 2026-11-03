@@ -1,0 +1,90 @@
+# Runs the harness on the QA machine (the self-hosted runner that build.sh --runner registers).
+#
+# Triggers:
+#   repository_dispatch  uat-deployed   sent by docu-stack when a UAT deploy succeeds (see docs/setup.md)
+#   workflow_dispatch                   run it by hand: sha, pr or ticket
+#
+# The job runs `docker compose run` in QA_HARNESS_DIR (set in the runner's .env by build.sh), so the
+# compose file, .env and the runs/ volume are the ones the API container uses. Exit codes of the run:
+# 0 PERFECT and 1 NEEDS_REVISION are reported and the job passes; 2 (halted or failed) and 64 fail the job.
+name: QA a UAT deploy
+
+on:
+  repository_dispatch:
+    types: [uat-deployed]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: commit the UAT deployment shipped
+        required: false
+      pr:
+        description: pull request number
+        required: false
+      ticket:
+        description: Linear ticket, LEX-1234
+        required: false
+
+permissions:
+  contents: read
+
+# One harness run at a time on the machine. A newer deploy waits; it never cancels a running QA.
+concurrency:
+  group: qa-harness
+  cancel-in-progress: false
+
+jobs:
+  qa:
+    runs-on: [self-hosted, qa-harness]
+    timeout-minutes: 300
+    env:
+      SHA: ${{ github.event.client_payload.sha || inputs.sha }}
+      PR: ${{ inputs.pr }}
+      TICKET: ${{ inputs.ticket }}
+    steps:
+      - name: Check the trigger and the machine
+        run: |
+          if [ -z "${QA_HARNESS_DIR:-}" ]; then
+            echo "QA_HARNESS_DIR is not set. Run ./build.sh --runner on the QA machine." >&2
+            exit 2
+          fi
+          if [ -z "$SHA$PR$TICKET" ]; then
+            echo "The trigger named no commit, pull request or ticket." >&2
+            exit 64
+          fi
+          if [ -n "$SHA" ] && ! echo "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "sha must be the full 40-character commit: $SHA" >&2
+            exit 64
+          fi
+          echo "harness folder: $QA_HARNESS_DIR"
+          echo "trigger: sha=${SHA:-none} pr=${PR:-none} ticket=${TICKET:-none}"
+
+      - name: Update the harness and rebuild its image
+        run: |
+          cd "$QA_HARNESS_DIR"
+          git pull --ff-only
+          docker compose build harness
+
+      - name: Run the QA
+        id: qa
+        run: |
+          cd "$QA_HARNESS_DIR"
+          args=()
+          [ -n "$SHA" ] && args+=(--sha "$SHA")
+          [ -n "$PR" ] && args+=(--pr "$PR")
+          [ -n "$TICKET" ] && args+=(--ticket "$TICKET")
+          set +e
+          docker compose run --rm --no-deps harness \
+            server/.venv/bin/python -m app.cli "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/qa-run.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          result="$(grep -E '^run .* verdict ' "$RUNNER_TEMP/qa-run.log" | tail -1 || true)"
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "### QA run"
+            echo ""
+            echo "${result:-No run line was printed. Read the job log.}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -ge 2 ]; then
+            echo "The run halted or failed (exit $code). The run folder keeps what it did." >&2
+            exit "$code"
+          fi
