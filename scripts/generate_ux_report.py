@@ -768,11 +768,11 @@ def render_card(f, is_observation=False, image_lookup=None, ac_map=None, spec=No
               Evidence Screenshot
               <span class="evidence-filename" title="{escape(img_rel)}">{escape(img_rel)}</span>
             </div>
-            <div class="finding-image-preview" onclick="openLightbox('{img_uri}', '{escape(img_title)} ({escape(img_rel)})')">
+            <div class="finding-image-preview" data-rel="{escape(img_rel)}" data-title="{escape(img_title)}" onclick="openLightboxFromPreview(this)">
               <img src="{img_uri}" alt="{escape(img_title)}" loading="lazy">
               <div class="image-overlay">
                 <span>{escape(img_rel)}</span>
-                <span>Click to view full resolution ⤢</span>
+                <span>Click to enlarge ⤢</span>
               </div>
             </div>
           </div>
@@ -2096,64 +2096,143 @@ def main():
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.88);
-      backdrop-filter: blur(10px);
+      background: rgba(10, 15, 30, 0.94);
+      backdrop-filter: blur(12px);
       z-index: 9999;
       display: none;
+      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      padding: 24px;
+      justify-content: flex-start;
+      padding: 16px 24px 20px 24px;
+      box-sizing: border-box;
+      user-select: none;
     }}
 
     .lightbox-modal.active {{
       display: flex;
     }}
 
+    .lightbox-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 1300px;
+      margin-bottom: 12px;
+      padding: 8px 14px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      box-sizing: border-box;
+    }}
+
+    .lightbox-meta {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+
+    .lightbox-tag {{
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #93c5fd;
+      font-family: var(--font-mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 400px;
+    }}
+
+    .lightbox-zoom-badge {{
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-family: var(--font-mono);
+    }}
+
+    .lightbox-actions {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }}
+
+    .lb-btn {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #e2e8f0;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }}
+
+    .lb-btn:hover {{
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.3);
+    }}
+
+    .lb-btn.lb-close {{
+      background: rgba(239, 68, 68, 0.18);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.35);
+      margin-left: 6px;
+    }}
+
+    .lb-btn.lb-close:hover {{
+      background: rgba(239, 68, 68, 0.35);
+      color: #fff;
+    }}
+
     .lightbox-content {{
       position: relative;
-      max-width: 90vw;
-      max-height: 90vh;
+      flex: 1;
+      width: 100%;
+      max-width: 1300px;
       display: flex;
-      flex-direction: column;
       align-items: center;
+      justify-content: center;
       overflow: auto;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 16px;
+      box-sizing: border-box;
+      scrollbar-width: thin;
     }}
 
     .lightbox-img {{
-      max-width: 100%;
+      max-width: 95%;
       max-height: 80vh;
-      border-radius: 10px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       cursor: zoom-in;
-      transition: transform 0.2s ease;
+      transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      transform-origin: center center;
     }}
 
     .lightbox-img.zoomed {{
-      max-width: none;
-      max-height: none;
-      transform: scale(1.6);
       cursor: zoom-out;
     }}
 
     .lightbox-caption {{
       color: #cbd5e1;
-      font-size: 0.9rem;
-      margin-top: 14px;
+      font-size: 0.86rem;
+      margin-top: 10px;
       text-align: center;
-    }}
-
-    .lightbox-close {{
-      position: absolute;
-      top: -40px;
-      right: 0;
-      background: rgba(255, 255, 255, 0.15);
-      border: none;
-      color: #fff;
-      padding: 6px 14px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-weight: 600;
+      max-width: 1100px;
+      line-height: 1.5;
     }}
 
     footer {{
@@ -2408,13 +2487,33 @@ def main():
       <p style="font-size:0.82rem;color:var(--text-dim);margin-top:14px;line-height:1.6;"><strong style="color:#e2e8f0;">{n_exercised} exercised</strong> ({n_pass} pass, {n_chk_obs} observation, {n_chk_def} defect) &bull; <strong>{n_na} not applicable</strong> to this journey. Only the exercised checks feed the verdict.</p>
     </div>
 
-    <!-- Lightbox Modal -->
+    <!-- Lightbox Modal with Zoom & Pan -->
     <div id="lightbox" class="lightbox-modal" onclick="closeLightbox(event)">
-      <div class="lightbox-content">
-        <button class="lightbox-close" onclick="closeLightboxDirect()">✕ Close</button>
-        <img id="lightbox-img" class="lightbox-img" src="" alt="Evidence view" onclick="toggleZoom(event)" title="Click to zoom in/out">
-        <div id="lightbox-caption" class="lightbox-caption"></div>
+      <div class="lightbox-header" onclick="event.stopPropagation()">
+        <div class="lightbox-meta">
+          <span id="lightbox-filename" class="lightbox-tag">Evidence Screenshot</span>
+          <span id="lightbox-zoom-badge" class="lightbox-zoom-badge">100%</span>
+        </div>
+        <div class="lightbox-actions">
+          <button class="lb-btn" onclick="zoomIn(event)" title="Zoom In (+)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Zoom In
+          </button>
+          <button class="lb-btn" onclick="zoomOut(event)" title="Zoom Out (-)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            Zoom Out
+          </button>
+          <button class="lb-btn" onclick="resetZoom(event)" title="Fit to Screen">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            Fit
+          </button>
+          <button class="lb-btn lb-close" onclick="closeLightboxDirect()" title="Close (Escape)">✕ Close</button>
+        </div>
       </div>
+      <div class="lightbox-content" onclick="toggleZoom(event)">
+        <img id="lightbox-img" class="lightbox-img" src="" alt="Evidence view" title="Click to zoom in/out">
+      </div>
+      <div id="lightbox-caption" class="lightbox-caption" onclick="event.stopPropagation()"></div>
     </div>
 
     <footer>
@@ -2473,30 +2572,120 @@ def main():
       }});
     }}
 
-    function openLightbox(uri, title) {{
-      const modal = document.getElementById('lightbox');
+    let currentZoom = 1.0;
+    const ZOOM_STEP = 0.25;
+    const MIN_ZOOM = 0.5;
+    const MAX_ZOOM = 3.0;
+
+    function updateZoomDisplay() {{
       const img = document.getElementById('lightbox-img');
-      const cap = document.getElementById('lightbox-caption');
-      if (modal && img) {{
-        img.src = uri;
-        if (cap) cap.innerText = title;
-        modal.classList.add('active');
+      const badge = document.getElementById('lightbox-zoom-badge');
+      if (img) {{
+        img.style.transform = 'scale(' + currentZoom + ')';
+        if (currentZoom > 1.0) {{
+          img.classList.add('zoomed');
+          img.style.cursor = 'zoom-out';
+        }} else {{
+          img.classList.remove('zoomed');
+          img.style.cursor = 'zoom-in';
+        }}
+      }}
+      if (badge) {{
+        badge.innerText = Math.round(currentZoom * 100) + '%';
       }}
     }}
 
+    function zoomIn(e) {{
+      if (e) e.stopPropagation();
+      if (currentZoom < MAX_ZOOM) {{
+        currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
+        updateZoomDisplay();
+      }}
+    }}
+
+    function zoomOut(e) {{
+      if (e) e.stopPropagation();
+      if (currentZoom > MIN_ZOOM) {{
+        currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
+        updateZoomDisplay();
+      }}
+    }}
+
+    function resetZoom(e) {{
+      if (e) e.stopPropagation();
+      currentZoom = 1.0;
+      updateZoomDisplay();
+    }}
+
+    function toggleZoom(e) {{
+      if (e) e.stopPropagation();
+      if (currentZoom > 1.0) {{
+        resetZoom();
+      }} else {{
+        currentZoom = 1.75;
+        updateZoomDisplay();
+      }}
+    }}
+
+    function openLightbox(uri, title, filename) {{
+      const modal = document.getElementById('lightbox');
+      const img = document.getElementById('lightbox-img');
+      const cap = document.getElementById('lightbox-caption');
+      const fileBadge = document.getElementById('lightbox-filename');
+      if (modal && img) {{
+        img.src = uri;
+        currentZoom = 1.0;
+        updateZoomDisplay();
+        if (cap) cap.innerText = title || '';
+        if (fileBadge) fileBadge.innerText = filename || 'Evidence Screenshot';
+        modal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+      }}
+    }}
+
+    function openLightboxFromPreview(el) {{
+      if (!el) return;
+      const img = el.querySelector('img');
+      if (!img || !img.src) return;
+      const title = el.getAttribute('data-title') || img.alt || '';
+      const rel = el.getAttribute('data-rel') || '';
+      const fullTitle = rel ? (title ? title + ' (' + rel + ')' : rel) : title;
+      openLightbox(img.src, fullTitle, rel || 'Evidence Screenshot');
+    }}
+
     function closeLightbox(e) {{
-      if (e.target.id === 'lightbox' || e.target.classList.contains('lightbox-close')) {{
+      if (e.target.id === 'lightbox' || e.target.classList.contains('lightbox-content') || e.target.classList.contains('lb-close')) {{
         closeLightboxDirect();
       }}
     }}
 
     function closeLightboxDirect() {{
       const modal = document.getElementById('lightbox');
-      if (modal) modal.classList.remove('active');
+      const img = document.getElementById('lightbox-img');
+      if (modal) {{
+        modal.classList.remove('active');
+        document.body.style.overflow = '';
+      }}
+      currentZoom = 1.0;
+      if (img) {{
+        img.style.transform = '';
+        img.classList.remove('zoomed');
+      }}
     }}
 
     document.addEventListener('keydown', function(e) {{
       if (e.key === 'Escape') closeLightboxDirect();
+      if (document.getElementById('lightbox') && document.getElementById('lightbox').classList.contains('active')) {{
+        if (e.key === '+' || e.key === '=') zoomIn();
+        if (e.key === '-' || e.key === '_') zoomOut();
+        if (e.key === '0') resetZoom();
+      }}
+    }});
+
+    document.querySelectorAll('.finding-image-preview').forEach(function(el) {{
+      el.addEventListener('click', function() {{
+        openLightboxFromPreview(this);
+      }});
     }});
 
     document.querySelectorAll('.ticket-details').forEach(function(el) {{

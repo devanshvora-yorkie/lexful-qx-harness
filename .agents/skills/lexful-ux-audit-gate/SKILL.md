@@ -142,7 +142,7 @@ The report must work as a local HTML file without a build step. Inline the repor
      - `.callout-expected`: Emerald/green bordered box with uppercase `EXPECTED BEHAVIOR` header.
      - `.callout-actual`: Rose/red bordered box with uppercase `OBSERVED ACTUAL` header.
      - Separates expected criteria from observed bugs with maximum visual contrast and readability.
-   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion.
+   - **Inline Evidence Screenshot (`.finding-image-preview`):** Visual evidence preview thumbnail with hover zoom and click-to-lightbox modal expansion, featuring interactive click-to-enlarge, dedicated zoom controls (Zoom In, Zoom Out, Fit to Screen), mouse-wheel zoom, and toggle zoom (1.75x).
    - `Reproduction steps` and `Recommended resolution / design direction`.
    - `shadcn/ui implementation` and `Fluent design alignment` guidance blocks.
 6. **Footer:** Report generation timestamp, ticket ID, engine metadata, and reviewer sign-off notice.
