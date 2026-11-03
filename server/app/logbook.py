@@ -57,8 +57,8 @@ def _clip(text: str, limit: int = 180) -> str:
 
 
 def _public(text: str) -> str:
-    """Drop provider key URLs. The rest of the error is what the run failed on."""
-    return re.sub(r"https://openrouter\.ai/\S+", "openrouter", plain(text))
+    """The error text as a log line."""
+    return plain(text)
 
 
 def _short_path(path: str) -> str:

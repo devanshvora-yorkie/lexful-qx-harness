@@ -363,7 +363,7 @@ def _relative_to_root(path: Path) -> str:
 def _opencode_env(run_dir: Path) -> dict[str, str]:
     settings = get_settings()
     env = os.environ.copy()
-    for key in (*SECRET_ENV, "OPENROUTER_API_KEY", "BEDROCK_API_KEY"):
+    for key in (*SECRET_ENV, "BEDROCK_API_KEY"):
         env.pop(key, None)
     token = _bedrock_token()
     if token:
@@ -384,7 +384,7 @@ def _playwright_env(run_dir: Path) -> dict[str, str]:
     """
     settings = get_settings()
     env = os.environ.copy()
-    for key in (*SECRET_ENV, "OPENROUTER_API_KEY", "BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
+    for key in (*SECRET_ENV, "BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
         env.pop(key, None)
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())

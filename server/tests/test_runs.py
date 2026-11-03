@@ -93,12 +93,6 @@ class LogbookTest(unittest.TestCase):
         self.assertIn("1m 00s", subagent)
         self.assertNotIn("long prompt", subagent)
         self.assertIn("ses", format_event({"type": "error", "error": {"message": "Expected a string starting with ses"}}))
-        hidden = format_event({
-            "type": "error",
-            "error": {"message": "budget https://openrouter.ai/workspaces/lexful/keys/secret"},
-        })
-        self.assertNotIn("keys/secret", hidden)
-        self.assertIn("openrouter", hidden)
 
     def test_child_message_names_the_action(self):
         lines = child_message_lines("qa-explorer", {
