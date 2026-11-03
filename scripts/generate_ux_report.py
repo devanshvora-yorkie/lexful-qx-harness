@@ -405,11 +405,24 @@ EXTRA_CSS = """
     .integrity-item h4 { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:6px; }
     .integrity-item p { font-size:0.83rem; color:var(--text-dim); line-height:1.5; margin:0; }
     .integrity-item strong { color:#e2e8f0; }
-    .ticket-block { margin-top:14px; border-top:1px solid rgba(255,255,255,0.07); padding-top:14px; }
-    .ticket-block h4 { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin-bottom:6px; }
-    .ticket-block p, .ticket-block li { color:var(--text-muted); font-size:0.86rem; line-height:1.6; }
-    .ticket-block ul { padding-left:18px; margin:6px 0 0; }
-    .ticket-block li { margin-bottom:3px; }
+    .ticket-block { margin-top:14px; border-top:1px solid rgba(255,255,255,0.07); padding-top:12px; }
+    .ticket-details { background:rgba(15,23,42,0.45); border:1px solid rgba(148,163,184,0.15); border-radius:10px; overflow:hidden; transition:all 0.2s ease; }
+    .ticket-details:hover { border-color:rgba(148,163,184,0.3); }
+    .ticket-details[open] { background:rgba(15,23,42,0.65); border-color:rgba(99,102,241,0.35); }
+    .ticket-summary { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; cursor:pointer; user-select:none; list-style:none; }
+    .ticket-summary::-webkit-details-marker { display:none; }
+    .ticket-summary-left { display:flex; align-items:center; gap:8px; }
+    .ticket-summary h4 { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); margin:0; font-weight:700; display:inline-flex; align-items:center; gap:6px; }
+    .ticket-summary-icon { transition:transform 0.2s ease; color:var(--text-dim); }
+    .ticket-details[open] .ticket-summary-icon { transform:rotate(90deg); color:#818cf8; }
+    .ticket-toggle-badge { font-size:0.72rem; font-weight:600; color:var(--text-dim); background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08); border-radius:5px; padding:3px 9px; transition:all 0.15s ease; }
+    .ticket-summary:hover .ticket-toggle-badge { color:#e2e8f0; border-color:rgba(255,255,255,0.18); }
+    .ticket-details[open] .ticket-toggle-badge { color:#cbd5e1; background:rgba(99,102,241,0.15); border-color:rgba(99,102,241,0.3); }
+    .ticket-content { padding:12px 16px 16px 16px; border-top:1px solid rgba(255,255,255,0.06); }
+    .ticket-content p, .ticket-content li { color:var(--text-muted); font-size:0.86rem; line-height:1.6; margin:0; }
+    .ticket-content p + p { margin-top:8px; }
+    .ticket-content ul { padding-left:18px; margin:6px 0 0; }
+    .ticket-content li { margin-bottom:3px; }
 """
 
 
@@ -1134,18 +1147,31 @@ def main():
     if n_exercised is not None:
         hero_summary += f" {n_exercised} of {n_checks} rulebook checks were exercised; {len(defects)} defect(s) and {len(observations)} observation(s) were recorded."
 
-    # Ticket block: the whole ticket, so the reviewer can check the audit against it
+    # Ticket block: collapsible ticket details, so the reviewer can check the audit against it on demand
     ticket_block_html = ""
     if spec["problem"] or spec["acs"] or spec["scope"]:
-        parts = ['<div class="ticket-block"><h4>Ticket as filed</h4>']
+        content_parts = []
         if spec["problem"]:
-            parts.append(f'<p>{escape(spec["problem"])}</p>')
+            content_parts.append(f'<p>{escape(spec["problem"])}</p>')
         if spec["scope"]:
-            parts.append(f'<p style="margin-top:8px;"><strong style="color:#cbd5e1;">Scope.</strong> {escape(spec["scope"])}</p>')
+            content_parts.append(f'<p style="margin-top:8px;"><strong style="color:#cbd5e1;">Scope.</strong> {escape(spec["scope"])}</p>')
         if spec["validation"]:
-            parts.append(f'<h4 style="margin-top:12px;">Validation claimed in the ticket</h4><p>{escape(spec["validation"])}</p>')
-        parts.append('</div>')
-        ticket_block_html = "".join(parts)
+            content_parts.append(f'<h4 style="margin-top:12px;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:6px;">Validation claimed in the ticket</h4><p>{escape(spec["validation"])}</p>')
+        inner_content = "".join(content_parts)
+        ticket_block_html = f"""<div class="ticket-block">
+          <details class="ticket-details">
+            <summary class="ticket-summary">
+              <div class="ticket-summary-left">
+                <svg class="ticket-summary-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+                <h4>Ticket as filed</h4>
+              </div>
+              <span class="ticket-toggle-badge">Expand ticket text</span>
+            </summary>
+            <div class="ticket-content">
+              {inner_content}
+            </div>
+          </details>
+        </div>"""
 
     integrity_html = f"""
       <div class="integrity">
@@ -2471,6 +2497,15 @@ def main():
 
     document.addEventListener('keydown', function(e) {{
       if (e.key === 'Escape') closeLightboxDirect();
+    }});
+
+    document.querySelectorAll('.ticket-details').forEach(function(el) {{
+      el.addEventListener('toggle', function() {{
+        var badge = el.querySelector('.ticket-toggle-badge');
+        if (badge) {{
+          badge.textContent = el.open ? 'Collapse ticket' : 'Expand ticket text';
+        }}
+      }});
     }});
   </script>
 </body>
