@@ -370,7 +370,6 @@ def _opencode_env(run_dir: Path) -> dict[str, str]:
         env["AWS_BEARER_TOKEN_BEDROCK"] = token
     env["AWS_REGION"] = (os.environ.get("AWS_REGION") or "us-east-1").strip() or "us-east-1"
     env["OPENCODE_MAIN_MODEL"] = settings.main_model
-    env["OPENCODE_SUB_MODEL"] = settings.sub_model
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
@@ -561,7 +560,7 @@ def _run_opencode_once(
     command = ["opencode", "run", "--format", "json"]
     if active_session:
         command.extend(["--session", active_session])
-    model = model or (settings.main_model if agent.startswith("qa") else settings.sub_model)
+    model = model or settings.main_model
     command.extend([
         "--agent",
         agent,

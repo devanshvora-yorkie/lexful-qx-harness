@@ -79,8 +79,8 @@ def relative_folder(row: dict[str, Any]) -> str:
     if pr:
         return f"pull-requests/pr-{pr}/{name}"
     sha = str(row.get("sha") or "")
-    if sha:
-        return f"deploys/{sha[:12]}/{name}"
+    if re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
+        return f"deploys/{sha[:12].lower()}/{name}"
     return f"manual/{name}"
 
 
@@ -221,10 +221,7 @@ def create_run(
         "status": "accepted",
         "createdAt": now,
         "updatedAt": now,
-        "models": {
-            "main": get_settings().main_model,
-            "subagents": get_settings().sub_model,
-        },
+        "models": {"main": get_settings().main_model},
         "healAttempts": 0,
         "opencodeSession": None,
         "error": None,

@@ -81,9 +81,13 @@ What `build.sh` does, in order:
 1. Checks docker, compose v2, git and curl. Nothing is installed for you.
 2. Creates `.env` from `.env.example` on the first run, with mode 600.
 3. Checks that the required keys are set. It prints only the names of empty keys.
-4. Builds the image (`docker compose build harness`) and starts the API container.
-5. Waits for `http://127.0.0.1:8787/health`.
-6. With `--runner`: downloads the current GitHub Actions runner for this machine, registers it to
+4. Creates `HARNESS_DEPLOY_SECRET` in `.env` if it is empty. With it, a web page or a process on the
+   machine cannot start or cancel runs, and the agents (which never get the secret) cannot either.
+   The scripts in the container send it for you. See [security.md](security.md).
+5. Builds the image (`docker compose build harness`) and restarts the API container, so new code and
+   a new `.env` take effect. It refuses while a run is in progress.
+6. Waits for `http://127.0.0.1:8787/health`.
+7. With `--runner`: downloads the current GitHub Actions runner for this machine, registers it to
    `Lexful-ai/qa-harness` with the label `qa-harness`, writes `QA_HARNESS_DIR` into the runner's `.env`
    and installs it as a service (launchd on macOS, systemd on Linux) so it survives reboots.
 

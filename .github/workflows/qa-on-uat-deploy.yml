@@ -51,8 +51,17 @@ jobs:
             echo "The trigger named no commit, pull request or ticket." >&2
             exit 64
           fi
+          # Each input becomes a command-line argument, so only the exact shapes get through.
           if [ -n "$SHA" ] && ! echo "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "sha must be the full 40-character commit: $SHA" >&2
+            echo "sha must be the full 40-character commit" >&2
+            exit 64
+          fi
+          if [ -n "$PR" ] && ! echo "$PR" | grep -Eq '^[0-9]+$'; then
+            echo "pr must be a number" >&2
+            exit 64
+          fi
+          if [ -n "$TICKET" ] && ! echo "$TICKET" | grep -Eq '^LEX-[0-9]+$'; then
+            echo "ticket must look like LEX-1234" >&2
             exit 64
           fi
           echo "harness folder: $QA_HARNESS_DIR"

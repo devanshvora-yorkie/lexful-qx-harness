@@ -81,6 +81,38 @@ if [ -n "$missing" ]; then
 fi
 say "Required keys are set (values not shown)."
 
+# The API listens on 127.0.0.1 only, but with no secret any web page you open, or any process on this
+# machine, can start or cancel a run. A secret is made once and kept in .env. The scripts in the
+# container send it for you. To call the API yourself, send it as the x-harness-deploy-secret header.
+ensure_deploy_secret() {
+  if grep -Eq '^HARNESS_DEPLOY_SECRET=[^[:space:]]' "$ENV_FILE"; then
+    say "HARNESS_DEPLOY_SECRET is set."
+    return
+  fi
+  if [ "$CHECK_ONLY" = 1 ]; then
+    say "HARNESS_DEPLOY_SECRET is empty. ./build.sh will create one."
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    secret="$(openssl rand -hex 24)"
+  elif command -v python3 >/dev/null 2>&1; then
+    secret="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+  else
+    say "No openssl or python3 to make a secret. Set HARNESS_DEPLOY_SECRET in $ENV_FILE yourself."
+    return
+  fi
+  tmp="$(mktemp "$ENV_FILE.XXXXXX")"
+  awk -v s="$secret" '
+    /^HARNESS_DEPLOY_SECRET=/ && !done { print "HARNESS_DEPLOY_SECRET=" s; done = 1; next }
+    { print }
+    END { if (!done) print "HARNESS_DEPLOY_SECRET=" s }
+  ' "$ENV_FILE" > "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$ENV_FILE"
+  say "Created HARNESS_DEPLOY_SECRET in $ENV_FILE (not shown)."
+}
+ensure_deploy_secret
+
 if [ "$UPDATE" = 1 ]; then
   step "Update the harness"
   git -C "$ROOT" pull --ff-only
@@ -97,7 +129,12 @@ step "Build the image"
 docker compose --project-directory "$ROOT" build harness
 
 step "Start the API container"
-docker compose --project-directory "$ROOT" up -d harness
+# The server code is mounted into the container, not baked in, so only a restart loads new code or a new .env.
+# A restart would kill a run in progress, so wait for it.
+if curl -fsS "http://127.0.0.1:8787/health" 2>/dev/null | grep -q '"runningRun":{'; then
+  die "a run is in progress. Wait for it to end, or stop it with: docker compose exec harness npm run cancel-runs"
+fi
+docker compose --project-directory "$ROOT" up -d --force-recreate harness
 
 step "Wait for the API"
 healthy=0

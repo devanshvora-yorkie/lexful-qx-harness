@@ -21,10 +21,12 @@
     ".agents/skills/lexful-autonomous-agent-qa/references/custom-instructions.md"
   ],
   // OpenCode 2. Last matching rule wins.
+  // task deny: no agent may start a subagent. The harness runs one session per phase (see AGENTS.md).
   // The working directory is /opt/lexful-qa-opencode inside the container.
   // external_directory deny blocks every other path, on any host.
   "permissions": [
     { "action": "external_directory", "resource": "*", "effect": "deny" },
+    { "action": "task", "resource": "*", "effect": "deny" },
     { "action": "read", "resource": ".env", "effect": "deny" },
     { "action": "read", "resource": "*.env", "effect": "deny" },
     { "action": "read", "resource": ".env.*", "effect": "deny" },
@@ -86,22 +88,26 @@
   "agents": {
     "build": {
       "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" }
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" }
       ]
     },
     "explore": {
       "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" }
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" }
       ]
     },
     "general": {
       "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" }
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" }
       ]
     },
     "plan": {
       "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" }
+        { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" }
       ]
     },
     "qa": {
@@ -111,6 +117,7 @@
       "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. One session owns Explore, Author, Heal, and Promote. Do not spawn subagents. If the server says E2E User Journey TCs, follow only section 3 of the skill. Stay inside this repository. Do not read .env. Do not clone a product repo.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
         { "action": "read", "resource": "*.env", "effect": "deny" },
         { "action": "read", "resource": ".env.*", "effect": "deny" },
@@ -149,6 +156,7 @@
       "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. One session owns Explore, Author, Heal, and Promote. Do not spawn subagents. If the server says E2E User Journey TCs, follow only section 3 of the skill. Stay inside this repository. Do not read .env. Do not clone a product repo.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
         { "action": "read", "resource": "*.env", "effect": "deny" },
         { "action": "read", "resource": ".env.*", "effect": "deny" },
@@ -186,6 +194,7 @@
       "system": "Read .agents/prompts/ux-auditor.md and follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. Use playwright-cli state-load runs/cache/stytch/session.json. Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md and .agents/ux/traceability.md; grep .agents/ux/checks.yaml for the journey's check ids. Do not read .agents/ux/audit-preview-reference.html. Write ux-findings.json and ux-scorecard.json in the run directory. The server writes ux-report.html. S2 and S3 are PASS WITH ADVISORIES.",
       "permissions": [
         { "action": "external_directory", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "*", "effect": "deny" },
         { "action": "read", "resource": ".env", "effect": "deny" },
         { "action": "read", "resource": "*.env", "effect": "deny" },
         { "action": "read", "resource": ".env.*", "effect": "deny" },

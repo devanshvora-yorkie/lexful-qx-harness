@@ -18,8 +18,9 @@ if (!existsSync(target)) {
   process.exit(1);
 }
 
-// KEY=value, or the same line commented out in the template (`# QA_RUNS_DIR=`).
-const KEY = /^(#\s*)?([A-Z][A-Z0-9_]*)=(.*)$/;
+// A template key line: KEY=value with no spaces, or the same line commented out (`# QA_RUNS_DIR=`).
+// A comment that happens to mention KEY=... in its text is not a key line.
+const KEY = /^(#\s*)?([A-Z][A-Z0-9_]*)=(\S*)$/;
 
 function parseValues(text) {
   const values = new Map();
@@ -45,7 +46,8 @@ for (const line of readFileSync(template, 'utf8').split(/\r?\n/)) {
   if (current.has(key)) {
     out.push(`${key}=${current.get(key)}`);
   } else {
-    out.push(commented ? line : `${key}=`);
+    // Not in .env yet: take the template's line, so a default such as QA_PW_FULLY_PARALLEL=true is kept.
+    out.push(line);
   }
 }
 

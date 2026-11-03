@@ -161,10 +161,11 @@ function ensureOpenCodeSetup() {
   const config = loadJsonc(path.join(ROOT, 'opencode.jsonc'));
   const agents = config.agents || {};
   const mainModel = configuredValue('OPENCODE_MAIN_MODEL') || MODEL_FALLBACK;
-  const subModel = configuredValue('OPENCODE_SUB_MODEL') || MODEL_FALLBACK;
+  // Every agent runs on the one configured model. opencode.jsonc must name it on each.
   const expected = {
     qa: mainModel,
-    'ux-auditor': subModel,
+    'qa-ticket': mainModel,
+    'ux-auditor': mainModel,
   };
   const problems = [];
   for (const [name, model] of Object.entries(expected)) {
@@ -180,12 +181,9 @@ function ensureOpenCodeSetup() {
     problems.push('Bedrock key is missing. Set BEDROCK_API_KEY');
   }
   const models = new Set(quiet(['models', '--standalone']).split('\n').map((line) => line.trim()));
-  for (const id of new Set([mainModel, subModel])) {
-    if (!models.has(id)) problems.push(`${id} is not available`);
-  }
+  if (!models.has(mainModel)) problems.push(`${mainModel} is not available`);
   if (problems.length) throw new Error(problems.join('; '));
-  const listed = mainModel === subModel ? mainModel : `${mainModel}; ${subModel}`;
-  return check('OpenCode setup', 'pass', `Bedrock key set; ${listed}`);
+  return check('OpenCode setup', 'pass', `Bedrock key set; ${mainModel}`);
 }
 
 export function ensureToolchain() {

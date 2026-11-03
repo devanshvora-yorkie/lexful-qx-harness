@@ -18,7 +18,8 @@ from pathlib import Path
 ALWAYS = (
     "contents.txt", "toolchain.log", "preflight.log", "prompt.md", "ux-prompt.md", "promote-prompt.md",
     "verify-prompt.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "api-probes.jsonl",
-    "ux-audit.log", "e2e-coverage.md", "planned-specs.json", "report.html",
+    "ux-audit.log",  # runs from before the UX audit wrote into run.log
+    "e2e-coverage.md", "planned-specs.json", "report.html",
 )
 # Raw page snapshots and the browser config. The walk scripts stay: bugs cite them.
 EXPLORE_SCRATCH = ("*.yml", "*.yaml", "*.txt", "pw-cli.json")

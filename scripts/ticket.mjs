@@ -154,7 +154,7 @@ try {
     console.log(`${started.skipped ? 'following' : 'started'} ${runId} (${started.status})`);
   }
 } catch (error) {
-  console.error(`Cannot reach ${base}. Start it with: npm run serve`);
+  console.error(`Cannot reach ${base}. Start the harness with ./build.sh (or docker compose up -d).`);
   console.error(error.message);
   process.exit(1);
 }

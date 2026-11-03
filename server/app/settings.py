@@ -8,7 +8,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAIN_MODEL_DEFAULT = "amazon-bedrock/us.anthropic.claude-haiku-5-5"
-SUB_MODEL_DEFAULT = "amazon-bedrock/us.anthropic.claude-haiku-5-5"
 SECRET_ENV = (
     "STYTCH_ADMIN_PASSWORD",
     "STYTCH_SUPPORT_PASSWORD",
@@ -49,7 +48,6 @@ class Settings:
     local_mode: bool
     deploy_secret: str
     main_model: str
-    sub_model: str
     agent_timeout_seconds: int
     playwright_timeout_seconds: int
     heal_attempts: int
@@ -62,7 +60,7 @@ class Settings:
     max_parallel_runs: int = 1  # QA_MAX_PARALLEL_RUNS: runs the server executes at the same time
     agent_retries: int = 1  # QA_AGENT_RETRIES: resumes of an OpenCode session after a dropped connection
     agent_user: str = "qa"  # QA_AGENT_USER: OpenCode and Playwright run as this user. Empty keeps the server user
-    plan_model: str = ""  # QA_PLAN_MODEL: model for the feature map and plan. Empty uses the main model
+    plan_model: str = ""  # QA_PLAN_MODEL: model for the feature map and plan turn. Empty skips that turn: the whole job runs in one turn
     verify_findings: bool = True  # QA_VERIFY_FINDINGS: a fresh session reproduces suspected bugs before filing
     ux_parallel: bool = True  # QA_UX_PARALLEL: the UX audit runs while Playwright and heal run
     session_check_minutes: int = 20  # QA_SESSION_CHECK_MINUTES: how often a busy server renews Stytch sessions. 0 = off
@@ -84,14 +82,13 @@ def get_settings() -> Settings:
     return Settings(
         root=ROOT,
         runs=runs,
-        port=int(os.getenv("QA_SERVER_PORT", "8787")),
+        port=_int("QA_SERVER_PORT", 8787, low=1),
         local_mode=_flag("LOCAL_MODE", default=secret == ""),
         deploy_secret=secret,
         main_model=os.getenv("OPENCODE_MAIN_MODEL", MAIN_MODEL_DEFAULT).strip(),
-        sub_model=os.getenv("OPENCODE_SUB_MODEL", SUB_MODEL_DEFAULT).strip(),
-        agent_timeout_seconds=int(os.getenv("QA_AGENT_TIMEOUT_SECONDS", "2700")),
-        playwright_timeout_seconds=int(os.getenv("QA_PLAYWRIGHT_TIMEOUT_SECONDS", "2700")),
-        heal_attempts=int(os.getenv("QA_HEAL_ATTEMPTS", "3")),
+        agent_timeout_seconds=_int("QA_AGENT_TIMEOUT_SECONDS", 2700, low=60),
+        playwright_timeout_seconds=_int("QA_PLAYWRIGHT_TIMEOUT_SECONDS", 2700, low=60),
+        heal_attempts=_int("QA_HEAL_ATTEMPTS", 3),
         qa_url=os.getenv("QA_ENV_URL", os.getenv("LEXFUL_APP_URL", "https://e2e-test.uat.lexful.net")).strip(),
         e2e_with_ticket=_flag("QA_PHASE1_ON_START", default=True),
         run_ux_audit=_flag("QA_RUN_UX_AUDIT", default=True),

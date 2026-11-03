@@ -1,4 +1,5 @@
-# After clone: copy .env.example to .env, fill the keys, then `docker compose up --build`.
+# Use ./build.sh: it creates .env from .env.example, checks the keys, builds the image and starts this service.
+# Plain `docker compose up --build -d` also works once .env exists.
 services:
   harness:
     build: .

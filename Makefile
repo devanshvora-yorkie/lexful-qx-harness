@@ -1,8 +1,11 @@
-.PHONY: up down logs ps e2e phase1
+.PHONY: up setup check down logs ps e2e phase1
 
-up:
-	@test -f .env || (echo "Create .env from .env.example and fill in the keys." && exit 1)
-	docker compose up --build -d
+# build.sh creates .env, checks the keys, builds the image and (re)starts the container.
+up setup:
+	./build.sh
+
+check:
+	./build.sh --check
 
 down:
 	docker compose down

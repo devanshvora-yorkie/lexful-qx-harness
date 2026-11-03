@@ -40,7 +40,10 @@ from app.store import (
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("qa.api")
-TICKET_RE = re.compile(r"^LEX-\d+$", re.IGNORECASE)
+TICKET_RE = re.compile(r"^LEX-[0-9]+\Z", re.IGNORECASE | re.ASCII)
+# A commit id, and a run id as create_run writes it (ticket or label, UTC stamp, hex). Both end up in paths.
+SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _queue: asyncio.Queue[str] = asyncio.Queue()
 
 
@@ -233,17 +236,26 @@ def runs(ticket: str | None = None) -> dict[str, Any]:
     return {"runs": _with_activity(list_runs(ticket))}
 
 
-@app.get("/runs/{run_id}", dependencies=[Depends(require_secret)])
-def run_detail(run_id: str) -> dict[str, Any]:
+def _known_run(run_id: str) -> dict[str, Any]:
+    """The run's row. A malformed id never reaches the filesystem."""
+    if not RUN_ID_RE.match(run_id):
+        raise HTTPException(status_code=400, detail="Not a run id")
     row = get_run(run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    return row
+
+
+@app.get("/runs/{run_id}", dependencies=[Depends(require_secret)])
+def run_detail(run_id: str) -> dict[str, Any]:
+    row = _known_run(run_id)
     row["log"] = Logbook(run_dir(run_id)).tail(40)
     return row
 
 
 @app.get("/runs/{run_id}/log", dependencies=[Depends(require_secret)])
 def run_log(run_id: str) -> PlainTextResponse:
+    _known_run(run_id)
     path = run_dir(run_id) / "run.log"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No log yet")
@@ -253,9 +265,7 @@ def run_log(run_id: str) -> PlainTextResponse:
 @app.post("/runs/{run_id}/resume", status_code=202, dependencies=[Depends(require_secret)])
 def resume_run(run_id: str) -> dict[str, Any]:
     """Continue a failed or halted ticket run from Playwright, when Explore and Author already wrote their specs."""
-    row = get_run(run_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="run not found")
+    row = _known_run(run_id)
     if row.get("kind") == "phase1" or row.get("status") not in {"failed", "halted"}:
         raise HTTPException(status_code=400, detail="only a failed or halted ticket run can be resumed")
     if not (run_dir(run_id) / "planned-specs.json").is_file():
@@ -304,7 +314,10 @@ def uat_deploy(body: DeployBody) -> dict[str, Any]:
     ticket = body.ticket.upper() if body.ticket else None
     if ticket and not TICKET_RE.match(ticket):
         raise HTTPException(status_code=400, detail="Ticket must look like LEX-1234")
+    if body.sha and not SHA_RE.match(body.sha.strip()):
+        raise HTTPException(status_code=400, detail="sha must be a commit id (7 to 40 hex characters)")
     if body.sha:
+        body.sha = body.sha.strip().lower()
         existing = find_active_sha(body.sha)
         if existing:
             return {"success": True, "skipped": True, "reason": "sha already accepted", "runId": existing["id"], "sha": body.sha}

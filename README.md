@@ -19,7 +19,9 @@ cd qa-harness
 `./build.sh` checks the tools and the keys, builds the image and starts the API on
 `http://127.0.0.1:8787`. The keys it requires are `STYTCH_ORGANIZATION_ID`, `STYTCH_ADMIN_EMAIL`,
 `STYTCH_ADMIN_PASSWORD`, `LINEAR_API_KEY`, `GITHUB_TOKEN` and `BEDROCK_API_KEY`. `./build.sh --check`
-only checks. `./build.sh --update` pulls first.
+only checks. `./build.sh --update` pulls first. It also creates `HARNESS_DEPLOY_SECRET` in `.env` when it is
+empty, and restarts the container so new code and settings take effect. It refuses to restart while a run
+is in progress. What protects the keys, and what does not, is in [docs/security.md](docs/security.md).
 
 An older `.env` can be reordered to match `.env.example` with `node scripts/tidy-env.mjs`. It keeps every value, drops keys the harness no longer reads, and leaves the old file as `.env.bak`.
 
@@ -37,7 +39,7 @@ docker compose exec harness npm run ticket -- LEX-3642 --resume   # continue a f
 ```
 
 The command starts the run and follows its log until it ends. A second run waits in the queue, one
-run at a time. To stop everything running now: `docker compose exec harness npm run cancel-runs`.
+run at a time. The agents work one session at a time and cannot start subagents. To stop everything running now: `docker compose exec harness npm run cancel-runs`.
 
 E2E User Journey TCs (the checked-in regression suite) run on their own with `make e2e`. A ticket run
 also starts with them unless `QA_PHASE1_ON_START=false`.
@@ -110,7 +112,7 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 | `QA_ALLOW_UNDEPLOYED` | false | Run a PR that is not on UAT yet |
 | `QA_MAX_PARALLEL_RUNS` | 1 | Runs at the same time. Each run gets its own git worktree |
 | `QA_SESSION_CHECK_MINUTES` | 20 | How often the saved Stytch sessions are checked during a run. 0 turns it off |
-| `OPENCODE_MAIN_MODEL`, `OPENCODE_SUB_MODEL` | Haiku 5.5 on Bedrock | The model for the coordinator, and for the explore, author, heal and UX agents |
+| `OPENCODE_MAIN_MODEL` | Haiku 5.5 on Bedrock | The one model every agent session runs on: explore, author, heal, verify and the UX audit. `opencode.jsonc` must name the same id |
 
 ## Repository layout
 
@@ -119,6 +121,7 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 - `e2e test cases/` the checked-in suite, one folder per area, with `FEATURE.md` and `changes.log`
 - `.agents/` the agent prompts, the QA skill and the UX audit skill, and the UX kit
 - `docs/setup.md` deployment: the QA machine, the trigger and what to configure in the product repo
+- `docs/security.md` what protects the secrets, what does not, and the risks that remain
 - `build.sh`, `Makefile`, `docker-compose.yml`, `Dockerfile` setup and build
 
 ## Troubleshooting

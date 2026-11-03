@@ -29,16 +29,30 @@ EXIT = {"PERFECT": 0, "NEEDS_REVISION": 1}
 def _ticket(value: str) -> str:
     key = value.strip().upper()
     prefix, _dash, number = key.partition("-")
-    if prefix != "LEX" or not number.isdigit():
+    if prefix != "LEX" or not (number.isascii() and number.isdigit()):
         raise argparse.ArgumentTypeError("a ticket looks like LEX-1234")
     return key
+
+
+def _sha(value: str) -> str:
+    """A commit id. It names a folder, so nothing else gets through."""
+    sha = value.strip().lower()
+    if not (7 <= len(sha) <= 40) or any(ch not in "0123456789abcdef" for ch in sha):
+        raise argparse.ArgumentTypeError("a commit id is 7 to 40 hex characters")
+    return sha
+
+
+def _pr(value: str) -> int:
+    if not (value.isascii() and value.isdigit()) or int(value) < 1:
+        raise argparse.ArgumentTypeError("a pull request number is a positive integer")
+    return int(value)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Run one QA trigger and exit.")
     parser.add_argument("--ticket", type=_ticket, help="Linear ticket, LEX-1234")
-    parser.add_argument("--pr", type=int, help="pull request number")
-    parser.add_argument("--sha", help="the commit the UAT deployment shipped")
+    parser.add_argument("--pr", type=_pr, help="pull request number")
+    parser.add_argument("--sha", type=_sha, help="the commit the UAT deployment shipped")
     parser.add_argument("--e2e", action="store_true", help="run only the E2E User Journey TCs")
     try:
         args = parser.parse_args(argv)

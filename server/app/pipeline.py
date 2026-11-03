@@ -1822,7 +1822,7 @@ def _write_qa_result(
         "pom_files": planned.get("pom_files") or drafted.get("pom_files") or [],
         "verdict": verdict,
         "test_results": summary,
-        "models": {"main": settings.main_model, "subagents": settings.sub_model},
+        "models": {"main": settings.main_model},
         "open_issues": issues or drafted.get("open_issues") or [],
     }
     ux_card = _read_json(folder / "ux-scorecard.json")
