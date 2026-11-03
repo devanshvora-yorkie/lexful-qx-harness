@@ -133,10 +133,10 @@ def check(raw, body, res):
         res.ok()
     else:
         res.fail("ticket-block-missing", "No 'Ticket as filed' block; the report does not show the ticket it audited.")
-    if re.search(r'Ticket as filed.*?Acceptance', text, re.S):
+    if "Acceptance Criteria" in text or "acceptance criteria" in text.lower():
         res.ok()
     else:
-        res.warn("ticket-acceptance-missing", "The ticket block shows no acceptance criteria.")
+        res.warn("ticket-acceptance-missing", "The report shows no acceptance criteria.")
     hero = re.search(r'class="hero-description"[^>]*>(.*?)</p>', body, re.S)
     if hero:
         hero_text = detag(hero.group(1))

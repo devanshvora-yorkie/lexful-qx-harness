@@ -1142,11 +1142,6 @@ def main():
             parts.append(f'<p>{escape(spec["problem"])}</p>')
         if spec["scope"]:
             parts.append(f'<p style="margin-top:8px;"><strong style="color:#cbd5e1;">Scope.</strong> {escape(spec["scope"])}</p>')
-        if spec["acs"]:
-            parts.append('<h4 style="margin-top:12px;">Acceptance</h4><ul>')
-            for label, text in spec["acs"]:
-                parts.append(f'<li><strong style="color:#cbd5e1;">{escape(label)}</strong> &mdash; {escape(text)}</li>')
-            parts.append('</ul>')
         if spec["validation"]:
             parts.append(f'<h4 style="margin-top:12px;">Validation claimed in the ticket</h4><p>{escape(spec["validation"])}</p>')
         parts.append('</div>')

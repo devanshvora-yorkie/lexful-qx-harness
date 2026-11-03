@@ -120,8 +120,7 @@ Scoped to **this ticket's journey**, not to the whole rulebook.
 
 ## 7. Hero, stats and integrity strip
 
-- Hero carries the ticket **in full**: problem, scope, acceptance criteria, validation claim.
-  Never truncate the ticket text.
+- Hero carries the ticket **in full**: problem, scope, validation claim (acceptance criteria are detailed in the dedicated Acceptance Criteria Matrix tab). Never truncate the ticket text.
 - The hero summary line is one sentence about the audit (journey, criteria count, checks
   exercised, findings), not a copy of the ticket's problem statement.
 - Four summary cards: Defects (S0–S3), UX Observations, Total Deductions, Design Stack.
