@@ -1,7 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  // One model runs every session. Keep this id equal to OPENCODE_MAIN_MODEL in .env.
+  // The server passes --model on every call, so no agent names a model of its own.
   "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
-  "small_model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -17,213 +18,115 @@
     }
   },
   "default_agent": "qa",
+  // Loaded for every session. The phase files never ask the agent to read it again.
   "instructions": [
     ".agents/skills/lexful-autonomous-agent-qa/references/custom-instructions.md"
   ],
-  // OpenCode 2. Last matching rule wins.
-  // task deny: no agent may start a subagent. The harness runs one session per phase (see AGENTS.md).
+  // OpenCode 2. One list for every agent; the last matching rule wins.
   // The working directory is /opt/lexful-qa-opencode inside the container.
-  // external_directory deny blocks every other path, on any host.
   "permissions": [
+    // Nothing outside this repository, no subagents, no web.
     { "action": "external_directory", "resource": "*", "effect": "deny" },
     { "action": "task", "resource": "*", "effect": "deny" },
+    { "action": "webfetch", "resource": "*", "effect": "deny" },
+    { "action": "websearch", "resource": "*", "effect": "deny" },
+    // Edit: the run folders and the checked-in suite are writable; the harness itself, its config and the secrets are not.
+    // A ticket session that touches the suite is put back by the server. The denies come last because the last matching rule wins.
+    { "action": "edit", "resource": "runs/**", "effect": "allow" },
+    { "action": "edit", "resource": "e2e test cases/**", "effect": "allow" },
+    { "action": "edit", "resource": "server/**", "effect": "deny" },
+    { "action": "edit", "resource": "scripts/**", "effect": "deny" },
+    { "action": "edit", "resource": ".agents/**", "effect": "deny" },
+    { "action": "edit", "resource": ".github/**", "effect": "deny" },
+    { "action": "edit", "resource": "docs/**", "effect": "deny" },
+    { "action": "edit", "resource": "docker/**", "effect": "deny" },
+    { "action": "edit", "resource": "node_modules/**", "effect": "deny" },
+    { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
+    { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
+    { "action": "edit", "resource": "qa-fixtures.ts", "effect": "deny" },
+    { "action": "edit", "resource": "opencode.jsonc", "effect": "deny" },
+    { "action": "edit", "resource": "package.json", "effect": "deny" },
+    { "action": "edit", "resource": "package-lock.json", "effect": "deny" },
+    { "action": "edit", "resource": "Dockerfile", "effect": "deny" },
+    { "action": "edit", "resource": "docker-compose.yml", "effect": "deny" },
+    { "action": "edit", "resource": "build.sh", "effect": "deny" },
+    { "action": "edit", "resource": "Makefile", "effect": "deny" },
+    { "action": "edit", "resource": "AGENTS.md", "effect": "deny" },
+    { "action": "edit", "resource": "README.md", "effect": "deny" },
+    { "action": "edit", "resource": ".env", "effect": "deny" },
+    { "action": "edit", "resource": ".env.*", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env", "effect": "deny" },
+    { "action": "edit", "resource": "**/.env.*", "effect": "deny" },
+    { "action": "edit", "resource": "*.env", "effect": "deny" },
+    { "action": "edit", "resource": "auth-state.json", "effect": "deny" },
+    { "action": "edit", "resource": "**/auth-state.json", "effect": "deny" },
+    { "action": "edit", "resource": "runs/cache/**", "effect": "deny" },
+    { "action": "edit", "resource": "runs/source/**", "effect": "deny" },
+    { "action": "edit", "resource": "e2e test cases/changes.log", "effect": "deny" },
+    // Read: no secrets, no sessions, not the 1.9 MB sample report.
     { "action": "read", "resource": ".env", "effect": "deny" },
     { "action": "read", "resource": "*.env", "effect": "deny" },
     { "action": "read", "resource": ".env.*", "effect": "deny" },
     { "action": "read", "resource": "**/.env", "effect": "deny" },
     { "action": "read", "resource": "**/.env.*", "effect": "deny" },
-    { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
-    { "action": "read", "resource": "**/session.json", "effect": "deny" },
-    { "action": "edit", "resource": ".env", "effect": "deny" },
-    { "action": "edit", "resource": "*.env", "effect": "deny" },
-    { "action": "edit", "resource": ".env.*", "effect": "deny" },
-    { "action": "edit", "resource": "**/.env", "effect": "deny" },
-    { "action": "edit", "resource": "**/.env.*", "effect": "deny" },
-    { "action": "edit", "resource": ".env.example", "effect": "deny" },
-    { "action": "edit", "resource": "auth-state.json", "effect": "deny" },
-    { "action": "edit", "resource": "**/auth-state.json", "effect": "deny" },
-    { "action": "edit", "resource": "runs/cache/**", "effect": "deny" },
-    { "action": "webfetch", "resource": "*", "effect": "deny" },
-    { "action": "websearch", "resource": "*", "effect": "deny" },
-    { "action": "bash", "resource": "git clone *", "effect": "deny" },
-    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
-    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
-    { "action": "bash", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
-    { "action": "shell", "resource": "git clone *", "effect": "deny" },
-    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
-    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
-    { "action": "shell", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
     { "action": "read", "resource": ".env.example", "effect": "allow" },
     { "action": "read", "resource": "**/.env.example", "effect": "allow" },
     { "action": "read", "resource": "auth-state.json", "effect": "deny" },
     { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
+    { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
+    { "action": "read", "resource": "**/session.json", "effect": "deny" },
+    { "action": "read", "resource": ".agents/ux/audit-preview-reference.html", "effect": "deny" },
+    // Shell guard rails. These are text patterns on the command line, not a security boundary: the secrets are kept out of the agent's environment by the server (docs/security.md). `bash` and `shell` are the same list.
+    { "action": "bash", "resource": "git clone *", "effect": "deny" },
+    { "action": "shell", "resource": "git clone *", "effect": "deny" },
+    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
+    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/contents*", "effect": "deny" },
+    { "action": "bash", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
+    { "action": "shell", "resource": "*api.github.com/repos/Lexful-ai/docu-stack/git/*", "effect": "deny" },
+    { "action": "bash", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
+    { "action": "shell", "resource": "*github.com/Lexful-ai/docu-stack*", "effect": "deny" },
     { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*head*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*head*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*tail*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*tail*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*less*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*less*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*sed*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*sed*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*awk*.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*awk*.env*", "effect": "deny" },
     { "action": "bash", "resource": "*printenv*", "effect": "deny" },
+    { "action": "shell", "resource": "*printenv*", "effect": "deny" },
     { "action": "bash", "resource": "env", "effect": "deny" },
+    { "action": "shell", "resource": "env", "effect": "deny" },
     { "action": "bash", "resource": "env *", "effect": "deny" },
+    { "action": "shell", "resource": "env *", "effect": "deny" },
     { "action": "bash", "resource": "*process.env*", "effect": "deny" },
+    { "action": "shell", "resource": "*process.env*", "effect": "deny" },
     { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
     { "action": "bash", "resource": "*head*auth-state.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*head*auth-state.json*", "effect": "deny" },
     { "action": "bash", "resource": "*tail*auth-state.json*", "effect": "deny" },
+    { "action": "shell", "resource": "*tail*auth-state.json*", "effect": "deny" },
     { "action": "bash", "resource": "*cat*session.json*", "effect": "deny" },
-    { "action": "bash", "resource": "*head*session.json*", "effect": "deny" },
-    { "action": "bash", "resource": "*tail*session.json*", "effect": "deny" },
     { "action": "shell", "resource": "*cat*session.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*head*session.json*", "effect": "deny" },
     { "action": "shell", "resource": "*head*session.json*", "effect": "deny" },
+    { "action": "bash", "resource": "*tail*session.json*", "effect": "deny" },
     { "action": "shell", "resource": "*tail*session.json*", "effect": "deny" },
     { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
-    { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
-    { "action": "shell", "resource": "*printenv*", "effect": "deny" },
-    { "action": "shell", "resource": "env", "effect": "deny" },
-    { "action": "shell", "resource": "env *", "effect": "deny" },
-    { "action": "shell", "resource": "*process.env*", "effect": "deny" },
-    { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
     { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" }
   ],
   "agents": {
-    "build": {
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" }
-      ]
-    },
-    "explore": {
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" }
-      ]
-    },
-    "general": {
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" }
-      ]
-    },
-    "plan": {
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" }
-      ]
-    },
+    // The one agent. Every phase (explore+author, heal, e2e-heal, affected-heal, verify, promote, ux-audit)
+    // is a session of this agent; the phase is named in the server message and mapped to its file in qa.md.
     "qa": {
       "mode": "primary",
-      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
-      "description": "Owns functional QA for one LEX ticket or E2E User Journey heal: explore, author, heal, promote.",
-      "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. One session owns Explore, Author, Heal, and Promote. Do not spawn subagents. If the server says E2E User Journey TCs, follow only section 3 of the skill. Stay inside this repository. Do not read .env. Do not clone a product repo.",
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" },
-        { "action": "read", "resource": "*.env", "effect": "deny" },
-        { "action": "read", "resource": ".env.*", "effect": "deny" },
-        { "action": "read", "resource": "**/.env", "effect": "deny" },
-        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
-        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
-        { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
-        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
-        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
-        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
-        { "action": "bash", "resource": "env", "effect": "deny" },
-        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "edit", "resource": "server/**", "effect": "deny" },
-        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
-        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
-        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
-        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
-        { "action": "edit", "resource": "e2e test cases/**", "effect": "allow" },
-        { "action": "edit", "resource": "e2e test cases/changes.log", "effect": "deny" },
-        { "action": "edit", "resource": "runs/**", "effect": "allow" },
-        { "action": "edit", "resource": "runs/source/**", "effect": "deny" }
-      ]
-    },
-    "qa-ticket": {
-      "mode": "primary",
-      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
-      "description": "Feature Specific TCs: explore, author, ticket heal and verify. May not edit the checked-in suite.",
-      "system": "Read .agents/prompts/qa.md and .agents/skills/lexful-autonomous-agent-qa/SKILL.md. One session owns Explore, Author, Heal, and Promote. Do not spawn subagents. If the server says E2E User Journey TCs, follow only section 3 of the skill. Stay inside this repository. Do not read .env. Do not clone a product repo.",
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" },
-        { "action": "read", "resource": "*.env", "effect": "deny" },
-        { "action": "read", "resource": ".env.*", "effect": "deny" },
-        { "action": "read", "resource": "**/.env", "effect": "deny" },
-        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
-        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
-        { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
-        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
-        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
-        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
-        { "action": "bash", "resource": "env", "effect": "deny" },
-        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "edit", "resource": "server/**", "effect": "deny" },
-        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
-        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
-        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
-        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
-        { "action": "edit", "resource": "runs/**", "effect": "allow" },
-        { "action": "edit", "resource": "runs/source/**", "effect": "deny" },
-        { "action": "edit", "resource": "e2e test cases/**", "effect": "deny" }
-      ]
-    },
-    "ux-auditor": {
-      "mode": "subagent",
-      "model": "amazon-bedrock/us.anthropic.claude-haiku-5-5",
-      "description": "Audits the ticket journey with the Lexful UX audit gate and writes the HTML report.",
-      "system": "Read .agents/prompts/ux-auditor.md and follow .agents/skills/ux-audit/SKILL.md and .agents/skills/design-system/SKILL.md. Use playwright-cli state-load runs/cache/stytch/session.json. Read .agents/ux/rulebook.md, .agents/ux/pattern-library.md and .agents/ux/traceability.md; grep .agents/ux/checks.yaml for the journey's check ids. Do not read .agents/ux/audit-preview-reference.html. Write ux-findings.json and ux-scorecard.json in the run directory. The server writes ux-report.html. S2 and S3 are PASS WITH ADVISORIES.",
-      "permissions": [
-        { "action": "external_directory", "resource": "*", "effect": "deny" },
-        { "action": "task", "resource": "*", "effect": "deny" },
-        { "action": "read", "resource": ".env", "effect": "deny" },
-        { "action": "read", "resource": "*.env", "effect": "deny" },
-        { "action": "read", "resource": ".env.*", "effect": "deny" },
-        { "action": "read", "resource": "**/.env", "effect": "deny" },
-        { "action": "read", "resource": "**/.env.*", "effect": "deny" },
-        { "action": "read", "resource": "runs/cache/**", "effect": "deny" },
-        { "action": "read", "resource": ".env.example", "effect": "allow" },
-        { "action": "read", "resource": "**/.env.example", "effect": "allow" },
-        { "action": "read", "resource": "auth-state.json", "effect": "deny" },
-        { "action": "read", "resource": "**/auth-state.json", "effect": "deny" },
-        { "action": "read", "resource": ".agents/**", "effect": "allow" },
-        { "action": "bash", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*printenv*", "effect": "deny" },
-        { "action": "bash", "resource": "env", "effect": "deny" },
-        { "action": "bash", "resource": "*process.env*", "effect": "deny" },
-        { "action": "bash", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "bash", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*.env*", "effect": "deny" },
-        { "action": "shell", "resource": "*printenv*", "effect": "deny" },
-        { "action": "shell", "resource": "*cat*auth-state.json*", "effect": "deny" },
-        { "action": "shell", "resource": "*opencode/auth.json*", "effect": "deny" },
-        { "action": "edit", "resource": "server/**", "effect": "deny" },
-        { "action": "edit", "resource": "scripts/**", "effect": "deny" },
-        { "action": "edit", "resource": ".agents/**", "effect": "deny" },
-        { "action": "edit", "resource": "playwright.config.ts", "effect": "deny" },
-        { "action": "edit", "resource": "auth-helper.ts", "effect": "deny" },
-        { "action": "edit", "resource": "e2e test cases/**", "effect": "deny" },
-        { "action": "edit", "resource": "runs/**", "effect": "allow" }
-      ]
+      "description": "Functional QA for one Lexful ticket or the checked-in E2E suite: explore, author, heal, verify, promote, and the UX audit.",
+      "system": "Read .agents/prompts/qa.md. The server message names the phase; read that phase's file and no other. Do not spawn subagents. Stay inside this repository. Do not read .env. Do not clone a product repo."
     }
   }
 }

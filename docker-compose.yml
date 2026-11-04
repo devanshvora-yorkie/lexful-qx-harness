@@ -33,8 +33,6 @@ services:
       QA_AGENT_RETRIES: ${QA_AGENT_RETRIES:-1}
       # OpenCode and Playwright run as this user, so they cannot read the server's secrets. Empty = root.
       QA_AGENT_USER: ${QA_AGENT_USER-qa}
-      # Feature map and plan run as their own turn (Phase: plan) on this model. Empty = one single turn.
-      QA_PLAN_MODEL: ${QA_PLAN_MODEL-amazon-bedrock/us.anthropic.claude-haiku-5-5}
       # A fresh session reproduces suspected findings and server errors before they are filed.
       QA_VERIFY_FINDINGS: ${QA_VERIFY_FINDINGS:-true}
       # The UX audit runs beside Playwright and heal.

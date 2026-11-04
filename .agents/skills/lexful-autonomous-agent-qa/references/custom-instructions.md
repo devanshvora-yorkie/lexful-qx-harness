@@ -1,9 +1,7 @@
 # Custom Instructions — lexful-test
 
-Caveats only. Structural conventions (folder layout, POM organization, runner) live in `SKILL.md`.
-Auth, Linear, and GitHub already ran in the server preflight. Load `runs/cache/stytch/session.json`. Do not call `/auth/password` per test.
-Stay inside this repo. Linear is the named ticket and its connected issues. GitHub is the pull request diff only. Do not open Downloads or any other folder.
-Everything here was verified against the live UAT DOM (2026-10) — do not treat as theory.
+Project caveats only, loaded by `opencode.jsonc` for every session. The procedure for each phase is in `.agents/skills/lexful-autonomous-agent-qa/phases/`, and the rules every phase shares are in `.agents/prompts/qa.md`.
+Everything here was verified against the live UAT DOM (2026-10); do not treat it as theory.
 
 ## Caveats
 - **AG Grid loads rows async**: placeholder rows show disabled checkboxes ("Row selection is disabled
@@ -26,7 +24,4 @@ Everything here was verified against the live UAT DOM (2026-10) — do not treat
 - **Environment is not product.** A CloudFront 403 "Request blocked", a listing stuck on "Row data is loading" on
   every attempt, and a missing `*_FIXTURE_*` env var are environment failures. Retry once, class `spec` with
   `environment` in the reason, and never file them. Create the fixture through the API or UI instead of reading an env var.
-- **One shell command per call.** `cmd1 && cmd2` can be denied by the permission rules and ends the session. Run them separately.
 - **Text with hidden spaces.** The selection bar renders `'1 selected'` as `1selected` in the DOM. Match with `\s*`, or use `toContainText`.
-- **Token budget.** `pr-brief.md` instead of `context-pack.json`. Snapshots to files, then grep. Probe output is already short.
-- **Batch browser steps.** One `run-code` script per flow segment returning compact JSON, one snapshot per new state (saved to a file and grepped). Every extra tool call re-reads the whole conversation.

@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.logbook import Logbook, SubagentTail, plain, row, session_id_from_text
+from app.logbook import Logbook, plain, row, session_id_from_text
 from app.settings import SECRET_ENV, get_settings
 
 
@@ -498,7 +498,10 @@ def is_transient(detail: str) -> bool:
     return bool(detail) and bool(_TRANSIENT.search(detail))
 
 
-_RESUME_NOTE = "Phase: resume\nThe connection to the model dropped. Follow section 7 of .agents/skills/lexful-autonomous-agent-qa/SKILL.md for the phase you were in."
+# The one agent in opencode.jsonc. Every phase is a session of it, on the one model OPENCODE_MAIN_MODEL.
+AGENT = "qa"
+
+_RESUME_NOTE = "Phase: resume\nThe connection to the model dropped. Continue the phase you were in, from the run files: read .agents/prompts/qa.md and the phase file it names for that phase. Do not redo finished work."
 
 
 def run_opencode(
@@ -509,16 +512,15 @@ def run_opencode(
     title: str,
     log_name: str,
     resume: bool = False,
-    agent: str = "qa",
-    model: str | None = None,
+    role: str = "qa",
     book_name: str = "run.log",
 ) -> tuple[int, str]:
     """Run one OpenCode turn. A transient failure resumes the same session up to QA_AGENT_RETRIES times."""
     settings = get_settings()
-    book = Logbook(run_dir, book_name, role="ux-audit" if agent == "ux-auditor" else "qa")
+    book = Logbook(run_dir, book_name, role=role)
     code, session = _run_opencode_once(
         run_dir, session_id=session_id, prompt=prompt, title=title, log_name=log_name,
-        resume=resume, agent=agent, model=model, book=book,
+        resume=resume, role=role, book=book,
     )
     for attempt in range(1, settings.agent_retries + 1):
         if code == 0:
@@ -526,11 +528,11 @@ def run_opencode(
         detail = last_opencode_error(run_dir, log_name) or ("opencode timed out" if code == 124 else "")
         if code == 124 or not session or not is_transient(detail):
             break
-        book.row("server", "retry", f"{agent}: {detail[:120]}  resuming {session} ({attempt} of {settings.agent_retries})")
+        book.row("server", "retry", f"{role}: {detail[:120]}  resuming {session} ({attempt} of {settings.agent_retries})")
         code, session = _run_opencode_once(
             run_dir, session_id=session, prompt=_RESUME_NOTE, title=title,
             log_name=f"{Path(log_name).stem}-retry{attempt}.jsonl", resume=True,
-            agent=agent, model=model, book=book,
+            role=role, book=book,
         )
     return code, session
 
@@ -543,8 +545,7 @@ def _run_opencode_once(
     title: str,
     log_name: str,
     resume: bool,
-    agent: str,
-    model: str | None,
+    role: str,
     book: Logbook,
 ) -> tuple[int, str]:
     """Run OpenCode on a terminal so each JSON line is flushed into the log immediately.
@@ -554,16 +555,15 @@ def _run_opencode_once(
     """
     settings = get_settings()
     active_session = session_id if resume and session_id else ""
-    tail = SubagentTail(active_session, book, db_path=opencode_db())
     log_path = run_dir / "opencode" / log_name
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = ["opencode", "run", "--format", "json"]
     if active_session:
         command.extend(["--session", active_session])
-    model = model or settings.main_model
+    model = settings.main_model
     command.extend([
         "--agent",
-        agent,
+        AGENT,
         "--model",
         model,
         "--title",
@@ -571,7 +571,7 @@ def _run_opencode_once(
         "--auto",
         prompt,
     ])
-    book.row(agent, "launch", f"continue {active_session}" if active_session else f"new session  {model}")
+    book.row(role, "launch", f"continue {active_session}" if active_session else f"new session  {model}")
     started_ms = int(time.time() * 1000)
 
     def remember(text: str) -> None:
@@ -583,8 +583,7 @@ def _run_opencode_once(
         if not found:
             return
         active_session = found
-        tail.parent_id = found
-        book.row(agent, "session", found)
+        book.row(role, "session", found)
     hand_over(run_dir, get_settings().root / "e2e test cases")
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 200, 400, 0, 0))
@@ -614,7 +613,6 @@ def _run_opencode_once(
                     pass
                 break
             ready, _, _ = select.select([master], [], [], min(1.0, remaining))
-            tail.poll()
             if not ready:
                 if process.poll() is not None:
                     break
@@ -639,16 +637,12 @@ def _run_opencode_once(
             remember(text)
         if timed_out:
             handle.write("opencode timed out\n")
-            book.row(agent, "error", "opencode timed out")
+            book.row(role, "error", "opencode timed out")
     os.close(master)
     if not active_session:
         active_session = _recent_root_session(started_ms, title)
         if active_session:
-            tail.parent_id = active_session
-            book.row(agent, "session", active_session)
-    tail.poll()
-    tail.write_index(run_dir / "opencode" / "children.json")
-    export_children(run_dir, tail.children, book)
+            book.row(role, "session", active_session)
     try:
         code = 124 if timed_out else process.wait(timeout=20)
     except subprocess.TimeoutExpired:
@@ -658,42 +652,6 @@ def _run_opencode_once(
     finally:
         _untrack(run_dir, process.pid)
     return code, active_session
-
-
-def export_children(run_dir: Path, children: list[dict[str, Any]], book: Logbook) -> None:
-    """Keep each subagent transcript in the run folder. The parent export does not include them."""
-    pending = []
-    dest = run_dir / "opencode" / "children"
-    for child in children:
-        session_id = str(child.get("id") or "")
-        agent = str(child.get("agent") or "subagent")
-        if session_id and not (dest / f"{agent}-{session_id}.json").is_file():
-            pending.append(child)
-    if not pending:
-        return
-    book.row("server", "export", f"{len(pending)} subagent transcript(s)")
-    settings = get_settings()
-    dest.mkdir(parents=True, exist_ok=True)
-    for child in pending:
-        session_id = str(child.get("id") or "")
-        agent = str(child.get("agent") or "subagent")
-        target = dest / f"{agent}-{session_id}.json"
-        if target.is_file() and target.stat().st_size > 0:
-            continue
-        result = subprocess.run(
-            ["opencode", "session", "export", session_id],
-            cwd=settings.root,
-            env=_opencode_env(run_dir),
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            **_as_agent(),
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            target.write_text(result.stdout, encoding="utf-8")
-            continue
-        book.row("server", "error", f"could not export {agent} {session_id}")
 
 
 def export_session(run_dir: Path, session_id: str, name: str = "session.json") -> None:

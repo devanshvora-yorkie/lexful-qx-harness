@@ -159,18 +159,12 @@ function configuredValue(name) {
 
 function ensureOpenCodeSetup() {
   const config = loadJsonc(path.join(ROOT, 'opencode.jsonc'));
-  const agents = config.agents || {};
   const mainModel = configuredValue('OPENCODE_MAIN_MODEL') || MODEL_FALLBACK;
-  // Every agent runs on the one configured model. opencode.jsonc must name it on each.
-  const expected = {
-    qa: mainModel,
-    'qa-ticket': mainModel,
-    'ux-auditor': mainModel,
-  };
+  // One model runs every session. opencode.jsonc names it once, at the top, and the one `qa` agent uses it.
   const problems = [];
-  for (const [name, model] of Object.entries(expected)) {
-    if (agents[name]?.model !== model) problems.push(`${name} is ${agents[name]?.model || 'missing'}`);
-  }
+  if (config.model !== mainModel) problems.push(`opencode.jsonc model is ${config.model || 'missing'}, OPENCODE_MAIN_MODEL is ${mainModel}`);
+  const agentNames = Object.keys(config.agents || {});
+  if (agentNames.length !== 1 || agentNames[0] !== 'qa') problems.push(`opencode.jsonc must define the one agent qa, found ${agentNames.join(', ') || 'none'}`);
   const quiet = (args) => {
     const result = spawnSync('opencode', args, { cwd: ROOT, encoding: 'utf8' });
     if (result.status !== 0) throw new Error((result.stderr || result.stdout || 'opencode failed').trim().slice(0, 300));

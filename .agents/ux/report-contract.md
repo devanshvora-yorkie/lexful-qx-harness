@@ -19,7 +19,7 @@ to stop one of those.
 
 ## 1. Read the ticket on every run
 
-The report is about one ticket. Read it before writing any finding.
+The report is about one ticket. Read it before writing any finding. (The generator reads `context-pack.json`; an auditor reads `pr-brief.md`, which carries the same ticket text and numbers the criteria `AC1…ACn`.)
 
 | What | Where it comes from |
 |---|---|
@@ -29,7 +29,7 @@ The report is about one ticket. Read it before writing any finding.
 | Validation claim | the `Validation:` paragraph (tests, typecheck, lint, UAT smoke) |
 
 - Copy acceptance criteria verbatim. Never paraphrase, merge, split or invent one.
-- If the ticket has no acceptance criteria, say so in the matrix and in `ux-report.md`. An
+- If the ticket has no acceptance criteria, say so in the matrix. An
   empty matrix with a reason is acceptable; an empty matrix with no reason is not.
 - Label criteria `AC1…ACn` in ticket order. Label scope statements `Scope 1…Scope n`.
 - The validation claim is **not** an audit result. Carry it as `OUTSTANDING` unless this run

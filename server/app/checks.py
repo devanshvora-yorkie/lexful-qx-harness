@@ -66,21 +66,6 @@ def summarize_signals(folder: Path) -> dict[str, Any]:
     }
 
 
-def signals_section(folder: Path) -> list[str]:
-    data = summarize_signals(folder)
-    if not data["count"]:
-        return []
-    lines = ["## Runtime signals", "", f"Recorded during the tests by `qa-fixtures.ts`: {data['line']}.", ""]
-    for item in data["samples"][:10]:
-        where = item.get("test") or ""
-        if item.get("kind") == "response":
-            lines.append(f"- `{item.get('method')} {item.get('status')} {item.get('path')}` in {where}")
-        else:
-            lines.append(f"- {item.get('kind')}: {str(item.get('text') or '')[:160]} in {where}")
-    lines.append("")
-    return lines
-
-
 # ---- expectation edits ----------------------------------------------------------------------
 
 _TEST = re.compile(r"(?<![\w.])test(?:\.only)?\(\s*([\"'`])(.+?)\1")
@@ -155,7 +140,7 @@ def brief_criteria(folder: Path) -> list[str]:
 
 
 def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str]:
-    """Issues from coverage.json. The file is the agent's hand-off (skill §2e); without it nothing is signed off."""
+    """Issues from coverage.json. The file is the agent's hand-off (`phases/explore-author.md`, hand-off files); without it nothing is signed off."""
     data = _read(folder / "coverage.json", None)
     if not isinstance(data, dict) or not isinstance(data.get("criteria"), list):
         return ["coverage.json is missing or has no criteria: no acceptance criterion is mapped to a test"]
@@ -186,7 +171,7 @@ def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str]:
 def hypothesis_report(folder: Path) -> tuple[str, list[str]]:
     """One summary line and the blockers: risks listed but none tried, or a confirmed risk with no finding.
 
-    Every Risk in feature-map.md is a hypothesis in hypotheses.json (skill §1k), so the file is the count.
+    Every Risk in feature-map.md is a hypothesis in hypotheses.json (`phases/explore-author.md`, Hypotheses), so the file is the count.
     """
     data = _read(folder / "hypotheses.json", {})
     items = [item for item in data.get("hypotheses") or [] if isinstance(item, dict)] if isinstance(data, dict) else []

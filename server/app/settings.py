@@ -60,7 +60,6 @@ class Settings:
     max_parallel_runs: int = 1  # QA_MAX_PARALLEL_RUNS: runs the server executes at the same time
     agent_retries: int = 1  # QA_AGENT_RETRIES: resumes of an OpenCode session after a dropped connection
     agent_user: str = "qa"  # QA_AGENT_USER: OpenCode and Playwright run as this user. Empty keeps the server user
-    plan_model: str = ""  # QA_PLAN_MODEL: model for the feature map and plan turn. Empty skips that turn: the whole job runs in one turn
     verify_findings: bool = True  # QA_VERIFY_FINDINGS: a fresh session reproduces suspected bugs before filing
     ux_parallel: bool = True  # QA_UX_PARALLEL: the UX audit runs while Playwright and heal run
     session_check_minutes: int = 20  # QA_SESSION_CHECK_MINUTES: how often a busy server renews Stytch sessions. 0 = off
@@ -98,7 +97,6 @@ def get_settings() -> Settings:
         max_parallel_runs=_int("QA_MAX_PARALLEL_RUNS", 1, low=1),
         agent_retries=_int("QA_AGENT_RETRIES", 1),
         agent_user=os.getenv("QA_AGENT_USER", "qa").strip(),
-        plan_model=os.getenv("QA_PLAN_MODEL", "").strip(),
         verify_findings=_flag("QA_VERIFY_FINDINGS", default=True),
         ux_parallel=_flag("QA_UX_PARALLEL", default=True),
         session_check_minutes=_int("QA_SESSION_CHECK_MINUTES", 20),

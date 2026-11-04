@@ -27,10 +27,8 @@ from app.ux_report import check_ux_report, write_ux_report
 
 log = logging.getLogger("qa.pipeline")
 
-# Explore, Author, ticket heal and verify may not edit the checked-in suite (opencode.jsonc denies it).
-# Promote and the E2E heal use `qa`, which may.
-TICKET_AGENT = "qa-ticket"
-SUITE_AGENT = "qa"
+# One agent (`qa` in opencode.jsonc) runs every phase on the one model. It may write to `e2e test cases/` because the
+# E2E heal, the affected heal and promote must. A ticket session may not, so `_guard_suite` puts the suite back.
 # E2E heal and promote both rewrite `e2e test cases`; with several runs at once they take turns.
 SUITE_LOCK = threading.Lock()
 
@@ -85,7 +83,7 @@ def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: 
 def signoff_blockers(folder: Path) -> list[str]:
     """Ticket requirements still open after a green Playwright run.
 
-    The agent's hand-off files are the contract (skill §2e): coverage.json maps every acceptance
+    The agent's hand-off files are the contract (`phases/explore-author.md`, hand-off files): coverage.json maps every acceptance
     criterion to passing tests, a gap or `na`; hypotheses.json records every risk tried. The server
     checks those files. It does not guess coverage from the wording of titles.
     """
@@ -246,6 +244,9 @@ def test_outcomes_from_report(report: dict[str, Any]) -> dict[str, dict[str, dic
     for suite in report.get("suites") or []:
         walk(suite, "", ())
     return found
+
+
+test_outcomes_from_report.__test__ = False  # not a test, although pytest collects names that start with test_
 
 
 def test_key(describes: tuple[str, ...], title: str) -> str:
@@ -454,7 +455,9 @@ def _explore_and_author(
     (folder / "prompt.md").write_text(prompt + "\n", encoding="utf-8")
     started = time.time()
     suite_before = _suite_files()
-    agent_code, session_id = _plan_then_explore(run_id, folder, ticket, prompt, settings, book)
+    agent_code, session_id = runners.run_opencode(
+        folder, session_id=None, prompt=prompt, title=f"{ticket} {run_id}", log_name="agent.jsonl",
+    )
     _guard_suite(suite_before, book, "explore")
     _check_cancel(run_id)
     if session_id:
@@ -476,37 +479,6 @@ def _explore_and_author(
         return None
     _end(run_id, "explore + author")
     return session_id, started
-
-
-def _plan_then_explore(
-    run_id: str, folder: Path, ticket: str, prompt: str, settings: Any, book: Logbook
-) -> tuple[int, str]:
-    """With QA_PLAN_MODEL set, the plan is its own turn (Phase: plan), then the walk continues in the same session.
-
-    The model for the plan turn is QA_PLAN_MODEL (Haiku by default, like everything else). When the plan
-    turn fails the whole job runs in one turn.
-    """
-    if settings.plan_model:
-        book.row("server", "plan", f"feature map and plan with {settings.plan_model}")
-        code, session_id = runners.run_opencode(
-            folder, session_id=None, prompt=_plan_message(prompt), title=f"{ticket} {run_id}",
-            log_name="agent-plan.jsonl", agent=TICKET_AGENT, model=settings.plan_model,
-        )
-        _check_cancel(run_id)
-        if code == 0 and session_id and (folder / "feature-map.md").is_file():
-            return runners.run_opencode(
-                folder, session_id=session_id, prompt=prompt, title=f"{ticket} {run_id}",
-                log_name="agent.jsonl", resume=True, agent=TICKET_AGENT,
-            )
-        book.row("server", "plan", f"plan turn failed ({_opencode_failure(folder, 'agent-plan.jsonl', code)}). The main model does the whole job")
-    return runners.run_opencode(
-        folder, session_id=None, prompt=prompt, title=f"{ticket} {run_id}",
-        log_name="agent.jsonl", agent=TICKET_AGENT,
-    )
-
-
-def _plan_message(prompt: str) -> str:
-    return prompt.replace("Phase: explore+author", "Phase: plan", 1)
 
 
 def _guard_suite(before: dict[str, str], book: Logbook, phase: str) -> None:
@@ -653,7 +625,7 @@ def _run_ux_audit(
             prompt=ux_prompt,
             title=f"{ticket} ux-audit",
             log_name="ux-audit.jsonl",
-            agent="ux-auditor",
+            role="ux-audit",
         )
         state["code"] = code
         runners.export_session(folder, session, "session-ux.json")
@@ -896,7 +868,6 @@ def _execute_and_heal(
             title=f"{ticket} heal {attempt}",
             log_name=f"heal-{attempt}.jsonl",
             resume=bool(session_id),
-            agent=SUITE_AGENT if classify else TICKET_AGENT,
         )
         _check_cancel(run_id)
         if not classify:
@@ -1033,15 +1004,24 @@ def _display(folder: Path) -> str:
         return str(folder)
 
 
-SKILL = ".agents/skills/lexful-autonomous-agent-qa/SKILL.md"
+PHASES = ".agents/skills/lexful-autonomous-agent-qa/phases"
+# The file with the rules for each phase. The agent reads .agents/prompts/qa.md (shared rules) and this one file.
+PHASE_FILES = {
+    "explore+author": "explore-author.md",
+    "heal": "heal.md",
+    "e2e-heal": "e2e-heal.md",
+    "affected-heal": "e2e-heal.md",
+    "verify": "verify.md",
+    "promote": "promote.md",
+}
 
 
 def _message(phase: str, folder: Path, *facts: str) -> str:
-    """The text the server sends OpenCode. Facts only: the rules for each phase are in the skill, section 7."""
+    """The text the server sends OpenCode. Facts only: the rules for each phase are in its phase file."""
     return "\n".join([
         f"Phase: {phase}",
         f"Run directory: {_display(folder)}",
-        f"Follow {SKILL}, section 7, for this phase. Entry point: .agents/prompts/qa.md.",
+        f"Rules: .agents/prompts/qa.md, then {PHASES}/{PHASE_FILES[phase]}.",
         *facts,
     ])
 
@@ -1180,7 +1160,7 @@ def _heal_affected_cases(
         (folder / "affected" / "triage.json").unlink(missing_ok=True)
         code, session = runners.run_opencode(
             folder, session_id=session or None, prompt=prompt, title=f"checked-in affected heal {attempt}",
-            log_name=f"affected-heal-{attempt}.jsonl", resume=bool(session), agent=SUITE_AGENT,
+            log_name=f"affected-heal-{attempt}.jsonl", resume=bool(session),
         )
         _check_cancel(run_id)
         triage = _read_triage(folder / "affected" / "triage.json")
@@ -1243,10 +1223,12 @@ def _verify_findings(
     )
     log_name = f"verify-{len(list(folder.glob('opencode/verify-*.jsonl'))) + 1}.jsonl"
     (folder / "verify.json").unlink(missing_ok=True)
+    suite_before = _suite_files() if ticket != "checked-in" else {}
     code, session = runners.run_opencode(folder, session_id=None, prompt=prompt, title=f"{ticket} verify",
-                                          log_name=log_name,
-                                          agent=SUITE_AGENT if ticket == "checked-in" else TICKET_AGENT)
+                                          log_name=log_name)
     _check_cancel(run_id)
+    if ticket != "checked-in":
+        _guard_suite(suite_before, book, "verify")
     applied = apply_verification(folder)
     book.row("server", "verify", f"{len(items)} item(s) checked: {applied}" if code == 0 else _opencode_failure(folder, log_name, code))
     _end(run_id, label, "ok" if code == 0 else "failed", applied)
@@ -1373,7 +1355,6 @@ def _promote_into_suite(run_id: str, folder: Path, ticket: str, book: Logbook) -
         prompt=prompt,
         title=f"{ticket} promote",
         log_name="promote.jsonl",
-        agent=SUITE_AGENT,
     )
     promoted = _read_json(folder / "promoted.json")
     cases = promoted.get("cases") if isinstance(promoted.get("cases"), list) else []
@@ -1420,7 +1401,7 @@ def _ux_audit_prompt(
         f"Run directory: {relative}",
         f"Ticket: {ticket}",
         f"App URL: {preflight.get('appUrl') or 'the appUrl in the context pack'}",
-        "Follow .agents/prompts/ux-auditor.md.",
+        "Rules: .agents/prompts/qa.md, then .agents/prompts/ux-auditor.md.",
         f"Browser session name: {_browser_name(folder, 'ux')}",
         *(["Playwright and heal run beside you: do not read playwright/ or triage.json."] if parallel else []),
     ])
@@ -1857,7 +1838,6 @@ def _read_findings(path: Path) -> list[dict[str, Any]]:
 
 
 _PHASE_OF_LOG = (
-    ("agent-plan", "Plan"),
     ("agent", "Explore + Author"),
     ("verify", "Verify"),
     ("heal", "Heal"),

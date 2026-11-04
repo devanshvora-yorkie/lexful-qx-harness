@@ -56,7 +56,7 @@ For each behavior, cover what the rule implies:
 
 ## Hunting bugs nobody recorded
 
-After the claims pass, work the **Risks** list as hypotheses in `hypotheses.json` (skill §1k). Each risk is a hypothesis: write what you expect to see if the risk is real, then try to make it happen in the app or API.
+After the claims pass, work the **Risks** list as hypotheses in `hypotheses.json` (`phases/explore-author.md`, Hypotheses). Each risk is a hypothesis: write what you expect to see if the risk is real, then try to make it happen in the app or API.
 
 - A fix on one side that does not reach the other (dropdown vs highlighter, editor vs read view vs print vs chat).
 - A rule in an unchanged file that overrides the new one (a stylesheet, a default, a guard).

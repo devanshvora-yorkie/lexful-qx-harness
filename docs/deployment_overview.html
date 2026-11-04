@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lexful QA Harness — how it runs after a UAT deploy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0c0f14;
+      --surface: #131820;
+      --surface-2: #1a2230;
+      --border: rgba(255, 255, 255, 0.09);
+      --text: #e8ecf4;
+      --muted: #8b95a8;
+      --dim: #6b7a94;
+      --blue: #5b9cf5;
+      --blue-dim: rgba(91, 156, 245, 0.14);
+      --amber: #f0b429;
+      --amber-dim: rgba(240, 180, 41, 0.13);
+      --green: #3dd68c;
+      --green-dim: rgba(61, 214, 140, 0.12);
+      --purple: #a78bfa;
+      --purple-dim: rgba(167, 139, 250, 0.13);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "DM Sans", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(91, 156, 245, 0.13), transparent);
+      pointer-events: none;
+    }
+    .page { position: relative; max-width: 1180px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    .kicker {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 0.5rem;
+    }
+    h1 { font-size: clamp(1.7rem, 3vw, 2.3rem); letter-spacing: -0.03em; margin-bottom: 0.5rem; }
+    .lede { color: var(--muted); font-size: 1.05rem; max-width: 46rem; }
+    h2 { font-size: 1.15rem; margin: 2.6rem 0 0.35rem; letter-spacing: -0.01em; }
+    .sub { color: var(--muted); font-size: 0.92rem; margin-bottom: 1rem; max-width: 46rem; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; margin-top: 1.1rem; font-size: 0.78rem; color: var(--muted); }
+    .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .dot { width: 9px; height: 9px; border-radius: 3px; }
+    .dot.lex { background: var(--amber); }
+    .dot.qa { background: var(--blue); }
+    .dot.later { background: transparent; border: 1px dashed var(--purple); }
+    .dot.have { background: var(--green); }
+
+    /* Architecture */
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 1.6rem;
+      margin-top: 1.2rem;
+    }
+    .lane h3 {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 0.6rem;
+      min-height: 2.1rem;
+    }
+    .box {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 0.85rem;
+      margin-bottom: 0.7rem;
+      font-size: 0.84rem;
+    }
+    .box b { display: block; font-size: 0.88rem; margin-bottom: 0.15rem; }
+    .box span { color: var(--muted); font-size: 0.78rem; }
+    .box.lex { border-color: rgba(240, 180, 41, 0.45); background: var(--amber-dim); }
+    .box.qa { border-color: rgba(91, 156, 245, 0.45); background: var(--blue-dim); }
+    .box.later { border: 1px dashed rgba(167, 139, 250, 0.6); background: var(--purple-dim); }
+    .n {
+      position: absolute; top: -9px; left: -9px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--blue); color: #06101f;
+      font: 600 0.72rem "JetBrains Mono", monospace;
+      display: grid; place-items: center;
+    }
+    .lane:not(:last-child) { position: relative; }
+    .lane:not(:last-child)::after {
+      content: "→";
+      position: absolute; right: -1.35rem; top: 2.55rem;
+      color: var(--dim); font-size: 1.1rem;
+    }
+
+    /* Checklist */
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    th, td { text-align: left; padding: 0.7rem 0.85rem; vertical-align: top; border-bottom: 1px solid var(--border); }
+    th { font: 500 0.68rem "JetBrains Mono", monospace; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); background: var(--surface-2); }
+    tr:last-child td { border-bottom: 0; }
+    td.sys { white-space: nowrap; font-weight: 600; }
+    td small { display: block; color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+    code, pre { font-family: "JetBrains Mono", monospace; font-size: 0.8em; }
+    code { background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.35rem; }
+    .chip { display: inline-block; font: 500 0.66rem "JetBrains Mono", monospace; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.12rem 0.5rem; border-radius: 99px; }
+    .chip.lex { background: var(--amber-dim); color: var(--amber); }
+    .chip.qa { background: var(--blue-dim); color: var(--blue); }
+    .chip.later { background: var(--purple-dim); color: var(--purple); }
+    .chip.have { background: var(--green-dim); color: var(--green); }
+    .chip.need { background: var(--amber-dim); color: var(--amber); }
+    .tk { display: inline-block; font: 500 0.62rem "JetBrains Mono", monospace; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.05rem 0.4rem; border-radius: 99px; margin-top: 0.3rem; font-style: normal; }
+    .tk.ok { background: var(--green-dim); color: var(--green); }
+    .tk.need { background: var(--amber-dim); color: var(--amber); }
+    .summary { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.2rem; }
+    .summary div { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.9rem; font-size: 0.86rem; color: var(--muted); }
+    .summary b { font-size: 1.15rem; margin-right: 0.35rem; }
+    .summary .g b { color: var(--green); }
+    .summary .a b { color: var(--amber); }
+    .summary .p b { color: var(--purple); }
+    tr.group td { background: var(--surface-2); font: 500 0.68rem "JetBrains Mono", monospace; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); padding: 0.45rem 0.85rem; }
+    td.st { white-space: nowrap; }
+
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1rem; overflow-x: auto; color: #cfd8ea; line-height: 1.6; }
+    pre .c { color: var(--dim); }
+
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem; font-size: 0.88rem; }
+    .card h4 { font-size: 0.92rem; margin-bottom: 0.4rem; }
+    .card ul { padding-left: 1.1rem; color: var(--muted); }
+    .card li { margin: 0.2rem 0; }
+    .card li b { color: var(--text); font-weight: 600; }
+    .ok li::marker { color: var(--green); }
+    .soon li::marker { color: var(--purple); }
+
+    .steps { counter-reset: s; display: grid; gap: 0.55rem; }
+    .steps li { list-style: none; counter-increment: s; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.65rem 0.9rem 0.65rem 2.8rem; position: relative; font-size: 0.88rem; }
+    .steps li::before { content: counter(s); position: absolute; left: 0.85rem; top: 0.62rem; width: 1.4rem; height: 1.4rem; border-radius: 50%; background: var(--blue-dim); color: var(--blue); font: 600 0.72rem "JetBrains Mono", monospace; display: grid; place-items: center; }
+    .steps li span { color: var(--muted); }
+
+    footer { margin-top: 3rem; color: var(--dim); font-size: 0.78rem; }
+
+    @media (max-width: 980px) {
+      .flow { grid-template-columns: 1fr; gap: 1.2rem; }
+      .lane:not(:last-child)::after { content: "↓"; right: auto; left: 0.2rem; top: auto; bottom: -1.15rem; }
+      .two { grid-template-columns: 1fr; }
+      td.sys { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="kicker">Lexful QA Harness</div>
+    <h1>How it runs after a UAT deploy</h1>
+    <p class="lede">When a build reaches UAT, GitHub tells a QA machine. The machine runs the harness, which tests the change on UAT and writes a report for the ticket. This page shows how the pieces connect and what Lexful sets up.</p>
+    <div class="legend">
+      <span><i class="dot lex"></i>Lexful sets this up</span>
+      <span><i class="dot qa"></i>QA team runs this</span>
+      <span><i class="dot later"></i>Planned, not live yet</span>
+      <span><i class="dot have"></i>Already in hand</span>
+    </div>
+    <div class="summary">
+      <div class="g"><b>3</b>in hand</div>
+      <div class="a"><b>7</b>needed from Lexful</div>
+      <div class="p"><b>2</b>to decide</div>
+    </div>
+
+    <h2>The overall picture</h2>
+    <p class="sub">One deploy in, one report out. Nothing is written to Linear or GitHub today.</p>
+
+    <div class="flow">
+      <div class="lane">
+        <h3>Lexful · docu-stack</h3>
+        <div class="box"><i class="n">1</i><b>A change is deployed</b><span>The "Build &amp; Deploy UAT" workflow succeeds</span></div>
+        <div class="box lex"><i class="n">2</i><b>Event listener (new)</b><span>A small workflow hears that finish and sends the deployed commit on</span><br><em class="tk need">needed</em></div>
+      </div>
+      <div class="lane">
+        <h3>GitHub · qa-harness repo</h3>
+        <div class="box qa"><i class="n">3</i><b>QA workflow starts</b><span>It receives the commit and hands the job to the QA machine</span></div>
+      </div>
+      <div class="lane">
+        <h3>QA machine · always on</h3>
+        <div class="box qa"><i class="n">4</i><b>Runner picks up the job</b><span>Starts the harness in a container</span></div>
+        <div class="box qa"><b>Harness tests the change</b><span>Finds the pull request and ticket from the commit, then tests UAT in a real browser</span></div>
+      </div>
+      <div class="lane">
+        <h3>Services it talks to</h3>
+        <div class="box"><b>GitHub</b><span>Reads the pull request and the deploy record</span><br><em class="tk need">QA-bot token needed</em></div>
+        <div class="box"><b>Linear</b><span>Reads the ticket (read-only)</span><br><em class="tk need">QA-bot account needed</em></div>
+        <div class="box"><b>UAT app</b><span>The thing under test</span><br><em class="tk ok">✓ test accounts in hand</em></div>
+        <div class="box"><b>AWS Bedrock</b><span>The AI model that does the testing</span><br><em class="tk ok">✓ access in hand</em></div>
+      </div>
+      <div class="lane">
+        <h3>What comes out</h3>
+        <div class="box qa"><i class="n">5</i><b>Report per ticket</b><span>Results, bugs with screenshots, UX audit</span></div>
+        <div class="box later"><i class="n">6</i><b>Post to Linear</b><span>Report as a comment, bugs as new tickets</span></div>
+      </div>
+    </div>
+
+    <h2>Setup checklist</h2>
+    <p class="sub">Ticked items are already in hand. Secrets go to the QA team directly, never in a ticket or chat.</p>
+    <table>
+      <thead><tr><th>Status</th><th>What</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="3">Already in hand</td></tr>
+        <tr>
+          <td class="st"><span class="chip have">✓ In hand</span></td>
+          <td><b>UAT test accounts</b>
+            <small>Test accounts in the "E2E Demo" organization.</small></td>
+          <td>The harness signs in to UAT as them.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip have">✓ In hand</span></td>
+          <td><b>AWS Bedrock access</b>
+            <small>The Claude Haiku 5.5 model in us-east-1. Put a spend limit on the key.</small></td>
+          <td>The AI model that runs the tests.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip have">✓ In hand</span></td>
+          <td><b>The harness, the setup script and the QA workflow</b>
+            <small>Built and in the <code>qa-harness</code> repo. Nothing for Lexful to build.</small></td>
+          <td>Runs a test from a ticket, a pull request or a deployed commit.</td>
+        </tr>
+
+        <tr class="group"><td colspan="3">Needed from Lexful</td></tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>GitHub: a QA-bot account and its token</b>
+            <small>A dedicated bot user with read access to <code>docu-stack</code>, and a personal access token limited to pull requests, deployments and environments. Read-only.</small></td>
+          <td>Replaces the personal token we test with. The harness reads the pull request and checks the change is on UAT.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>Linear: a QA-bot account and its API key</b>
+            <small>A dedicated user in the Lexful workspace, a member of the LEX team. Read-only for now; the same account will later post the report and file bugs, so they show as written by the bot.</small></td>
+          <td>Replaces the personal key we test with. Reads the ticket and its acceptance criteria.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>GitHub: the event listener in <code>docu-stack</code></b>
+            <small>One workflow file, <code>qa-notify.yml</code>. It starts when the UAT deploy workflows finish successfully and sends the commit id to <code>Lexful-ai/qa-harness</code>. We provide the file.</small></td>
+          <td>This is the trigger. Without it nothing starts by itself; runs can still be started by hand.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>GitHub: a dispatch token, stored as a secret</b>
+            <small>A second token (not the read-only one), or a GitHub App, limited to the <code>qa-harness</code> repo. Save it in <code>docu-stack</code> as <code>QA_HARNESS_DISPATCH_TOKEN</code>.</small></td>
+          <td>Lets the listener send the event. It can touch nothing else.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>GitHub: which deploys start QA</b>
+            <small>For example the docu-app and docu-service UAT deploys. Confirm that a successful deploy means the build is live on UAT.</small></td>
+          <td>QA should start only when the new build is serving.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>GitHub: admin access to <code>qa-harness</code> for one setup step</b>
+            <small>An admin registers the QA machine as a runner. Turn on branch protection for <code>main</code>.</small></td>
+          <td>Only reviewed code runs on the QA machine.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip need">Needed</span></td>
+          <td><b>Network: allow the QA machine through CloudFront</b>
+            <small>Add its public IP to the allow rules for the UAT site. We send the IP.</small></td>
+          <td>UAT answers bursts of automated traffic with a 403. In our test runs this was the main reason tests failed.</td>
+        </tr>
+
+        <tr class="group"><td colspan="3">To decide</td></tr>
+        <tr>
+          <td class="st"><span class="chip later">Decide</span></td>
+          <td><b>Who hosts the QA machine</b>
+            <small>One always-on Mac or Linux machine with Docker that does not sleep. Its public IP goes into the CloudFront rule above.</small></td>
+          <td>It runs the harness after every deploy.</td>
+        </tr>
+        <tr>
+          <td class="st"><span class="chip later">Decide</span></td>
+          <td><b>Linear: where bug tickets go</b>
+            <small>The team, project and labels for tickets the QA bot files. Needed only when posting to Linear is switched on.</small></td>
+          <td>Keeps filed bugs out of the wrong backlog.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>What the QA team runs</h2>
+    <p class="sub">One machine that stays on and online. It needs Docker, and it must not sleep. Setup is three commands.</p>
+<pre><span class="c"># on the QA machine</span>
+git clone https://github.com/Lexful-ai/qa-harness.git &amp;&amp; cd qa-harness
+./build.sh            <span class="c"># first run creates .env; fill in the keys, then run it again</span>
+./build.sh --runner   <span class="c"># registers this machine as the runner for the qa-harness repo</span></pre>
+    <p class="sub" style="margin-top:0.7rem">Keys stay in a file on that machine only. Each run is saved in a folder there, one folder per ticket, with an HTML report.</p>
+
+    <h2>Where it stands</h2>
+    <div class="two">
+      <div class="card ok">
+        <h4>Works today</h4>
+        <ul>
+          <li><b>Run on demand</b> from a ticket, a pull request or a deployed commit</li>
+          <li><b>Finds the ticket</b> from the pull request or commit on its own</li>
+          <li><b>Report per run:</b> test results, bugs with screenshots, UX audit</li>
+          <li><b>One-command setup</b> of the QA machine</li>
+        </ul>
+      </div>
+      <div class="card soon">
+        <h4>Next</h4>
+        <ul>
+          <li><b>Start by itself</b> after each deploy (needs the listener above)</li>
+          <li><b>Post to Linear:</b> the report as a comment, bugs as tickets</li>
+          <li><b>Several tickets</b> in one deploy, tested in one pass</li>
+          <li><b>Tidy-up</b> of old run folders on the machine</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2>Order of setup</h2>
+    <ol class="steps">
+      <li><b>Lexful:</b> <span>create the QA-bot accounts for GitHub and Linear, send their tokens, and add the CloudFront allow rule.</span></li>
+      <li><b>QA team:</b> <span>set up the QA machine and register it, then start one run by hand to check it end to end.</span></li>
+      <li><b>Lexful:</b> <span>add the event listener and the dispatch token to <code>docu-stack</code>.</span></li>
+      <li><b>Both:</b> <span>watch the first few deploys. Every UAT deploy now produces a report.</span></li>
+      <li><b>Later:</b> <span>decide on Linear write access, then turn on comments and bug tickets.</span></li>
+    </ol>
+
+    <footer>Lexful QA Harness · setup details: docs/setup.md · security notes: docs/security.md</footer>
+  </div>
+</body>
+</html>

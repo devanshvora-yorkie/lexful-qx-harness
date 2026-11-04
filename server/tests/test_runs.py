@@ -3,7 +3,6 @@ import io
 import json
 import os
 import re
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +12,6 @@ from fastapi import HTTPException
 
 from app.logbook import (
     Logbook,
-    SubagentTail,
-    child_message_lines,
     echo_run,
     format_event,
     plain_error,
@@ -26,6 +23,7 @@ from app.main import health, persona_client_allowed, run_phase1, run_ticket
 from app.bugs import collect_bugs, publish_bugs, record, render_bugs
 from app.coverage import load_cases, write_coverage_index
 from app.pipeline import (
+    PHASE_FILES,
     _lead_prompt,
     failed_tests,
     merge_test_outcomes,
@@ -75,104 +73,7 @@ class LogbookTest(unittest.TestCase):
         self.assertIn("qa", shell)
         self.assertIn("shell", shell)
         self.assertIn("ls explore", shell)
-        subagent = format_event({
-            "type": "tool_use",
-            "part": {
-                "tool": "subagent",
-                "state": {
-                    "status": "error",
-                    "input": {"agent": "qa-explorer", "description": "Explore the drawer", "prompt": "long prompt"},
-                    "error": "Subagent failed (sessionID: ses_abc): Provider returned error",
-                    "time": {"start": 1_000, "end": 61_000},
-                },
-            },
-        })
-        self.assertIn("qa-explorer", subagent)
-        self.assertIn("Explore the drawer", subagent)
-        self.assertIn("Provider returned error", subagent)
-        self.assertIn("1m 00s", subagent)
-        self.assertNotIn("long prompt", subagent)
         self.assertIn("ses", format_event({"type": "error", "error": {"message": "Expected a string starting with ses"}}))
-
-    def test_child_message_names_the_action(self):
-        lines = child_message_lines("qa-explorer", {
-            "content": [
-                {"type": "reasoning", "text": "hidden chain of thought"},
-                {
-                    "type": "tool",
-                    "name": "shell",
-                    "state": {
-                        "status": "completed",
-                        "input": {"command": "cd /tmp/lexful-qa-opencode/explore && playwright-cli open https://e2e-test.uat.lexful.net"},
-                    },
-                },
-                {"type": "text", "text": "Opened the contacts list and found the Relationships tab."},
-            ],
-        })
-        self.assertTrue(any("playwright-cli open https://e2e-test.uat.lexful.net" in line for line in lines))
-        self.assertTrue(any("Relationships tab" in line for line in lines))
-        self.assertFalse(any("chain of thought" in line for line in lines))
-        self.assertFalse(any("cd /tmp" in line for line in lines))
-
-    def test_subagent_tail_writes_child_tools_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp)
-            database = folder / "opencode.db"
-            connection = sqlite3.connect(database)
-            connection.execute(
-                """
-                CREATE TABLE session_v2 (
-                    id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL,
-                    directory text NOT NULL, title text, version text NOT NULL, cost real DEFAULT 0,
-                    tokens_input integer DEFAULT 0, tokens_output integer DEFAULT 0, tokens_reasoning integer DEFAULT 0,
-                    time_created integer NOT NULL, time_updated integer NOT NULL, time_idle integer, agent text
-                )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE session_message (
-                    id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL,
-                    time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL
-                )
-                """
-            )
-            connection.execute(
-                "INSERT INTO session_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                ("ses_child", "project", "ses_parent", "slug", "/work", "Phase 1", "1", 0.4, 10, 20, 0, 1_000, 5_000, None, "qa-explorer"),
-            )
-            payload = {
-                "content": [{
-                    "type": "tool",
-                    "name": "read",
-                    "state": {"status": "completed", "input": {"path": "/work/lexful-qa-opencode/runs/demo/context-pack.json"}},
-                }],
-            }
-            connection.execute(
-                "INSERT INTO session_message VALUES (?,?,?,?,?,?,?)",
-                ("msg1", "ses_child", "assistant", 1, 1_000, 2_000, json.dumps(payload)),
-            )
-            connection.commit()
-            connection.close()
-            book = Logbook(folder)
-            tail = SubagentTail("ses_parent", book, database)
-            tail.opened_at = 0
-            tail.poll()
-            tail.poll()
-            text = (folder / "run.log").read_text(encoding="utf-8")
-            self.assertEqual(text.count("qa-explorer"), 2)
-            self.assertIn("started", text)
-            self.assertIn("runs/demo/context-pack.json", text)
-            self.assertNotIn("finished", text)
-            connection = sqlite3.connect(database)
-            connection.execute("UPDATE session_v2 SET time_idle = 61000, cost = 0.4 WHERE id = 'ses_child'")
-            connection.commit()
-            connection.close()
-            tail.poll()
-            text = (folder / "run.log").read_text(encoding="utf-8")
-            self.assertEqual(text.count("finished"), 1)
-            self.assertIn("$0.4000", text)
-            self.assertEqual(text.count("context-pack.json"), 1)
 
     def test_plain_error_names_the_missing_session(self):
         line = plain_error("\x1b[91m\x1b[1mError: \x1b[0mSession not found")
@@ -609,21 +510,34 @@ class CoverageTest(unittest.TestCase):
         both["a.spec.ts"].update(test_outcomes_from_report(report("a.spec.ts", [("clear selection", "unexpected")], "Bulk"))["a.spec.ts"])
         self.assertEqual(sorted(both["a.spec.ts"]), ["Bulk › clear selection", "Filters › clear selection"])
 
-    def test_server_messages_carry_facts_and_the_rules_live_in_the_skill(self):
+    def test_server_messages_carry_facts_and_the_rules_live_in_the_phase_files(self):
         text = _lead_prompt(Path("/tmp/runs/tickets/LEX-1/attempt"), "LEX-1", {})
         self.assertTrue(text.startswith("Phase: explore+author"))
         self.assertIn("Ticket: LEX-1", text)
-        self.assertIn("section 7", text)
+        self.assertIn("phases/explore-author.md", text)
         self.assertLess(len(text.splitlines()), 10)
-        # No procedure in the message: counts, tool flags and file contracts are skill text.
+        # No procedure in the message: counts, tool flags and file contracts are phase-file text.
         for rule in ("at least", "persona.mjs", "coverage.json", "qa-fixtures", "one shell command"):
             self.assertNotIn(rule, text.lower())
-        skill = (Path(__file__).resolve().parents[2] / ".agents/skills/lexful-autonomous-agent-qa/SKILL.md").read_text()
-        section = skill[skill.index("### 7. Server turns"):]
-        for phase in ("plan", "explore+author", "heal", "e2e-heal", "verify", "promote", "ux-audit", "resume"):
-            self.assertIn(f"**Phase `{phase}`", section)
-        for rule in ("coverage.json", "persona.mjs", "qa-fixtures", "One shell command per call"):
-            self.assertIn(rule, section)
+        root = Path(__file__).resolve().parents[2]
+        skill_dir = root / ".agents/skills/lexful-autonomous-agent-qa"
+        # Every phase the server sends has a phase file, and the entry prompt maps each phase to its file.
+        entry = (root / ".agents/prompts/qa.md").read_text()
+        for phase, name in PHASE_FILES.items():
+            self.assertTrue((skill_dir / "phases" / name).is_file(), name)
+            self.assertIn(f"phases/{name}", entry)
+            self.assertIn(f"`{phase}`", entry)
+        for phase in ("ux-audit", "resume"):
+            self.assertIn(f"`{phase}`", entry)
+        for rule in ("One shell command per call", "Do not spawn subagents"):
+            self.assertIn(rule, entry)
+        phase_files = {name: (skill_dir / "phases" / name).read_text() for name in set(PHASE_FILES.values())}
+        for rule in ("coverage.json", "persona.mjs", "qa-fixtures"):
+            self.assertIn(rule, phase_files["explore-author.md"])
+        # The e2e heal must not drag in the ticket procedure.
+        for ticket_only in ("hypotheses", "feature-map", "coverage.json", "planned-specs"):
+            self.assertNotIn(ticket_only, phase_files["e2e-heal.md"])
+        self.assertLess(len(phase_files["e2e-heal.md"]), 9000)
 
     def test_merge_test_outcomes_keeps_unrerun_files(self):
         def report(file: str, rows: list[tuple[str, str]]) -> dict:

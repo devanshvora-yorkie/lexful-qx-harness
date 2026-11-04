@@ -63,7 +63,7 @@ def _gzip(path: Path) -> int:
 
 
 def _transcript_kept(path: Path) -> bool:
-    """agent.jsonl, heal-2.jsonl, verify-1-retry1.jsonl.gz yes; agent-plan, promote, ux-audit no."""
+    """agent.jsonl, heal-2.jsonl, verify-1-retry1.jsonl.gz yes; promote, ux-audit no."""
     stem = path.name.split(".", 1)[0].split("-retry", 1)[0]
     return stem == "agent" or stem.startswith(TRANSCRIPTS_KEPT)
 

@@ -110,16 +110,17 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 | `QA_RUN_UX_AUDIT` | true | Run the UX audit. `false` stops after functional QA |
 | `QA_VERIFY_FINDINGS` | true | A fresh session reproduces each bug before it is filed |
 | `QA_ALLOW_UNDEPLOYED` | false | Run a PR that is not on UAT yet |
-| `QA_MAX_PARALLEL_RUNS` | 1 | Runs at the same time. Each run gets its own git worktree |
+| `QA_MAX_PARALLEL_RUNS` | 1 | Runs at the same time. Each run gets its own git worktree. Keep it at 1 unless you must: with one agent for every phase, the server can only log, not undo, a ticket session's edit to `e2e test cases/` when runs overlap |
 | `QA_SESSION_CHECK_MINUTES` | 20 | How often the saved Stytch sessions are checked during a run. 0 turns it off |
-| `OPENCODE_MAIN_MODEL` | Haiku 5.5 on Bedrock | The one model every agent session runs on: explore, author, heal, verify and the UX audit. `opencode.jsonc` must name the same id |
+| `OPENCODE_MAIN_MODEL` | Haiku 5.5 on Bedrock | The one model every session of the one `qa` agent runs on: explore, author, heal, verify, promote and the UX audit. The top-level `model` in `opencode.jsonc` must name the same id |
 
 ## Repository layout
 
 - `server/` the API and the run pipeline (FastAPI, Python)
 - `scripts/` helpers the agents and the server call (Node): preflight, ticket, specs, sessions
 - `e2e test cases/` the checked-in suite, one folder per area, with `FEATURE.md` and `changes.log`
-- `.agents/` the agent prompts, the QA skill and the UX audit skill, and the UX kit
+- `.agents/` the agent prompt, the QA skill (one file per phase), the UX audit skill, and the UX kit
+- `docs/run-reference.md` the run flow, the phases and the files a run writes
 - `docs/setup.md` deployment: the QA machine, the trigger and what to configure in the product repo
 - `docs/security.md` what protects the secrets, what does not, and the risks that remain
 - `build.sh`, `Makefile`, `docker-compose.yml`, `Dockerfile` setup and build

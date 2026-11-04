@@ -4,19 +4,10 @@ description: "Use when auditing or proposing changes to Lexful's UI against the 
 version: 0.3.2
 status: "DRAFT, unsigned"
 sources_verified: "2026-10-13 against storybooks.fluentui.dev (component index, Spacing, Border Radii, Typography, Button, Drawer) and ui.shadcn.com (component list, Sheet, Alert, Empty)"
-config:
-  output_mode: simple
 ---
-## Antigravity Docker Environment Testing
-- When testing these skill files on the Antigravity platform, execution must run through the designated Docker container or image environment. 
-- Ensure the Docker environment is running before validating the UX skill findings.
-
-## Output Modes (Ticket Generation)
-Provide output based on the requested mode to give the user full control:
-- **Simple Mode**: Provide ONLY the detailed suggested solution. Hide all other contextual details, background, and internal reasoning.
-- **Advanced Mode**: Display ALL details, including the detailed suggested solution, hidden background context, technical reasoning, and the full audit breakdown.
-
-
+## Use in the harness
+- The `ux-audit` phase reads this skill when it writes recommendations. They go in the finding's `solution` (`what`, `developer`, `design`), `implementationShadcn` and `fluentRationale` fields in `ux-findings.json`. The server renders the report; there is no output-mode switch.
+- The agent has no web access, so the URLs in section 1 cannot be opened in a run. Write "from skill reference, not verified today" next to any prop, variant or behavior taken from this skill or its `references/`.
 
 # Fluent-aligned design for a shadcn/ui product (reference skill)
 
@@ -28,13 +19,13 @@ _Skill name kept as `design-system` so existing links keep working._
 - `references/components.md` — every component in the official Fluent v9 index (the design reference).
 - `references/shadcn-components.md` — the shadcn/ui components available today and how to compose them (the implementation).
 - `references/lexful-mapping.md` — which Lexful screen elements map to which Fluent component, known gaps, and the evidence about Lexful's real stack.
-- Used together with `ux-audit` (produces the findings and the HTML output; it writes solutions as text only, no visual mocks).
+- Used together with `ux-audit` (produces the findings; the server renders the HTML report; solutions are text only, no visual mocks).
 
 ---
 
 ## 1. Stay current: the official docs are the source of truth
 
-This skill is a summary. Fluent changes, so when you can open URLs:
+This skill is a summary. Fluent changes, so when a session can open URLs (a person using this skill outside the harness):
 - Component index: `https://storybooks.fluentui.dev/react/llms.txt`
 - Each component has a plain-text page linked from that index (pattern: `.../llms/components-<name>.txt`). Use the link exactly as written in the index.
 - Design guidance: `https://fluent2.microsoft.design`

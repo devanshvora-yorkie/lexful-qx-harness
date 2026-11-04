@@ -11,7 +11,6 @@
     "ticket": "node scripts/ticket.mjs",
     "cancel-runs": "node scripts/cancel-runs.mjs",
     "e2e": "node scripts/ticket.mjs --phase1",
-    "phase1": "node scripts/ticket.mjs --phase1",
     "specs": "node scripts/specs.mjs",
     "session": "node scripts/session.mjs",
     "persona": "node scripts/persona.mjs"
