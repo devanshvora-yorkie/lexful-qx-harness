@@ -26,6 +26,10 @@ test.afterEach(async ({ page }) => {
   await page.goto('about:blank')
 })
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('Password records — smoke', () => {
   test(
     'password record drawer Overview shows username, URL and a masked password',

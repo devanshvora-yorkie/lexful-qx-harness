@@ -84,7 +84,7 @@ async function gotoServersListing(page: import('@playwright/test').Page) {
       lastStatus === 403 ||
       (await page.getByText('Request blocked').isVisible().catch(() => false));
     if (!blocked) return;
-    await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    await new Promise((resolve) => setTimeout(resolve, 45_000));
   }
   throw new Error(`UAT blocked ${SERVERS_URL} (HTTP ${lastStatus})`);
 }
@@ -148,6 +148,12 @@ async function openServersListing(page: import('@playwright/test').Page) {
   await expect(listing.assetTypeHeading()).toBeVisible({ timeout: 15000 });
   return listing;
 }
+
+// CloudFront "Request blocked" retries wait 45 s between navigations (gotoServersListing), which
+// outlasts the default 30 s test budget. The search spec sets the same 240 s.
+test.beforeEach(() => {
+  test.setTimeout(240_000);
+});
 
 test.describe('Authentication', () => {
   test('POST /auth/password returns HTTP 204 with both cookies', async () => {
@@ -554,7 +560,9 @@ test.describe('Server Detail Drawer', () => {
 
   test('detail drawer has Edit Name button', async ({ page }) => {
     await listingPom.openRowDetail(SEEDED_SERVER);
-    await expect(new ServersDetailPOM(page).editNameButton()).toBeVisible({ timeout: 5000 });
+    // The drawer header loads async: its h2 is a skeleton until the record arrives (about 3 s on a replay,
+    // longer under parallel workers). Wait for the real button rather than a 5 s budget.
+    await expect(new ServersDetailPOM(page).editNameButton()).toBeVisible({ timeout: 15000 });
   });
 
   test('Overview tab shows Relationships section', async ({ page }) => {
@@ -589,7 +597,9 @@ test.describe('Server Detail Drawer', () => {
     expect(await detail.editWarrantyExpirationButton().textContent()).toContain('2027');
     await expect(detail.editBackupPlanButton()).toBeVisible();
     // The linked backup's name loads after the Details card (a spinner shows until then).
-    await expect(detail.editBackupPlanButton()).toContainText('AAA Aliquip Backup', { timeout: 15000 });
+    // Replay: the linked backup's name loads in about 3 s, but one run sat on "Loading" past 15 s.
+    // Give the async lookup more room; the expected name is unchanged.
+    await expect(detail.editBackupPlanButton()).toContainText('AAA Aliquip Backup', { timeout: 30000 });
   });
 
   test('drawer close button closes the drawer', async ({ page }) => {

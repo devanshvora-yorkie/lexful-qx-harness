@@ -29,6 +29,10 @@ test.afterEach(async ({ page }) => {
   await archiveCreatedDocuments(page)
 })
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('Document editing — Lex actions — regression', () => {
   test('Cancel in the Lex instruction box returns to the editor with the body unchanged', {
     tag: ['@edge', '@regression'],

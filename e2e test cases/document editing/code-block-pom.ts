@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
+import { gotoApp } from './document-session'
 
 /**
  * Code block page object for Document editing (promoted from LEX-3800).
@@ -63,7 +64,7 @@ export function recordArticle(page: Page): Locator {
 
 export async function openRecord(page: Page, id: string) {
   const drawer = JSON.stringify([{ type: DOCUMENT_TYPE, id }])
-  await page.goto(`${LIST_URL}?drawer=${encodeURIComponent(drawer)}`)
+  await gotoApp(page, `${LIST_URL}?drawer=${encodeURIComponent(drawer)}`)
   const article = recordArticle(page)
   await expect(article).toBeVisible()
   return article

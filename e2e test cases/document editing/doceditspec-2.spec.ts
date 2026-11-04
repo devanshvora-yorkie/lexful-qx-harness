@@ -39,6 +39,10 @@ test.afterEach(async ({ page }) => {
 // Edge
 // =======================================================================================
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('Document editing — edge', () => {
   test('TC-DOC-011: Discard a staged rename leaves the record name unchanged', async ({ page }) => {
     const api = new ApiContext(page)

@@ -131,6 +131,7 @@ export async function gotoApp(page: Page, url: string): Promise<void> {
     const shell = page.getByRole('heading', { level: 1 })
     await expect(blocked.or(shell).first()).toBeVisible({ timeout: 15000 })
     if (!(await blocked.isVisible())) return
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 45_000))
   }
   throw new Error(`CloudFront 403 persisted for ${url} after 3 navigations`)
 }

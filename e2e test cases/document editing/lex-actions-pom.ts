@@ -1,5 +1,6 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Page, type Request } from '@playwright/test'
 import { injectAuthCookies } from '../../auth-helper'
+import { WAF_ATTEMPTS, WAF_COOLDOWN_MS, isWafBlocked } from './document-session'
 
 /**
  * Page objects and fixtures for LEX-3518 (PR #1909): Lex Replace and Translate inside
@@ -31,14 +32,24 @@ export function uniqueName(label: string) {
 export async function ensureAccount(page: Page) {
   await injectAuthCookies(page.context())
   if (accountId) return
-  const seen = page.waitForRequest(request => Boolean(request.headers()['x-account-id']), {
-    timeout: 30_000,
-  })
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const response = await page.goto(`${APP_URL}/docs/d/all/${DOCUMENT_TYPE}`, { waitUntil: 'domcontentloaded' })
-    if (response?.status() !== 403) break
+  // Listen rather than wait on one request: blocked attempts send none, and the wait spans the retries.
+  let captured = ''
+  const onRequest = (request: Request) => {
+    const id = request.headers()['x-account-id']
+    if (id && !captured) captured = id
   }
-  accountId = (await seen).headers()['x-account-id']
+  page.on('request', onRequest)
+  try {
+    for (let attempt = 1; attempt <= WAF_ATTEMPTS; attempt++) {
+      const response = await page.goto(`${APP_URL}/docs/d/all/${DOCUMENT_TYPE}`, { waitUntil: 'domcontentloaded' })
+      if (!(await isWafBlocked(page, response?.status() ?? 0))) break
+      if (attempt < WAF_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, WAF_COOLDOWN_MS))
+    }
+    await expect.poll(() => captured, { timeout: 60_000 }).not.toBe('')
+    accountId = captured
+  } finally {
+    page.off('request', onRequest)
+  }
 }
 
 /** Create a document through the API. Archived again in afterEach. */
@@ -118,9 +129,11 @@ export class DocumentRecord {
     const url = `${APP_URL}/docs/d/all/${DOCUMENT_TYPE}?drawer=${encodeURIComponent(
       JSON.stringify([{ type: DOCUMENT_TYPE, id }]),
     )}`
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= WAF_ATTEMPTS; attempt++) {
       const response = await this.page.goto(url, { waitUntil: 'domcontentloaded' })
-      if (response?.status() !== 403) break
+      if (!(await isWafBlocked(this.page, response?.status() ?? 0))) break
+      // CloudFront "Request blocked": space the retry out (see document-session.ts).
+      if (attempt < WAF_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, WAF_COOLDOWN_MS))
     }
     await expect(this.dialog).toBeVisible({ timeout: 30_000 })
     await expect(this.editContentButton).toBeVisible({ timeout: 30_000 })

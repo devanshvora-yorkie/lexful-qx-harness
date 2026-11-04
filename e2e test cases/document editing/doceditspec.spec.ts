@@ -63,6 +63,10 @@ test.afterEach(async ({ page }) => {
 // Positive
 // =======================================================================================
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('Document editing — positive', () => {
   test('TC-DOC-001: Create a document with a name, an organization and body content', async ({ page }) => {
     const list = new AssetRecordListPage(page, DOCUMENT_TYPE)

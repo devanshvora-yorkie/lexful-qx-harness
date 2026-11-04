@@ -10,6 +10,9 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import * as fs from 'fs'
+
+/** Cooldown between CloudFront WAF retries (same 45 s the search spec uses). */
+const WAF_COOLDOWN_MS = 45_000
 import * as os from 'os'
 import * as path from 'path'
 
@@ -45,11 +48,26 @@ export class OrgAttachments {
 
   /** Opens the organization list, then the E2E Demo drawer on the Overview tab. */
   async open(): Promise<void> {
-    const listLoaded = this.page.waitForResponse(
-      r => r.request().method() === 'GET' && r.url().includes('/v1/organizations') && r.ok(),
-      { timeout: 20_000 },
-    )
-    await this.page.goto(ORG_LIST_URL, { waitUntil: 'domcontentloaded' })
+    // CloudFront can answer the list navigation with "Request blocked": no organizations response
+    // arrives, so the wait below times out. Retry the navigation after a cooldown instead.
+    let listLoaded: Promise<unknown> | null = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const loaded = this.page.waitForResponse(
+        r => r.request().method() === 'GET' && r.url().includes('/v1/organizations') && r.ok(),
+        { timeout: 20_000 },
+      )
+      const response = await this.page.goto(ORG_LIST_URL, { waitUntil: 'domcontentloaded' })
+      const blocked =
+        response?.status() === 403 ||
+        (await this.page.getByText('Request blocked').isVisible().catch(() => false))
+      if (!blocked) {
+        listLoaded = loaded
+        break
+      }
+      loaded.catch(() => null)
+      if (attempt === 3) throw new Error(`UAT blocked ${ORG_LIST_URL} (HTTP ${response?.status() ?? 0})`)
+      await new Promise(resolve => setTimeout(resolve, WAF_COOLDOWN_MS))
+    }
     await listLoaded
     await expect(this.page.getByText(ORG_NAME, { exact: true }).first()).toBeVisible()
     await this.page.getByText(ORG_NAME, { exact: true }).first().click()

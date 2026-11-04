@@ -21,6 +21,10 @@ test.afterEach(async ({ page }) => {
   await deleteCreated(page)
 })
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('Document editing — code blocks — smoke', () => {
   test('A saved PowerShell block is highlighted and labelled in the read-only document', {
     tag: ['@positive', '@smoke'],

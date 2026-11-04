@@ -36,6 +36,10 @@ test.afterEach(async ({ page }) => {
   touched = null
 })
 
+test.beforeEach(() => {
+  test.setTimeout(240_000)
+})
+
 test.describe('LEX-3554 move records — smoke', () => {
   test('Move password stays disabled until a destination is chosen and excludes the current organization', {
     tag: ['@edge', '@smoke'],

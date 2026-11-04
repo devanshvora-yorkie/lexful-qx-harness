@@ -24,6 +24,10 @@ test.afterEach(async ({ page }) => {
   await new OrgAttachments(page).cleanup(created)
 })
 
+test.beforeEach(() => {
+  test.setTimeout(240_000);
+});
+
 test.describe('Inline image attachments', () => {
   test('A saved inline image marks its attachment Embedded and disables Delete', {
     tag: ['@positive', '@smoke'],

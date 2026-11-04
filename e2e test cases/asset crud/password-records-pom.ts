@@ -20,7 +20,7 @@ export const SEEDED_ORGANIZATION = 'Adipiscing Aliqua Academy'
 
 export const UUID_PATTERN = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
-/** Retry a navigation that UAT answers with CloudFront 403 (custom-instructions). */
+/** Retry a navigation that UAT answers with CloudFront 403 (custom-instructions). Spaced 45 s apart, as the search spec does. */
 export async function gotoApp(page: Page, url: string) {
   let lastStatus = 0
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -29,6 +29,7 @@ export async function gotoApp(page: Page, url: string) {
     const blocked =
       lastStatus === 403 || (await page.getByText('Request blocked').isVisible().catch(() => false))
     if (!blocked) return
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 45_000))
   }
   throw new Error(`UAT blocked ${url} (HTTP ${lastStatus})`)
 }

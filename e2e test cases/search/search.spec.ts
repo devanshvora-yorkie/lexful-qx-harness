@@ -141,8 +141,9 @@ test.describe('Search', () => {
 
     const seen = trackSearchRequests(page)
 
-    // Type per-character so the debounce is genuinely exercised.
-    await ui.input().pressSequentially(BROAD_TERM, { delay: 60 })
+    // A real burst: every key lands inside the 300 ms debounce window (useDebouncedValue, default delay).
+    // A per-key delay under parallel workers let one stalled keystroke gap outlast the window and fire a request for "E".
+    await ui.input().pressSequentially(BROAD_TERM)
     await expect(ui.results().first()).toBeVisible({ timeout: 20_000 })
 
     // useDebouncedValue() in useAssetSearch.ts:59 collapses the burst into one call.

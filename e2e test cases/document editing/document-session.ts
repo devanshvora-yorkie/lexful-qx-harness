@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page, type Request } from '@playwright/test'
 import { injectAuthCookies } from '../../auth-helper'
 
 const LISTENING = new WeakSet<Page>()
@@ -29,17 +29,34 @@ export function accountHeader() {
   return accountId
 }
 
+/**
+ * Cooldown between CloudFront WAF retries. The blocks come in bursts while the suite runs in parallel,
+ * and 45 s was not enough for them to clear in attempt 1, so the spacing is 60 s and 4 tries.
+ */
+export const WAF_COOLDOWN_MS = 60_000
+export const WAF_ATTEMPTS = 4
+
+/**
+ * True when CloudFront blocked the page: the status is 403, or the 403 page appears after the
+ * navigation returned (the app can send the browser to that page after its first load).
+ */
+export async function isWafBlocked(page: Page, status: number): Promise<boolean> {
+  if (status === 403) return true
+  return page
+    .getByText('Request blocked')
+    .first()
+    .waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true, () => false)
+}
+
 /** CloudFront intermittently answers 403. Retry the navigation, spacing the attempts out. */
 export async function gotoApp(page: Page, url: string) {
   let lastStatus = 0
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= WAF_ATTEMPTS; attempt++) {
     const response = await page.goto(url, { waitUntil: 'domcontentloaded' })
     lastStatus = response?.status() ?? 0
-    const blocked =
-      lastStatus === 403 ||
-      (await page.getByText('Request blocked').isVisible().catch(() => false))
-    if (!blocked) return
-    await new Promise(resolve => setTimeout(resolve, 2000 * attempt))
+    if (!(await isWafBlocked(page, lastStatus))) return
+    if (attempt < WAF_ATTEMPTS) await new Promise(resolve => setTimeout(resolve, WAF_COOLDOWN_MS))
   }
   throw new Error(`UAT blocked ${url} (HTTP ${lastStatus})`)
 }
@@ -48,9 +65,18 @@ export async function gotoApp(page: Page, url: string) {
 export async function primeAccount(page: Page) {
   await ensureSession(page)
   if (accountId) return
-  const seen = page.waitForRequest(request => Boolean(request.headers()['x-account-id']), {
-    timeout: 20_000,
-  })
-  await gotoApp(page, '/docs/d/all/system.document')
-  await seen
+  // Listen rather than wait on one request: the blocked attempts send none, and the wait spans the retries.
+  let captured = ''
+  const onRequest = (request: Request) => {
+    const id = request.headers()['x-account-id']
+    if (id && !captured) captured = id
+  }
+  page.on('request', onRequest)
+  try {
+    await gotoApp(page, '/docs/d/all/system.document')
+    await expect.poll(() => captured, { timeout: 60_000 }).not.toBe('')
+    accountId = captured
+  } finally {
+    page.off('request', onRequest)
+  }
 }
