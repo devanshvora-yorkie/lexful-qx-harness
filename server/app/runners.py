@@ -420,6 +420,42 @@ def ensure_session(*, fresh: bool = False, persona: str | None = None) -> tuple[
 _SESSION_LOCK = threading.Lock()
 
 
+_LOOKUP_REF = re.compile(r"^(LEX-\d+|#?\d+|[a-z0-9][\w.-]*/[a-z0-9][\w.-]*#\d+)\Z", re.IGNORECASE | re.ASCII)
+# The budget lives in one file; two sessions of a run (the walk and the UX audit) must not race on it.
+_LOOKUP_LOCK = threading.Lock()
+
+
+def context_lookup(run: str, ref: str) -> tuple[int, dict[str, Any] | str]:
+    """Fetch one ticket or pull request this run's context names (scripts/lookup.mjs enforces which, and how many).
+
+    The server holds the tokens, so it fetches. It returns the text and writes nothing into the run folder: the agent
+    user owns that folder, and a write from here could be redirected by a symlink. The agent's script saves it.
+    """
+    settings = get_settings()
+    if not _LOOKUP_REF.match(ref or ""):
+        return 400, "give LEX-1234, a pull request number, or org/repo#123"
+    folder = Path(run or "").resolve()
+    if not folder.is_dir() or not folder.is_relative_to(settings.runs.resolve()):
+        return 400, "not a run folder"
+    env = os.environ.copy()
+    env["LOOKUP_DIRECT"] = "1"
+    try:
+        with _LOOKUP_LOCK:
+            process = subprocess.run(
+                ["node", "scripts/lookup.mjs", "--run", str(folder), ref],
+                cwd=settings.root, env=env, capture_output=True, text=True, timeout=120,
+            )
+    except subprocess.TimeoutExpired:
+        return 504, "the lookup timed out"
+    if process.returncode != 0:
+        lines = (process.stderr or process.stdout or "").strip().splitlines()
+        return 400, (lines[-1] if lines else "the lookup failed")[:300]
+    try:
+        return 0, json.loads(process.stdout)
+    except json.JSONDecodeError:
+        return 502, "the lookup returned no result"
+
+
 def _newest_log(run_dir: Path, log_name: str) -> Path:
     """The log of the last attempt: heal-1.jsonl, or heal-1-retry1.jsonl after a retry."""
     stem = Path(log_name).stem

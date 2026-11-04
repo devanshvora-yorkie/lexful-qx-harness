@@ -1,4 +1,6 @@
-# UX kit files
+# UX kit files (maintainer notes)
+
+This file is for whoever updates the kit. No agent reads it; the kit files it describes live under `.agents/`.
 
 These files come from the UX owner's kit (`lexful-ux-kit-v<N>.zip`; this is kit v12, audit skill v0.27.0). Map each kit file to the path below, then re-apply the harness changes listed at the end of this file:
 
@@ -24,4 +26,4 @@ The server (`server/app/ux_report.py`) scores the findings, renders `ux-report.h
 
 The kit's own QA skill (`skills/lexful-autonomous-agent-qa/`), `qa-explorer.md` and `server/app/pipeline.py` are not used. The harness has its own QA skill and one `qa` agent.
 
-The kit files are no longer copied as is. `skills/ux-audit/SKILL.md` was shortened for the harness: the Antigravity Docker section, the HTML layout and interaction sections (the generator and `report-contract.md` own those), and the instruction to consult `audit-preview-reference.html` are gone, and the verdict words are the contract's. `skills/design-system/SKILL.md` lost its Antigravity section and its Simple/Advanced output modes. The ux-audit changelog is in `CHANGELOG-ux-audit-skill.md`. When a new kit version arrives, re-apply these changes rather than overwriting. `audit-preview-reference.html` stays as a human-readable sample of the generator's output; the permission rules in `opencode.jsonc` keep the agent from reading it.
+The kit files are no longer copied as is. `skills/ux-audit/SKILL.md` was shortened for the harness: the Antigravity Docker section, the HTML layout and interaction sections (the generator and `report-contract.md` own those), and the instruction to consult `audit-preview-reference.html` are gone, and the verdict words are the contract's. `skills/design-system/SKILL.md` lost its Antigravity section and its Simple/Advanced output modes. When a new kit version arrives, re-apply these changes rather than overwriting. `audit-preview-reference.html` stays as a human-readable sample of the generator's output; the permission rules in `opencode.jsonc` keep the agent from reading it.

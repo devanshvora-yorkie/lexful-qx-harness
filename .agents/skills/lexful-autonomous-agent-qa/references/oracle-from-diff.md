@@ -29,7 +29,7 @@ Work outward from the diff, in this order. Stop a branch of the search when it s
 5. **The rules next door.** Read the file the change sits beside: the validator it relies on, the constants it imports, the CSS that overrides it, the stylesheet loaded after it. The commonest unrecorded bug is a rule in a file the PR did not touch.
 6. **The authors' tests.** Read the tests in the PR and the neighbors of the changed file. They show what the authors thought of, and what they left out. An input class missing from them is where to look first.
 7. **The history.** `git log -p` on the changed file. A recent fix next to the change often tells you the failure mode to retest.
-8. **The words.** The ticket's acceptance criteria, the PR body, the review notes and the Linear comments in `pr-brief.md`. Each sentence is a claim; each reviewer's question is a risk.
+8. **The words.** The ticket's acceptance criteria, the PR body, the review notes and the Linear comments. `pr-brief.md` shows the short view; `context/` has them in full (`references/context.md`). Each sentence is a claim; each reviewer's question is a risk; each tester's step is a case.
 9. **The past.** `history.md`: what earlier runs of this ticket failed or filed. Each is a risk to retest.
 
 Write `feature-map.md` in the run directory, short (about a page):
@@ -43,7 +43,7 @@ Write `feature-map.md` in the run directory, short (about a page):
 
 ## Derive cases from the map
 
-Every planned case cites a **behavior or risk number** from the map and states its oracle: the expected result and where it comes from (PR claim, AC line, `file:line`, or neighboring source). No oracle, no case. A case whose only source is "the UI showed it" is a gap, not a test.
+Every planned case follows `references/test-design.md`. It cites a **behavior or risk number** from the map and states its oracle: the expected result and where it comes from (PR claim, AC line, comment, image, `file:line`, or neighboring source). No oracle, no case. A case whose only source is "the UI showed it" is a gap, not a test.
 
 For each behavior, cover what the rule implies:
 

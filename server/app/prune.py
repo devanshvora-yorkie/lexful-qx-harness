@@ -11,13 +11,16 @@ because it may be resumed or debugged.
 from __future__ import annotations
 
 import gzip
+import os
 import shutil
 from pathlib import Path
+
+from app.settings import get_settings
 
 # Only while the run was alive, or the same data is in summary.json, bugs.json or linear-report.md.
 ALWAYS = (
     "contents.txt", "toolchain.log", "preflight.log", "prompt.md", "ux-prompt.md", "promote-prompt.md",
-    "verify-prompt.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "api-probes.jsonl",
+    "verify-prompt.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "context", "api-probes.jsonl",
     "ux-audit.log",  # runs from before the UX audit wrote into run.log
     "e2e-coverage.md", "planned-specs.json", "report.html",
 )
@@ -112,6 +115,9 @@ def prune_run(folder: Path, *, finished: bool = True) -> int:
             freed += _heavy(playwright)
     if not finished:
         return freed
+    # A sealed run takes no more lookups, so its allow-list goes too.
+    guard = Path(os.getenv("QA_GUARD_DIR") or get_settings().root / ".lookup-guard") / f"{folder.name}.json"
+    guard.unlink(missing_ok=True)
     for pattern in ALWAYS:
         for path in folder.glob(pattern):
             freed += _remove(path)

@@ -7,6 +7,7 @@ Everything here was verified against the live UAT DOM (2026-10); do not treat it
 - **AG Grid loads rows async**: placeholder rows show disabled checkboxes ("Row selection is disabled
   for this row") + "Row data is loading". Wait for a real row (`rowByName('AAA-SRV-001')`) in
   beforeEach, never just the grid viewport.
+- **AG Grid virtualizes rows**: the DOM holds only the rows near the viewport, and the number changes with scroll and timing. Never use a DOM row count as an expected value; use the API response or the total the page reports. A row checkbox count is only a count of what is rendered.
 - **Overlay blocks clicks** on "Clear selection" / "Actions" — use `force: true`.
 - **Bulk buttons stay in the DOM at "0 selected"** — assert the count resets, not button visibility.
 - **Create drawer**: Create enables only with Name **and** Organization set (all-orgs view).

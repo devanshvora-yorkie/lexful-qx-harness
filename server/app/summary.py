@@ -145,7 +145,7 @@ def write(
         "stoppedAt": ({"phase": stop["name"], "status": stop["status"], "detail": stop["detail"]} if stop else None),
     })
     lines = ["── run summary"]
-    lines.append(f"  {ticket or run_id}  run {run_id}  verdict {verdict}  status {status}  took {_span(data['seconds'])}")
+    lines.append(f"  {ticket or run_id}  run {run_id}  verdict {verdict}  status {status}  took {_span(data['seconds'])}{f'  cost ${total_cost:.2f}' if costs else ''}")
     for phase in data["phases"]:
         mark = "∥ " if phase["parallel"] else "  "
         detail = f"  {phase['detail']}" if phase["detail"] else ""

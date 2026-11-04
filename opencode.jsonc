@@ -62,6 +62,7 @@
     { "action": "edit", "resource": "**/auth-state.json", "effect": "deny" },
     { "action": "edit", "resource": "runs/cache/**", "effect": "deny" },
     { "action": "edit", "resource": "runs/source/**", "effect": "deny" },
+    { "action": "edit", "resource": "runs/**/context/**", "effect": "deny" },
     { "action": "edit", "resource": "e2e test cases/changes.log", "effect": "deny" },
     // Read: no secrets, no sessions, not the 1.9 MB sample report.
     { "action": "read", "resource": ".env", "effect": "deny" },

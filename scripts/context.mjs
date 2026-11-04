@@ -11,6 +11,7 @@ import {
   writeJson,
 } from './harness-env.mjs';
 import { createCliRun, updateIndex } from './run-store.mjs';
+import { writeContextFiles } from './context-files.mjs';
 import { writeBrief } from './pr-brief.mjs';
 
 export async function buildContext({ ticket, pr, outDir }) {
@@ -59,6 +60,14 @@ export async function buildContext({ ticket, pr, outDir }) {
   if (!outDir) throw new Error('buildContext requires outDir');
   const file = path.join(outDir, 'context-pack.json');
   writeJson(file, pack);
+  try {
+    // Full text on disk. A failure here costs depth, not the run: the brief still works without it.
+    const index = await writeContextFiles(outDir, pack);
+    pack.contextFiles = { files: index.files.length, images: index.images.filter((image) => image.file).length, imagesFound: index.images.length };
+  } catch (err) {
+    pack.contextFiles = { error: String(err?.message || err).slice(0, 200) };
+    console.error(`context files not written: ${pack.contextFiles.error}`);
+  }
   try {
     writeBrief(outDir);
   } catch (err) {

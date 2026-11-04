@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from app import checks, store, summary
+from app.linear_report import decisions
 from app.logbook import Logbook
 from app.pipeline import _finish_ux, apply_verification
 from app.runners import _key, _rerooted, is_transient
@@ -47,6 +48,27 @@ class ExpectationEditTest(unittest.TestCase):
         self.assertIn("nothing", changes[0])
 
 
+class DecisionsAndOrderTest(unittest.TestCase):
+    def test_only_cases_handed_to_a_person_are_listed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            folder = Path(raw)
+            self.assertEqual(decisions(folder), [])
+            (folder / "triage.json").write_text(json.dumps({"failures": [
+                {"test": "TC-1", "class": "spec", "action": "reported", "reason": "Needs a decision: expects a refusal; the app names it, and a unit test asserts that."},
+                {"test": "TC-2", "class": "spec", "action": "patched", "reason": "Locator drift."},
+                {"test": "TC-3", "class": "spec", "action": "reported", "reason": "environment: CloudFront 403 on every attempt"},
+                "not an object",
+            ]}))
+            found = decisions(folder)
+            self.assertEqual(len(found), 1)
+            self.assertTrue(found[0].startswith("TC-1: expects a refusal"))
+
+    def test_verify_waits_for_the_ux_audit(self):
+        # The audit may raise suspects, and publish_findings files whatever verify did not reject.
+        source = (Path(__file__).resolve().parents[1] / "app" / "pipeline.py").read_text()
+        self.assertLess(source.index("ux_thread.join()"), source.index("_verify_findings(run_id, folder, ticket, book, signals)"))
+
+
 class CoverageAndHypothesesTest(unittest.TestCase):
     def _folder(self, raw: str) -> Path:
         folder = Path(raw)
@@ -70,6 +92,14 @@ class CoverageAndHypothesesTest(unittest.TestCase):
             issues = checks.coverage_blockers(folder, ["TC-LEX-1-001: finds rare icons"])
             self.assertEqual(len(issues), 1)
             self.assertIn("AC3 is not in coverage.json", issues[0])
+
+    def test_a_bare_list_or_coverage_key_is_read_like_criteria(self):
+        rows = [{"ac": "AC1", "na": "heading"}, {"ac": "AC2", "tests": ["TC-LEX-1-001"]}, {"ac": "AC3", "na": "link"}]
+        for shape in (rows, {"coverage": rows}):
+            with tempfile.TemporaryDirectory() as raw:
+                folder = self._folder(raw)
+                (folder / "coverage.json").write_text(json.dumps(shape))
+                self.assertEqual(checks.coverage_blockers(folder, ["TC-LEX-1-001: finds rare icons"]), [])
 
     def test_a_listed_test_that_did_not_pass_is_a_blocker(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -238,3 +268,14 @@ class SessionRecoveryTest(unittest.TestCase):
         with mock.patch.object(runners, "ensure_session", return_value=(0, "session reused  persona admin")), \
              mock.patch.object(runners, "personas_requested", return_value=[]):
             self.assertFalse(runners._revoked_sessions(["a.spec.ts"], book))
+
+
+class UnreadableFilesTest(unittest.TestCase):
+    def test_truncated_handoff_file_is_reported_and_valid_ones_are_not(self):
+        with tempfile.TemporaryDirectory() as raw:
+            folder = Path(raw)
+            (folder / "api-findings.json").write_text('{"findings":[{"id":"F1"}]', encoding="utf-8")
+            (folder / "coverage.json").write_text('{"criteria":[]}', encoding="utf-8")
+            found = checks.unreadable_files(folder)
+            self.assertEqual(len(found), 1)
+            self.assertIn("api-findings.json", found[0])

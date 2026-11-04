@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from app.logbook import Logbook
 from app import prune
 from app.pipeline import create_triggered_run, execute_run, request_cancel, startup_order
-from app.runners import ensure_session
+from app.runners import context_lookup, ensure_session
 from app.settings import get_settings
 from app.store import (
     cancel_all_runs,
@@ -351,4 +351,21 @@ def internal_persona(body: PersonaBody, request: Request) -> dict[str, Any]:
     if code != 0:
         raise HTTPException(status_code=502, detail=detail or "could not sign in")
     return {"success": True, "persona": name, "line": detail}
+
+
+class LookupBody(BaseModel):
+    run: str
+    ref: str
+
+
+@app.post("/internal/lookup")
+def internal_lookup(body: LookupBody, request: Request) -> dict[str, Any]:
+    """One more ticket or pull request this run's context names. Localhost only. The token stays in the server."""
+    host = request.client.host if request.client else ""
+    if not persona_client_allowed(host):
+        raise HTTPException(status_code=403, detail="lookup is only available inside the harness")
+    code, result = context_lookup(body.run, body.ref)
+    if code != 0:
+        raise HTTPException(status_code=code, detail=str(result))
+    return {"success": True, **result}
 

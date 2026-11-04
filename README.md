@@ -27,6 +27,29 @@ An older `.env` can be reordered to match `.env.example` with `node scripts/tidy
 
 To run the harness from a UAT deploy on a dedicated machine, see [docs/setup.md](docs/setup.md).
 
+## Start, stop and rebuild
+
+All from this folder. `./build.sh` is the normal way in; the rest are the `docker compose` commands it wraps.
+
+| To | Command |
+|---|---|
+| Build the image and start (or restart) the container | `./build.sh` |
+| Pull the latest code first, then build and start | `./build.sh --update` |
+| Check the tools and `.env` without changing anything | `./build.sh --check` |
+| Start a stopped container | `docker compose up -d harness` |
+| Stop it, keeping the container | `docker compose stop harness` |
+| Restart it (reloads the Python server code in `server/app/`) | `docker compose restart harness` |
+| Recreate it so `.env` changes apply | `docker compose up -d --force-recreate harness` |
+| Rebuild the image after `Dockerfile` or `package.json` changes | `docker compose build harness` then the recreate command above (`--no-cache` for a clean build) |
+| Stop and remove the container | `docker compose down` |
+| Also remove the image | `docker compose down --rmi local` |
+| See the status and health | `docker compose ps`, `curl http://127.0.0.1:8787/health` |
+| Follow the server log | `docker compose logs -f harness` |
+| Open a shell inside | `docker compose exec harness bash` |
+| Stop every run now | `docker compose exec harness npm run cancel-runs` |
+
+`scripts/`, `server/app/`, `.agents/`, `opencode.jsonc` and the Playwright config are mounted into the container. Prompt, skill and script edits apply to the next session without a rebuild; Python changes need a restart. `./build.sh` refuses to restart while a run is in progress. The `runs/` and `e2e test cases/` folders live on your disk, so removing the container or the image keeps every run.
+
 ## Run a ticket or a pull request
 
 Once the container is up, from this folder:
@@ -52,8 +75,8 @@ node scripts/specs.mjs --headed "e2e test cases/search"
 
 ## How a run works
 
-1. **Preflight.** Signs in to UAT with the saved Stytch session, reads the ticket, its pull requests
-   and their files, and checks that the merged pull request is deployed on UAT. A run stops here if it
+1. **Preflight.** Signs in to UAT with the saved Stytch session, saves the full ticket, its comments,
+   images and pull requests under the run's `context/` with `pr-brief.md` as the index, and checks that the merged pull request is deployed on UAT. A run stops here if it
    is not (`QA_ALLOW_UNDEPLOYED=true` overrides this). The product repo is fetched read-only at the
    commit UAT runs.
 2. **E2E stage** (`QA_PHASE1_ON_START=true`). The checked-in suite runs against that build. Failing
@@ -65,10 +88,12 @@ node scripts/specs.mjs --headed "e2e test cases/search"
 4. **Run and heal.** Playwright runs the new specs. A failure is healed in a fresh session, up to three
    times. Each heal reruns only the tests that have not passed yet, and one final pass runs every spec
    in a folder a heal edited.
-5. **UX audit.** A separate agent audits the journey beside Playwright and writes `ux-report.html`.
-   The server checks that report against the UX kit's contract (`.agents/ux/report-contract.md`).
-6. **Verify and file bugs.** A fresh session follows the steps of each suspected bug. Only a bug it
-   reproduces is written to `bugs.md`, with its screenshot.
+5. **UX audit.** The same agent, in its own session, audits the journey beside Playwright and heal and
+   writes `ux-report.html`. The server checks that report against the UX kit's contract
+   (`.agents/ux/report-contract.md`). The audit may raise a suspected functional defect for verify.
+6. **Verify and file bugs.** After the UX audit, a fresh session follows the steps of each suspected
+   bug. Only a bug it reproduces is written to `bugs.md`, with its screenshot. Then at most two passing
+   journeys may be promoted into `e2e test cases/`; the default is none.
 7. **Seal.** The reports are written, the run is recorded in `runs/index.json`, and scratch files are
    pruned. A run is never moved or renamed after it starts.
 
@@ -110,6 +135,8 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 | `QA_RUN_UX_AUDIT` | true | Run the UX audit. `false` stops after functional QA |
 | `QA_VERIFY_FINDINGS` | true | A fresh session reproduces each bug before it is filed |
 | `QA_ALLOW_UNDEPLOYED` | false | Run a PR that is not on UAT yet |
+| `QA_CONTEXT_MAX_IMAGES` | 12 | Images saved from the ticket and its pull requests. Each costs tokens only if the agent opens it |
+| `QA_LOOKUP_MAX_TICKETS`, `QA_LOOKUP_MAX_PRS` | 8, 5 | Extra tickets and pull requests the agent may fetch per run with `scripts/lookup.mjs` |
 | `QA_MAX_PARALLEL_RUNS` | 1 | Runs at the same time. Each run gets its own git worktree. Keep it at 1 unless you must: with one agent for every phase, the server can only log, not undo, a ticket session's edit to `e2e test cases/` when runs overlap |
 | `QA_SESSION_CHECK_MINUTES` | 20 | How often the saved Stytch sessions are checked during a run. 0 turns it off |
 | `OPENCODE_MAIN_MODEL` | Haiku 5.5 on Bedrock | The one model every session of the one `qa` agent runs on: explore, author, heal, verify, promote and the UX audit. The top-level `model` in `opencode.jsonc` must name the same id |
@@ -123,6 +150,9 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 - `docs/run-reference.md` the run flow, the phases and the files a run writes
 - `docs/setup.md` deployment: the QA machine, the trigger and what to configure in the product repo
 - `docs/security.md` what protects the secrets, what does not, and the risks that remain
+- `docs/process-diagram-full-run.html` the architecture and the run flow as a diagram (open it in a browser)
+- `docs/deployment_overview.html` the deploy trigger and what Lexful sets up (open it in a browser)
+- `docs/ux-kit.md` where each UX kit file lives and what was changed for the harness, for whoever updates the kit
 - `build.sh`, `Makefile`, `docker-compose.yml`, `Dockerfile` setup and build
 
 ## Troubleshooting

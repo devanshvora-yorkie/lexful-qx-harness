@@ -19,7 +19,7 @@ from app.logbook import (
 )
 from app import runners
 from app.runners import _preflight_row, _session_expired
-from app.main import health, persona_client_allowed, run_phase1, run_ticket
+from app.main import LookupBody, health, internal_lookup, persona_client_allowed, run_phase1, run_ticket
 from app.bugs import collect_bugs, publish_bugs, record, render_bugs
 from app.coverage import load_cases, write_coverage_index
 from app.pipeline import (
@@ -414,6 +414,30 @@ class ApiTest(unittest.TestCase):
 
 
 class PersonaTest(unittest.TestCase):
+    def test_lookup_stays_on_localhost_and_inside_the_runs_folder(self):
+        request = mock.Mock(client=mock.Mock(host="172.17.0.1"))
+        with self.assertRaises(HTTPException) as refused:
+            internal_lookup(LookupBody(run="/x", ref="LEX-1"), request)
+        self.assertEqual(refused.exception.status_code, 403)
+        with tempfile.TemporaryDirectory() as raw:
+            runs = Path(raw) / "runs"
+            (runs / "tickets" / "a").mkdir(parents=True)
+            outside = Path(raw) / "outside"
+            outside.mkdir()
+            settings = mock.Mock(runs=runs, root=Path(raw))
+            with mock.patch("app.runners.get_settings", return_value=settings), mock.patch("app.runners.subprocess.run") as started:
+                for bad_ref in ("--flag", "../x#1", "LEX-1; rm -rf /", "a/b", ""):
+                    self.assertEqual(runners.context_lookup(str(runs / "tickets" / "a"), bad_ref)[0], 400, bad_ref)
+                self.assertEqual(runners.context_lookup(str(outside), "LEX-1"), (400, "not a run folder"))
+                self.assertEqual(runners.context_lookup(str(runs / "tickets" / "a" / ".." / ".." / ".." / "outside"), "LEX-1"), (400, "not a run folder"))
+                started.assert_not_called()
+                started.return_value = mock.Mock(returncode=0, stdout='{"line": "ok", "files": []}', stderr="")
+                self.assertEqual(runners.context_lookup(str(runs / "tickets" / "a"), "LEX-1"), (0, {"line": "ok", "files": []}))
+                # Tokens reach the node half only by its environment, never on the command line.
+                self.assertEqual(started.call_args.kwargs["env"]["LOOKUP_DIRECT"], "1")
+                started.return_value = mock.Mock(returncode=1, stdout="", stderr="LEX-9 is not named in this run\n")
+                self.assertEqual(runners.context_lookup(str(runs / "tickets" / "a"), "LEX-9"), (400, "LEX-9 is not named in this run"))
+
     def test_persona_login_stays_on_localhost(self):
         self.assertTrue(persona_client_allowed("127.0.0.1"))
         self.assertTrue(persona_client_allowed("::1"))

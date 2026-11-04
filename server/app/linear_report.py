@@ -206,6 +206,8 @@ def _e2e_blocks(e2e: Path, prefix: str, *, promoted: dict[str, Any] | None, open
     ]
     if open_issues and result.get("open_issues"):
         blocks.extend([("sub", "Still failing"), ("list", [_clip(issue, 240) for issue in result["open_issues"][:10]])])
+    if decisions(e2e):
+        blocks.extend([("sub", "Needs a decision"), ("list", decisions(e2e))])
     blocks.extend([("sub", "Bugs"), *_bug_blocks(_bugs(e2e), prefix)])
     cases = _cases(e2e / "playwright" / "test-outcomes.json")
     if cases:
@@ -219,6 +221,20 @@ def _e2e_blocks(e2e: Path, prefix: str, *, promoted: dict[str, Any] | None, open
                        [("list", [f"{_clip(item.get('title'), 140)}: {_clip(item.get('reason'), 120)}"
                                   for item in promoted["skipped"] if isinstance(item, dict)])]))
     return blocks
+
+
+DECISION = "needs a decision:"
+
+
+def decisions(folder: Path) -> list[str]:
+    """Failing tests the heal handed to a person: the test and a deliberate product change disagree."""
+    found: list[str] = []
+    for item in _json(folder / "triage.json").get("failures") or []:
+        reason = str(item.get("reason") or "").strip() if isinstance(item, dict) else ""
+        if reason.lower().startswith(DECISION):
+            title = str(item.get("title") or item.get("test") or "")
+            found.append(f"{_clip(title, 100)}: {_clip(reason[len(DECISION):].strip(), 600)}")
+    return found
 
 
 def _feature_blocks(folder: Path) -> list[tuple]:
@@ -237,6 +253,8 @@ def _feature_blocks(folder: Path) -> list[tuple]:
     affected = _cases(folder / "affected" / "test-outcomes.json")
     if affected:
         blocks.append(("p", f"Checked-in cases this change touches: {len(affected)} ran, {_failed(affected)} failed."))
+    if decisions(folder):
+        blocks.extend([("sub", "Needs a decision"), ("list", decisions(folder))])
     blocks.extend([("sub", "Bugs"), *_bug_blocks(_bugs(folder))])
     if cases:
         blocks.append(("details", f"All {generated} feature TCs",

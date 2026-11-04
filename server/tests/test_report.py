@@ -103,6 +103,7 @@ class PruneTest(unittest.TestCase):
             folder = Path(raw)
             scratch = (
                 "contents.txt", "prompt.md", "heal-1.md", "affected-heal-1.md", "toolchain.log", "context-pack.json",
+                "context/ticket.md", "context/pr-5.md", "context/attachments/img-01.png", "context/lookups/LEX-7.md",
                 "api-probes.jsonl", "ux-audit.log", "e2e-coverage.md", "planned-specs.json", "report.html", "report.md",
                 "explore/snap-a.yml", "explore/pw-cli.json", "opencode/session.json", "opencode/children.json",
                 "playwright/html/data/x.zip", "playwright/output/a/trace.zip", "playwright/output/a/test-failed-1.png",

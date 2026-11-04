@@ -142,11 +142,13 @@ def brief_criteria(folder: Path) -> list[str]:
 def coverage_blockers(folder: Path, passing_titles: list[str]) -> list[str]:
     """Issues from coverage.json. The file is the agent's hand-off (`phases/explore-author.md`, hand-off files); without it nothing is signed off."""
     data = _read(folder / "coverage.json", None)
-    if not isinstance(data, dict) or not isinstance(data.get("criteria"), list):
+    # The contract is {"criteria": [...]}. Agents have also written a bare list or {"coverage": [...]}; accept those.
+    rows = data if isinstance(data, list) else (data.get("criteria") or data.get("coverage")) if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
         return ["coverage.json is missing or has no criteria: no acceptance criterion is mapped to a test"]
     criteria = brief_criteria(folder)
     mapped: dict[str, dict[str, Any]] = {}
-    for item in data["criteria"]:
+    for item in rows:
         if isinstance(item, dict) and item.get("ac"):
             mapped[str(item["ac"]).upper().replace(" ", "")] = item
     issues: list[str] = []
@@ -187,6 +189,23 @@ def hypothesis_report(folder: Path) -> tuple[str, list[str]]:
         if str(item.get("outcome") or "").lower() == "confirmed" and not item.get("finding") and not item.get("bug"):
             blockers.append(f"hypothesis {item.get('id', '?')} was confirmed but no finding or bug cites it")
     return line, blockers
+
+
+HANDOFF_JSON = ("coverage.json", "hypotheses.json", "api-findings.json", "triage.json", "affected-cases.json")
+
+
+def unreadable_files(folder: Path) -> list[str]:
+    """Hand-off files that exist but do not parse. The server would otherwise read them as empty and lose what they hold."""
+    bad: list[str] = []
+    for name in HANDOFF_JSON:
+        path = folder / name
+        if not path.is_file():
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            bad.append(f"{name} is not valid JSON ({str(error)[:80]}), so everything in it was ignored: write it again")
+    return bad
 
 
 def _read(path: Path, default: Any) -> Any:

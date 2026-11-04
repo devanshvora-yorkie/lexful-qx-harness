@@ -57,3 +57,19 @@ class PromotionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrimChangesLogTest(unittest.TestCase):
+    def test_keeps_header_and_newest_entries(self):
+        from app.pipeline import _trim_changes_log
+
+        with tempfile.TemporaryDirectory() as raw:
+            log = Path(raw) / "changes.log"
+            entries = [f"2026-11-0{i}T10:00:00Z  run-{i}  heal 1\n  files: x\n" + "  - note\n" * 20 for i in range(1, 9)]
+            log.write_text("Header line one.\nHeader line two.\n\n" + "\n".join(entries) + "\n", encoding="utf-8")
+            _trim_changes_log(log, keep=900)
+            text = log.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("Header line one."))
+            self.assertIn("run-8", text)
+            self.assertNotIn("run-1", text)
+            self.assertLess(len(text), 1200)

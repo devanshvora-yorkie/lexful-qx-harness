@@ -26,6 +26,8 @@ The server is the orchestrator: preflight, then one OpenCode session per phase, 
 | `ux-audit` | UX audit of the journey (only when `QA_RUN_UX_AUDIT=true`) | `.agents/prompts/ux-auditor.md` |
 
 References, read by the phase file that names them:
+- `references/test-design.md`: what a test must prove, how to exercise real behavior safely, what counts as a gap
+- `references/context.md`: reading the ticket's full context under `context/` and looking up what it names
 - `references/oracle-from-diff.md`: build `feature-map.md` from the diff and the code around it
 - `references/api-lane.md`: probing a backend change with `scripts/api-probe.mjs`
 - `references/listing-exploration-hints.md`: scan list for grids and listings

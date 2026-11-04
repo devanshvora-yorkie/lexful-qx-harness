@@ -19,3 +19,4 @@ auth-state-*.json
 *.log
 Dockerfile
 docker-compose.yml
+.lookup-guard

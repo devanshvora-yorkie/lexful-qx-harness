@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lexful QX Harness — Full run</title>
+  <title>Lexful QX Harness — How it works</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -630,359 +630,275 @@
 </head>
 <body>
   <div class="page">
-    <header>
-      <div class="kicker">lexful-qx-harness</div>
-      <h1>One full run</h1>
-      <p>
-        A trigger clears the gates. E2E User Journey TCs run first and may heal the checked-in suite.
-        Feature Specific TCs follow for the ticket. After that run, a curator can move the most relevant new cases into the E2E store.
-      </p>
-      <div class="legend">
-        <span><i class="dot" style="background: var(--amber)"></i> Gates and healer</span>
-        <span><i class="dot" style="background: var(--green)"></i> E2E User Journey TCs</span>
-        <span><i class="dot" style="background: var(--purple)"></i> Feature Specific TCs</span>
-        <span><i class="dot" style="background: var(--cyan)"></i> Stores and curator</span>
-        <span><i class="dot" style="background: var(--rose)"></i> Halt</span>
-      </div>
-    </header>
+<header>
+<div class="kicker">lexful-qx-harness</div>
+<h1>How the harness works</h1>
+<p>
+One server runs the whole pipeline. One agent (<code>qa</code>) on one model does every piece of AI work, one session per phase,
+and the files in the run folder are its only memory between sessions. The server runs Playwright, checks the agent's files and decides the verdict.
+</p>
+<div class="legend">
+<span><i class="dot" style="background: var(--amber)"></i> Server and gates</span>
+<span><i class="dot" style="background: var(--green)"></i> E2E User Journey TCs</span>
+<span><i class="dot" style="background: var(--purple)"></i> Feature Specific TCs</span>
+<span><i class="dot" style="background: var(--cyan)"></i> Stores and promotion</span>
+<span><i class="dot" style="background: var(--rose)"></i> Halt</span>
+</div>
+</header>
+<div class="glance" aria-label="Process at a glance">
+<div class="step"><div class="n">01</div><strong>Trigger</strong><em>ticket, PR or deploy</em></div>
+<div class="step gates"><div class="n">02</div><strong>Preflight</strong><em>gates, sign-in, context</em></div>
+<div class="step p1"><div class="n">03</div><strong>E2E stage</strong><em>suite, then heal</em></div>
+<div class="step p2"><div class="n">04</div><strong>Feature stage</strong><em>explore, author, heal</em></div>
+<div class="step store"><div class="n">05</div><strong>Beside and after</strong><em>UX audit, verify, promote</em></div>
+<div class="step out"><div class="n">06</div><strong>Verdict</strong><em>one report per run</em></div>
+</div>
+<div class="with-rail">
+<div class="flow">
 
-    <div class="glance" aria-label="Process at a glance">
-      <div class="step">
-        <div class="n">01</div>
-        <strong>Trigger</strong>
-        <em>deploy or a ticket</em>
-      </div>
-      <div class="step gates">
-        <div class="n">02</div>
-        <strong>Gates</strong>
-        <em>then sign-in</em>
-      </div>
-      <div class="step p1">
-        <div class="n">03</div>
-        <strong>E2E User Journey</strong>
-        <em>suite, then healer</em>
-      </div>
-      <div class="step p2">
-        <div class="n">04</div>
-        <strong>Feature Specific</strong>
-        <em>explore, author, heal</em>
-      </div>
-      <div class="step store">
-        <div class="n">05</div>
-        <strong>Curate</strong>
-        <em>relevant cases → E2E store</em>
-      </div>
-      <div class="step out">
-        <div class="n">06</div>
-        <strong>Verdict</strong>
-        <em>report and artifacts</em>
-      </div>
-    </div>
+<section class="block">
+<div class="block-head"><h2>The parts</h2><span class="tag">docker container · :8787</span></div>
+<div class="grid-3">
+<article class="card">
+<h3>Server · FastAPI</h3>
+<p>The orchestrator. It queues runs (one at a time), runs preflight, starts every agent session, runs Playwright, checks the agent's files, files bugs and writes the verdict and reports.</p>
+</article>
+<article class="card">
+<h3>Agent · <code>qa</code> on OpenCode</h3>
+<p>One agent, one model (<code>OPENCODE_MAIN_MODEL</code>, Haiku 5.5 on Bedrock). No subagents. It reads <code>.agents/prompts/qa.md</code> and the one phase file the server names. It works as an unprivileged user and cannot read the keys.</p>
+</article>
+<article class="card">
+<h3>Tools the agent uses</h3>
+<ul>
+<li><code>playwright-cli</code> for the browser</li>
+<li><code>scripts/api-probe.mjs</code> and <code>persona.mjs</code> for the API and other roles</li>
+<li><code>scripts/lookup.mjs</code> to fetch a ticket or PR the context names, through the server, with a budget</li>
+</ul>
+</article>
+</div>
+<div class="grid-2" style="margin-top: 0.85rem;">
+<div class="card">
+<h3>What it reads</h3>
+<ul>
+<li>Linear: the ticket, its parent, children and related issues (read-only)</li>
+<li>GitHub: the pull requests that mention the ticket and the files in them (read-only)</li>
+<li>The product repo, cloned read-only at the commit UAT runs</li>
+<li>Live UAT in a real browser. No local app is started</li>
+</ul>
+</div>
+<div class="card">
+<h3>Where the rules live</h3>
+<ul>
+<li><code>.agents/prompts/qa.md</code>: rules every phase shares, and the phase to file map</li>
+<li><code>.agents/skills/lexful-autonomous-agent-qa/phases/</code>: one file per phase</li>
+<li><code>references/</code>: test design, context, bug objects, API lane</li>
+<li>Behavior is written in these skills, not in server code</li>
+</ul>
+</div>
+</div>
+</section>
 
-    <div class="with-rail">
-      <div class="flow">
-        <section class="block">
-          <div class="block-head">
-            <h2>1 · Trigger</h2>
-            <span class="tag">:8787</span>
-          </div>
-          <div class="grid-2">
-            <div class="card">
-              <h3>Something starts the harness</h3>
-              <p>The worker takes one run at a time. When both are queued, E2E User Journey TCs go first and the ticket waits.</p>
-              <ul>
-                <li>A UAT deploy webhook, or a ticket or pull request</li>
-                <li>A sha that is already running is skipped</li>
-                <li>Each attempt gets its own folder under <code>runs/</code></li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Two kinds of run</h3>
-              <ul>
-                <li><strong>E2E User Journey TCs</strong> — the checked-in store, no ticket</li>
-                <li><strong>Feature Specific TCs</strong> — one Linear ticket or its pull request</li>
-              </ul>
-            </div>
-          </div>
-        </section>
+<div class="join" aria-hidden="true"><div class="stem"></div></div>
 
-        <div class="join" aria-hidden="true"><div class="stem"></div></div>
+<section class="block">
+<div class="block-head"><h2>1 · Trigger</h2><span class="tag">npm run ticket · POST /runs</span></div>
+<div class="grid-2">
+<div class="card">
+<h3>Something starts the harness</h3>
+<ul>
+<li><code>docker compose exec harness npm run ticket -- LEX-1234</code>, or <code>-- --pr 2245</code></li>
+<li>A UAT deploy workflow on GitHub, through the QA machine's runner</li>
+<li>A sha that is already running is skipped. Each run gets its own folder under <code>runs/</code></li>
+</ul>
+</div>
+<div class="card">
+<h3>Ticket from a pull request</h3>
+<p>The ticket key (<code>LEX-n</code>) is read from the PR title, then branch, then body. A PR with no key cannot be matched to a ticket.</p>
+</div>
+</div>
+</section>
 
-        <section class="block preflight">
-          <div class="block-head">
-            <h2>2 · Gates, then sign-in</h2>
-            <span class="tag">preflight</span>
-          </div>
-          <p class="note" style="margin-bottom: 0.85rem;">
-            A deploy must pass the gates before a run exists. Sign-in is deterministic. A failed check stops the run as <code>HALTED</code> and no agent starts.
-          </p>
-          <div class="grid-4">
-            <article class="card gate">
-              <h3>Secret</h3>
-              <p>The deploy call carries the harness secret, unless local mode is open.</p>
-            </article>
-            <article class="card gate">
-              <h3>Payload</h3>
-              <p>A pull request, a ticket, or a commit sha. An empty body is rejected.</p>
-            </article>
-            <article class="card gate">
-              <h3>Ticket</h3>
-              <p>When a ticket is present it is a <code>LEX-</code> key.</p>
-            </article>
-            <article class="card gate">
-              <h3>Session</h3>
-              <p>Stytch session for UAT. A ticket run also loads Linear and the pull request.</p>
-            </article>
-          </div>
-          <div class="grid-2" style="margin-top: 0.85rem;">
-            <div class="halt">
-              <h3>Halt</h3>
-              <p>Failed gate or failed sign-in. The run records <code>HALTED</code> and stops. OpenCode does not start.</p>
-            </div>
-            <div class="card">
-              <h3>What a ticket run is allowed to see</h3>
-              <ul>
-                <li>That ticket, plus parent, children, and related issues</li>
-                <li>Pull requests that mention the key, and the files in those diffs</li>
-                <li>Live UAT. No local app is started</li>
-              </ul>
-            </div>
-          </div>
-        </section>
+<div class="join" aria-hidden="true"><div class="stem"></div></div>
 
-        <div class="join labeled" aria-hidden="true"><span>first</span><div class="stem"></div></div>
+<section class="block preflight">
+<div class="block-head"><h2>2 · Preflight</h2><span class="tag">no agent yet</span></div>
+<div class="grid-4">
+<article class="card gate"><h3>Gates</h3><p>Secret, payload and a <code>LEX-</code> key. A failed gate stops the run as <code>HALTED</code>.</p></article>
+<article class="card gate"><h3>Sign-in</h3><p>A saved Stytch session for UAT, renewed from <code>.env</code> while a run is active.</p></article>
+<article class="card gate"><h3>Deployment</h3><p>The merged PR must be on UAT, or the run halts (<code>QA_ALLOW_UNDEPLOYED</code> overrides).</p></article>
+<article class="card gate"><h3>Context pack</h3><p>The full ticket, comments, connected issues, PRs and images are saved under <code>context/</code>. <code>pr-brief.md</code> is the index.</p></article>
+</div>
+<div class="halt" style="margin-top: 0.85rem;">
+<h3>Halt</h3>
+<p>Failed gate, sign-in or deployment check. The run records <code>HALTED</code> and no agent starts.</p>
+</div>
+</section>
 
-        <section class="block phase-1">
-          <div class="phase-kicker">E2E User Journey TCs</div>
-          <div class="block-head">
-            <h2>Checked-in journeys, then the healer</h2>
-            <span class="tag">runs/phase-1/</span>
-          </div>
-          <p class="note">
-            The server runs the E2E store on live UAT. There is no ticket, no explorer, and no new tests.
-            Only the healer is called, and only after a failure. A locator fix is written back into the store. A product bug is recorded on the run and the test is left as it is.
-          </p>
+<div class="join labeled" aria-hidden="true"><span>first</span><div class="stem"></div></div>
 
-          <div class="orch">
-            <div class="orch-title">Healer loop</div>
-            <div class="server-bar">
-              <strong>Server runs the E2E store</strong>
-              <span>Playwright, one worker, the checked-in specs</span>
-            </div>
-            <div class="v" aria-hidden="true">
-              <div class="line"></div>
-              <div class="label">pass ends the phase · fail enters the loop</div>
-              <div class="line"></div>
-            </div>
-            <div class="loop">
-              <div class="card">
-                <h3>qa · E2E heal only</h3>
-                <p>Spec drift — a renamed locator, a locator that matches too much, or a wait that expired while the control was already there — is patched in the E2E store. A wrong product outcome is reported. The healer does not add a test and does not hide a bug.</p>
-              </div>
-              <div class="card">
-                <h3>A few tries</h3>
-                <p>The server runs the same suite again after a patch. The loop stops when the suite is green or the heal cap is reached. Then a waiting ticket may start.</p>
-              </div>
-            </div>
-          </div>
+<section class="block phase-1">
+<div class="phase-kicker">E2E User Journey TCs</div>
+<div class="block-head"><h2>The checked-in suite, then heal</h2><span class="tag">runs/…/e2e/</span></div>
+<p class="note">
+The server runs <code>e2e test cases/</code> on live UAT (search, asset crud, document editing). Nothing is authored here. The agent is called only for failures, in the <code>e2e-heal</code> phase.
+</p>
+<div class="orch">
+<div class="orch-title">Heal loop · up to 3 sessions</div>
+<div class="server-bar"><strong>Server runs the suite</strong><span>Playwright, 3 workers, each test to the next free worker</span></div>
+<div class="v" aria-hidden="true"><div class="line"></div><div class="label">all pass ends the stage · failures enter the loop</div><div class="line"></div></div>
+<div class="loop">
+<div class="card">
+<h3>qa · e2e-heal</h3>
+<p>A failing case is outdated until proven otherwise. The agent replays it and patches the spec or page object in place (a moved locator, changed data, a new required step, a short wait). It never changes what a case expects.</p>
+</div>
+<div class="card">
+<h3>Three outcomes</h3>
+<ul>
+<li><strong>Patched</strong>: the server re-runs only what did not pass, then every spec in an edited folder</li>
+<li><strong>Bug</strong>: reproduced twice, then confirmed by a fresh session before it is filed</li>
+<li><strong>Needs a decision</strong>: the app changed on purpose and the case disagrees; a person decides</li>
+</ul>
+</div>
+</div>
+</div>
+<div class="status-row">
+<span class="pill ok">Green suite · stage ends</span>
+<span class="pill warn">Drift patched · logged in changes.log</span>
+<span class="pill bad">Product bug or decision · in the report</span>
+</div>
+</section>
 
-          <div class="status-row">
-            <span class="pill ok">Clean suite · phase ends</span>
-            <span class="pill warn">Drift patched in the E2E store</span>
-            <span class="pill bad">Product bug kept in bugs.md</span>
-            <span class="pill">Result stays in runs/phase-1/</span>
-          </div>
-        </section>
+<div class="join labeled" aria-hidden="true"><span>then</span><div class="stem"></div></div>
 
-        <div class="join labeled" aria-hidden="true"><span>then</span><div class="stem"></div></div>
+<section class="block phase-2">
+<div class="phase-kicker">Feature Specific TCs</div>
+<div class="block-head"><h2>One ticket · explore and author, run, heal</h2><span class="tag">runs/tickets/…/</span></div>
+<p class="note">
+The agent never runs the official suite. The server does, and writes the results the agent reads next.
+</p>
+<div class="orch">
+<div class="orch-title">Agentic orchestration</div>
+<div class="server-bar"><strong>Server · pipeline worker</strong><span>session → Playwright → heal session → Playwright → checks</span></div>
+<div class="v" aria-hidden="true"><div class="line"></div><div class="label">one session per phase, same agent and model</div><div class="line"></div></div>
+<div class="fork">
+<article class="agent explorer">
+<div class="order">1 · explore + author</div>
+<div class="who">qa</div>
+<h3>Map, walk, probe, write</h3>
+<p>Reads the brief and the <code>context/</code> files it needs, maps the change from the diff, lists risks and walks the live app.</p>
+<ol>
+<li>Plans each case with a <code>Fails when</code> column</li>
+<li>Probes the API and exercises behavior on its own records</li>
+<li>Writes specs, <code>coverage.json</code>, <code>hypotheses.json</code></li>
+</ol>
+</article>
+<article class="agent author">
+<div class="order">2 · Playwright (server)</div>
+<div class="who">server</div>
+<h3>Run the specs</h3>
+<p>Runs only the ticket's specs, test by test, and records every outcome and runtime signal.</p>
+<ol>
+<li>Compares expectations before and after any heal</li>
+<li>Checks the hand-off files parse</li>
+<li>Failures go to heal</li>
+</ol>
+</article>
+<article class="agent healer">
+<div class="order">3 · heal, up to 3 fresh sessions</div>
+<div class="who">qa</div>
+<h3>Fix how, never what</h3>
+<p>Locators, waits and fixtures may change. A matcher and its expected value may not.</p>
+<ol>
+<li>Wrong product result: a bug with steps</li>
+<li>A test that measured badly: a better source, same matcher</li>
+<li>Disagreement with a deliberate change: needs a decision</li>
+</ol>
+</article>
+</div>
+</div>
+<div class="status-row">
+<span class="pill ok">PERFECT · suite green, nothing open</span>
+<span class="pill warn">NEEDS_REVISION · failures, gaps or decisions remain</span>
+<span class="pill bad">HALTED · no specs, or a gate failed</span>
+</div>
+</section>
 
-        <section class="block phase-2">
-          <div class="phase-kicker">Feature Specific TCs</div>
-          <div class="block-head">
-            <h2>One ticket · explore, author, heal</h2>
-            <span class="tag">runs/tickets/</span>
-          </div>
-          <p class="note">
-            The server coordinates. It does not let the agents run the suite.
-            New cases cover behavior the E2E store does not already assert. Those specs stay in the feature-specific store for this run.
-          </p>
+<div class="join labeled" aria-hidden="true"><span>beside and after</span><div class="stem"></div></div>
 
-          <div class="orch">
-            <div class="orch-title">Agentic orchestration</div>
+<section class="block">
+<div class="block-head"><h2>5 · UX audit, affected cases, verify, promote</h2><span class="tag">same agent, own sessions</span></div>
+<div class="grid-4">
+<article class="card">
+<h3>UX audit</h3>
+<p>Runs beside Playwright and heal. It audits the journey against the UX kit and writes <code>ux-report.html</code>, checked against the report contract. It may raise a suspected functional defect for verify.</p>
+</article>
+<article class="card">
+<h3>Affected cases</h3>
+<p>Checked-in cases that touch the changed area run beside the ticket. A failure is healed like any E2E case.</p>
+</article>
+<article class="card">
+<h3>Verify</h3>
+<p>After the UX audit. A fresh session follows the steps of every suspected bug. Only what it reproduces is written to <code>bugs.md</code> with a screenshot.</p>
+</article>
+<article class="card">
+<h3>Promote</h3>
+<p>At most two passing journeys, only if they fit search, asset crud or document editing, stay true later, and are new. The default is to promote nothing.</p>
+</article>
+</div>
+</section>
 
-            <div class="server-bar">
-              <strong>Server · pipeline worker</strong>
-              <span>preflight → agent → execute → heal → verdict</span>
-            </div>
+<div class="join" aria-hidden="true"><div class="stem"></div></div>
 
-            <div class="v" aria-hidden="true">
-              <div class="line"></div>
-              <div class="label">one coordinator session</div>
-              <div class="line"></div>
-            </div>
-
-            <div class="coord">
-              <strong>qa · coordinator</strong>
-              <span>reads the ticket pack and the coverage already in the E2E store</span>
-              <p style="color: #c4b5fd; font-size: 0.82rem;">
-                One session: Explore, Author, Heal, and Promote. Playwright stays with the server.
-              </p>
-            </div>
-
-            <div class="v" aria-hidden="true">
-              <div class="line"></div>
-              <div class="label">in this order</div>
-              <div class="line"></div>
-            </div>
-
-            <div class="fork">
-              <article class="agent explorer">
-                <div class="order">1 · every ticket</div>
-                <div class="who">qa</div>
-                <h3>Explore</h3>
-                <p>Walks live UAT and writes what the ticket actually does.</p>
-                <ol>
-                  <li>Notes the page, the calls, and the actions</li>
-                  <li>Marks behavior the E2E store already covers</li>
-                  <li>Plans a case only for what is still uncovered</li>
-                </ol>
-              </article>
-              <article class="agent author">
-                <div class="order">2 · after the map</div>
-                <div class="who">qa</div>
-                <h3>Author</h3>
-                <p>Writes specs for the new rows. Stays off the browser.</p>
-                <ol>
-                  <li>Specs land in this run’s feature store</li>
-                  <li>Does not copy a case the E2E store already has</li>
-                  <li>Hands the file list back to the server</li>
-                </ol>
-              </article>
-              <article class="agent healer">
-                <div class="order">3 · only after a failure</div>
-                <div class="who">qa</div>
-                <h3>Heal</h3>
-                <p>Same idea as the journey loop, on this run’s specs only.</p>
-                <ol>
-                  <li>Patches a drifted locator in the feature store</li>
-                  <li>Leaves a product bug unedited</li>
-                  <li>The server re-runs, a few times at most</li>
-                </ol>
-              </article>
-            </div>
-
-            <div class="loop">
-              <div class="card">
-                <h3>Between explore and author</h3>
-                <p>The coordinator checks that the map is usable. If it is still empty after one more look, the run halts and no suite starts.</p>
-              </div>
-              <div class="card">
-                <h3>After the functional result</h3>
-                <p>A UI review can follow when that switch is on. It does not write tests and it does not change either store.</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="status-row">
-            <span class="pill ok">PERFECT · suite is green</span>
-            <span class="pill warn">NEEDS_REVISION · failures remain</span>
-            <span class="pill bad">HALTED · no specs, or the agent stopped</span>
-          </div>
-        </section>
-
-        <div class="join labeled" aria-hidden="true"><span>after the ticket</span><div class="stem"></div></div>
-
-        <section class="block">
-          <div class="block-head">
-            <h2>5 · Curate into the E2E store</h2>
-            <span class="tag">after every feature run</span>
-          </div>
-          <p class="note" style="margin-bottom: 0.85rem;">
-            Feature Specific TCs stay in the run. They do not enter the E2E store by themselves.
-            A curator agent can do that pass once the ticket run has a verdict. The stores on the right are the two sides of that pass.
-          </p>
-          <div class="grid-3">
-            <article class="card">
-              <h3>Read the feature store</h3>
-              <p>Take the cases this ticket just added. Ignore anything the E2E store already runs.</p>
-            </article>
-            <article class="card">
-              <h3>Keep the relevant ones</h3>
-              <p>Keep a case that belongs in an ongoing user journey. Leave a one-off check for this ticket where it is.</p>
-            </article>
-            <article class="card">
-              <h3>Add them to the E2E store</h3>
-              <p>The next E2E User Journey run executes them. The healer keeps their locators current after that.</p>
-            </article>
-          </div>
-        </section>
-
-        <div class="join" aria-hidden="true"><div class="stem"></div></div>
-
-        <section class="block">
-          <div class="block-head">
-            <h2>6 · What the run leaves</h2>
-            <span class="tag">one folder per attempt</span>
-          </div>
-          <div class="files">
-            <div><b>runs/phase-1/</b><span>journey result, healer notes, bugs</span></div>
-            <div><b>E2E store</b><span>journeys, plus any locator heal</span></div>
-            <div><b>runs/tickets/…/specs/</b><span>cases written for that ticket</span></div>
-            <div><b>report</b><span>verdict, counts, and the session</span></div>
-          </div>
-          <p class="note" style="margin-top: 0.9rem;">
-            The journey run does not invent specs. The ticket run does not rewrite the E2E store.
-            Promotion is the later pass: relevant feature cases move across, and the following journey run is what executes them.
-          </p>
-        </section>
-      </div>
-
-      <aside class="rail" aria-label="Test stores">
-        <article class="store e2e">
-          <div class="phase-kicker" style="color: var(--green);">Right · E2E store</div>
-          <h2>User journeys</h2>
-          <p>The checked-in suite. E2E User Journey TCs read it. The healer writes a locator fix back into it.</p>
-          <ul>
-            <li><code>e2e test cases/</code></li>
-            <li>Search, asset CRUD, document editing, and anything later promoted</li>
-            <li>No ticket. No new scenario from the healer</li>
-            <li>A product bug is recorded on the run, not edited into a passing test</li>
-          </ul>
-        </article>
-
-        <div class="promote" aria-hidden="false">
-          <div class="stem"></div>
-          <div class="arrow-label">promote upward</div>
-          <div class="agent-card">
-            <div class="who">Curator agent · after each feature run</div>
-            <h3>Most relevant cases only</h3>
-            <p>
-              Reads the feature-specific store. Drops cases the E2E store already covers and cases that only matter for this ticket.
-              Adds the rest to the E2E store so the next journey run includes them.
-            </p>
-          </div>
-          <div class="arrow-label">reads</div>
-          <div class="stem"></div>
-        </div>
-
-        <article class="store specific">
-          <div class="phase-kicker" style="color: var(--purple);">Right · feature store</div>
-          <h2>Ticket cases</h2>
-          <p>Specs for one ticket, kept on that attempt. This is the pool the curator chooses from.</p>
-          <ul>
-            <li><code>runs/tickets/&lt;ticket&gt;/&lt;run&gt;/specs/</code></li>
-            <li>Only behavior the E2E store did not already assert</li>
-            <li>Heal on this run patches files here, not the E2E store</li>
-            <li>Stays as the record of that ticket even after a promotion</li>
-          </ul>
-        </article>
-      </aside>
-    </div>
-
-    <p class="note" style="margin-top: 1.1rem; text-align: center;">
-      Journey runs live in <code>runs/phase-1/</code>. Ticket runs live in <code>runs/tickets/</code>.
-      The E2E store is <code>e2e test cases/</code>. The curator is the pass that connects the two stores.
-    </p>
-  </div>
+<section class="block">
+<div class="block-head"><h2>6 · Verdict and what the run leaves</h2><span class="tag">one folder per run, never moved</span></div>
+<div class="files">
+<div><b>linear-report.md / .html</b><span>the one report: E2E, tests, bugs, decisions, UX</span></div>
+<div><b>bugs.md</b><span>each reproduced bug written as a ticket</span></div>
+<div><b>run.log, summary.json</b><span>timeline, phases, tests, cost</span></div>
+<div><b>specs/, context/</b><span>what was tested and what it was based on</span></div>
+</div>
+<p class="note" style="margin-top: 0.9rem;">
+The verdict is <code>PERFECT</code>, <code>NEEDS_REVISION</code> or <code>HALTED</code>. A behavior the walk never reached is a gap, not a bug.
+A sealed run keeps its record and drops scratch files. Nothing is written to Linear or GitHub yet.
+</p>
+</section>
+</div>
+<aside class="rail" aria-label="Test stores">
+<article class="store e2e">
+<div class="phase-kicker" style="color: var(--green);">E2E store</div>
+<h2>User journeys</h2>
+<p>The checked-in suite. It runs on every ticket, and e2e-heal keeps it true to the app.</p>
+<ul>
+<li><code>e2e test cases/</code></li>
+<li>Search, asset crud, document editing</li>
+<li>Edits are recorded in <code>changes.log</code></li>
+</ul>
+</article>
+<div class="promote" aria-hidden="false">
+<div class="stem"></div>
+<div class="arrow-label">promote, at most two</div>
+<div class="agent-card">
+<div class="who">promote phase · same agent</div>
+<h3>Default: nothing</h3>
+<p>A passing feature test moves up only if it is a journey, durable, cheap, new and cleans up after itself.</p>
+</div>
+<div class="arrow-label">reads</div>
+<div class="stem"></div>
+</div>
+<article class="store specific">
+<div class="phase-kicker" style="color: var(--purple);">Feature store</div>
+<h2>Ticket cases</h2>
+<p>Specs for one ticket, kept in that run.</p>
+<ul>
+<li><code>runs/tickets/&lt;ticket&gt;/&lt;run&gt;/specs/</code></li>
+<li>Heal edits files here, not the E2E store</li>
+</ul>
+</article>
+</aside>
+</div>
+<p class="note" style="margin-top: 1.1rem; text-align: center;">
+Ticket runs live in <code>runs/tickets/</code>; an E2E-only run (<code>npm run e2e</code>) lives in <code>runs/phase-1/</code>. Setup and the deploy trigger are in <code>deployment_overview.html</code>.
+</p>
+</div>
 </body>
 </html>

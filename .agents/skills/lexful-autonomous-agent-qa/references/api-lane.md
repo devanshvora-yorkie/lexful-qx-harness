@@ -48,4 +48,4 @@ Severity: Critical = data exposure or a permission bypass. High = wrong result o
 
 Every finding in `api-findings.json` needs `expected` quoting its source, `actual` with the status and shape, and `evidence` pointing to `api-probes.jsonl`. Add `confidence`: `confirmed` when a second probe repeats it, otherwise `suspected`. Findings without all three are dropped by the server.
 
-A confirmed contract becomes an API spec (see Author, 2d). A mismatch does not become a test that passes.
+A confirmed contract becomes an API spec (`phases/explore-author.md`, API specs). A mismatch does not become a test that passes. A validation or status check is fine on an empty match, but a claim about what an action does to data needs records it really acts on (`references/test-design.md`).

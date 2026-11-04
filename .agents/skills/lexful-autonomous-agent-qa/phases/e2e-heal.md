@@ -15,7 +15,7 @@ When the app moved and the case did not:
 - A wait or timeout that is too short for work the app really does (a poll, a slow save): raise it on the test (`test.setTimeout`) or the poll. No `waitForTimeout`.
 - A CloudFront 403 "Request blocked": retry the navigation (see the CloudFront note in the custom instructions).
 
-You may edit the failing spec and the page object, fixture or constant file it imports in `e2e test cases/`. Keep the case's intent and the behavior it asserts: you change how it reaches the app and which data it uses, not what the product must do. A heal never changes what a test expects. Do not skip a case, delete it, or soften an assertion to make it pass. Do not edit `playwright.config.ts`, `auth-helper.ts`, `qa-fixtures.ts` or `changes.log` (the server records every edit in `changes.log`). Do not edit the suite's `FEATURE.md` in these phases: when you rename a record its inventory names, tell the server in `triage.json` and it keeps the row true. Only the `promote` phase adds inventory rows.
+You may edit the failing spec and the page object, fixture or constant file it imports in `e2e test cases/`. Keep the case's intent and the behavior it asserts: you change how it reaches the app and which data it uses, not what the product must do. A heal never changes what a test expects; it may fix a value the test measured from an unreliable source, keeping the matcher line as it is and naming both sources in `reason`. Do not skip a case, delete it, or soften an assertion to make it pass. Do not edit `playwright.config.ts`, `auth-helper.ts`, `qa-fixtures.ts` or `changes.log` (the server records every edit in `changes.log`). Do not edit the suite's `FEATURE.md` in these phases: when you rename a record its inventory names, tell the server in `triage.json` and it keeps the row true. Only the `promote` phase adds inventory rows.
 
 ## Report a product bug (class `bug`, action `reported`)
 
@@ -25,6 +25,12 @@ Only when all of these hold:
 3. You reproduced it twice. Put the exact steps, expected, actual and what you saw in the bug object (`references/bug-objects.md`); the server then has a fresh session reproduce it and take a screenshot before it files anything.
 
 If you cannot say why the case fails, it is not yet a bug: try once more, look at what changed, and fix the case. A case that fails only because data is missing is `spec`, never `bug`. A skipped or deprecated test is neither.
+
+## Report a decision (class `spec`, action `reported`)
+
+The app changed the behavior a case asserts, and something shows the change was deliberate: a ticket, a PR, or a unit test that asserts the new behavior. The case is out of date, but you may not change what it expects, and it is not a bug. Leave it failing and start `reason` with `Needs a decision:`, then give what the case expects, what the app does, and the evidence on each side. The report lists these for a person, who updates the case or files the bug. Say the same thing on every attempt, and do not spend more attempts on it.
+
+If nothing shows the change was deliberate, it is not a decision: use the bug rules above. The code doing something does not show it was meant to.
 
 ## Output
 

@@ -6,6 +6,7 @@ Your mission is to perform a thorough UI/UX quality audit of the journey and scr
 
 ### Inputs in the Run Directory
 - `pr-brief.md`: The ticket, its acceptance criteria numbered `AC1`…`ACn`, and the Linear and review comments. It is the context pack without its patches; do not read `context-pack.json`.
+- `context/`: The full ticket, comments and PR text, and `context/attachments/` with the images they show (`.agents/skills/lexful-autonomous-agent-qa/references/context.md`). A mockup or a screenshot in the ticket is the design intent: open it when the brief lists one for a screen you audit, and say in the finding when the product differs from it.
 - `FEATURE.md`: The UAT routes, interactive controls, and API calls the qa agent's walk mapped.
 - `explore/`: DOM snapshots and state captured during exploration.
 - `triage.json`: Any locator drift the heal fixed during functional QA (for H1–H6 drift review). Only when the message does not say Playwright and heal run beside you; otherwise skip step 5.
@@ -43,6 +44,10 @@ Read the ticket itself before auditing. Nothing about the ticket may be hardcode
    - **Evidence Screenshots for Observations (O) and Resolved Items**: Every observation and resolved finding MUST attach a concrete evidence screenshot (`.png`) saved under `explore/ux/` or `ux-evidence/`. If a screenshot was not captured during exploration, capture one live via `playwright-cli screenshot explore/ux/<name>.png`.
 7. **Fluent & shadcn Alignment**:
    - For recommendations, apply `.agents/skills/design-system/SKILL.md`. Recommend shadcn/ui components with Fluent design rules (action hierarchy, 4px spacing ramp, typography scale, single primary action). If a prior recommendation was adopted by stakeholders, mark it Adopted / Resolved.
+
+8. **Suspected functional defects**:
+   - A UX finding is about how the product communicates. A functional defect is the product doing the wrong thing: a wrong count or state, a selection or action that behaves differently from a criterion or from the same control elsewhere, an action offered that must be refused. When you see one, keep your finding, and also add a finding to `api-findings.json` (keep what is there, use the next free id) written as `.agents/skills/lexful-autonomous-agent-qa/references/bug-objects.md` says, with `confidence: "suspected"`. Put its id in your finding's `qaRefs`.
+   - The server has a fresh session reproduce it before anything is filed, so it is safe to raise a suspicion. Do not raise matters of wording, layout or preference there.
 
 ### What the report needs from your JSON
 The server's report follows `.agents/ux/report-contract.md`. It renders, from your fields: one row per acceptance criterion and scope statement (from `acceptanceCriteria` tags), the checks of this ticket's journey (from `checkId`), Expected and Observed callouts on every card (from `expectedVsActual`), and a resolution block as What to change / Developer / Design (from `solution`). It derives one verdict from severities. A missing `expectedVsActual`, a `solution` that is not that object, or a placeholder string fails the contract check.

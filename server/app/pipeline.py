@@ -87,7 +87,8 @@ def signoff_blockers(folder: Path) -> list[str]:
     criterion to passing tests, a gap or `na`; hypotheses.json records every risk tried. The server
     checks those files. It does not guess coverage from the wording of titles.
     """
-    issues = checks.coverage_blockers(folder, _passing_title_list(folder))
+    issues = checks.unreadable_files(folder)
+    issues.extend(checks.coverage_blockers(folder, _passing_title_list(folder)))
     _line, hypothesis_blockers = checks.hypothesis_report(folder)
     issues.extend(hypothesis_blockers)
     issues.extend(f"leftover fixtures: {note}" for note in _leftover_notes(folder))
@@ -446,6 +447,14 @@ def _explore_and_author(
     history = write_history(folder, ticket)
     if history:
         book.row("server", "history", f"{history} earlier run(s) of {ticket} in history.md")
+    index = _read_json(folder / "context" / "index.json")
+    if index:
+        images = index.get("images") or []
+        saved = sum(1 for image in images if image.get("file"))
+        named = len(index.get("tickets") or []) + len(index.get("pulls") or [])
+        book.row("server", "context", f"{len(index.get('files') or [])} files, {saved} of {len(images)} images, {named} more named, {len(index.get('readFirst') or [])} to read first")
+    else:
+        book.row("server", "context", "no context/ folder, the brief is all there is")
     source = runners.prepare_source(folder)
     book.row("server", "source", "read-only worktree ready" if source else "no clone, agent greps the context pack")
     cli_config = runners.write_cli_config(folder)
@@ -559,8 +568,6 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         if signals["count"]:
             book.row("server", "signals", signals["line"][:220])
             run_summary.get(run_id).note("signals", signals["line"])
-        if settings.verify_findings:
-            _verify_findings(run_id, folder, ticket, book, signals)
     finally:
         if ux_thread is not None:
             if ux_thread.is_alive():
@@ -570,6 +577,10 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
     if settings.run_ux_audit and ticket and not settings.ux_parallel:
         _begin(run_id, book, "ui-ux audit")
         _run_ux_audit(run_id, folder, ticket, preflight, ux_state, False)
+    # After the audit: it may raise suspected defects, and everything in api-findings.json is filed unless verified away.
+    if settings.verify_findings:
+        _verify_findings(run_id, folder, ticket, book, signals)
+        _check_cancel(run_id)
     ux_issue = _finish_ux(run_id, folder, ticket, book, ux_state) if settings.run_ux_audit and ticket else ""
 
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
@@ -1581,6 +1592,7 @@ def record_promotion(
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n\n")
+    _trim_changes_log(target)
 
 
 def record_suite_edits(
@@ -1629,6 +1641,38 @@ def record_suite_edits(
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("a", encoding="utf-8") as handle:
         handle.write(body.rstrip() + "\n\n")
+    _trim_changes_log(target)
+
+
+CHANGES_LOG_KEEP = 40_000
+_ENTRY_START = re.compile(r"\n\n(?=\d{4}-\d\d-\d\dT)")
+
+
+def _trim_changes_log(path: Path, keep: int = CHANGES_LOG_KEEP) -> None:
+    """Keep the two header lines and the newest entries within `keep` characters.
+
+    A heal reads this file at the start of every session, so a log that only grows costs every run. Older
+    entries are in git history.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    if len(text) <= keep:
+        return
+    head, _, rest = text.partition("\n\n")
+    entries = _ENTRY_START.split("\n\n" + rest) if rest else []
+    kept: list[str] = []
+    size = len(head)
+    for entry in reversed(entries):
+        entry = entry.strip("\n")
+        if not entry:
+            continue
+        if size + len(entry) > keep and kept:
+            break
+        kept.append(entry)
+        size += len(entry) + 2
+    path.write_text(head + "\n\n" + "\n\n".join(reversed(kept)) + "\n\n", encoding="utf-8")
 
 
 def _triage_notes(triage: dict[str, Any]) -> list[str]:

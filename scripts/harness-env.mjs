@@ -65,7 +65,7 @@ const REPO_PATH = /^\/repos\/([^/]+)\/[^/]+\//;
  * Pull requests, their comments, and deployment records only. Never lists the repo tree or
  * file contents (the server's read-only clone does that), and only inside GITHUB_ORG.
  */
-export async function github(apiPath, query) {
+export async function github(apiPath, query, accept = 'application/vnd.github+json') {
   const allowed = apiPath === '/user'
     || apiPath === '/search/issues'
     || /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+(\/(files|comments|reviews|commits))?$/.test(apiPath)
@@ -84,7 +84,7 @@ export async function github(apiPath, query) {
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
   }
   const headers = {
-    Accept: 'application/vnd.github+json',
+    Accept: accept,
     'User-Agent': 'lexful-qa-opencode',
   };
   if (CFG.githubToken) headers.Authorization = `Bearer ${CFG.githubToken}`;
@@ -431,7 +431,7 @@ const ISSUE_FIELDS = `
   children { nodes { identifier } }
   relations { nodes { relatedIssue { identifier } } }
   attachments { nodes { url title } }
-  comments(first: 30) { nodes { body createdAt user { name } } }
+  comments(first: 100) { nodes { body createdAt user { name } } pageInfo { hasNextPage } }
 `;
 
 const PR_URL = /github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/i;
@@ -446,8 +446,6 @@ export function linkedPullRequests(issue) {
   }
   return found;
 }
-
-const clipText = (text, n) => String(text || '').replace(/\s+/g, ' ').trim().slice(0, n);
 
 function mapIssue(issue, relation) {
   const description = issue.description || '';
@@ -464,9 +462,13 @@ function mapIssue(issue, relation) {
     children: (issue.children?.nodes || []).map((n) => n.identifier).filter(Boolean),
     linkedKeys: (issue.relations?.nodes || []).map((n) => n.relatedIssue?.identifier).filter(Boolean),
     linkedPullRequests: linkedPullRequests(issue),
+    attachments: (issue.attachments?.nodes || []).map((n) => ({ url: n?.url || '', title: n?.title || '' })).filter((n) => n.url),
+    // Full text, oldest first. The brief shows the newest and points at context/ticket.md for the rest.
     comments: (issue.comments?.nodes || [])
       .filter((n) => n?.body)
-      .map((n) => ({ author: n.user?.name || '', at: n.createdAt || '', body: clipText(n.body, 800) })),
+      .map((n) => ({ author: n.user?.name || '', at: n.createdAt || '', body: n.body }))
+      .sort((a, b) => a.at.localeCompare(b.at)),
+    commentsTruncated: Boolean(issue.comments?.pageInfo?.hasNextPage),
   };
 }
 
@@ -477,6 +479,11 @@ async function fetchIssue(key) {
   );
   if (!data.issue) throw new Error(`Linear issue not found: ${key}`);
   return data.issue;
+}
+
+/** One ticket and nothing it links to. scripts/lookup.mjs uses this: a lookup is one hop, not a walk. */
+export async function fetchTicketOnly(key) {
+  return mapIssue(await fetchIssue(key), 'lookup');
 }
 
 /** The named ticket plus one hop of Linear parent, children, and relations. No team search. */
@@ -518,18 +525,18 @@ export async function fetchPullRequest(number, fullRepo = `${CFG.githubOrg}/${CF
   const [owner, repo] = fullRepo.split('/');
   const raw = await github(`/repos/${owner}/${repo}/pulls/${number}`);
   const files = await githubPages(`/repos/${owner}/${repo}/pulls/${number}/files`, 300);
-  // Reviewers' questions are the cheapest bug leads there are. Kept short.
+  // Reviewers' questions are the cheapest bug leads there are. Kept in full; the brief shows a few.
   const [inline, conversation, reviews] = await Promise.all([
-    githubPages(`/repos/${owner}/${repo}/pulls/${number}/comments`, 60).catch(() => []),
-    githubPages(`/repos/${owner}/${repo}/issues/${number}/comments`, 30).catch(() => []),
-    githubPages(`/repos/${owner}/${repo}/pulls/${number}/reviews`, 30).catch(() => []),
+    githubPages(`/repos/${owner}/${repo}/pulls/${number}/comments`, 200).catch(() => []),
+    githubPages(`/repos/${owner}/${repo}/issues/${number}/comments`, 100).catch(() => []),
+    githubPages(`/repos/${owner}/${repo}/pulls/${number}/reviews`, 100).catch(() => []),
   ]);
   const isBot = (user) => /\[bot\]$|^github-actions/i.test(String(user?.login || ''));
   const reviewComments = [
-    ...inline.filter((c) => !isBot(c.user)).map((c) => ({ path: c.path, line: c.line || c.original_line || null, author: c.user?.login || '', body: clipText(c.body, 500) })),
-    ...reviews.filter((r) => r.body && !isBot(r.user)).map((r) => ({ path: null, line: null, author: r.user?.login || '', state: r.state, body: clipText(r.body, 500) })),
+    ...inline.filter((c) => !isBot(c.user)).map((c) => ({ path: c.path, line: c.line || c.original_line || null, author: c.user?.login || '', body: c.body || '' })),
+    ...reviews.filter((r) => r.body && !isBot(r.user)).map((r) => ({ path: null, line: null, author: r.user?.login || '', state: r.state, body: r.body || '' })),
   ];
-  const discussion = conversation.filter((c) => !isBot(c.user)).map((c) => ({ author: c.user?.login || '', body: clipText(c.body, 500) }));
+  const discussion = conversation.filter((c) => !isBot(c.user)).map((c) => ({ author: c.user?.login || '', body: c.body || '' }));
   const fileDetails = Array.isArray(files)
     ? files.map((item) => ({
       filename: item.filename,
