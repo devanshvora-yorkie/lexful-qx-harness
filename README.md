@@ -152,7 +152,7 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 - `docs/security.md` what protects the secrets, what does not, and the risks that remain
 - `docs/process-diagram-full-run.html` the architecture and the run flow as a diagram (open it in a browser)
 - `docs/deployment_overview.html` the deploy trigger and what Lexful sets up (open it in a browser)
-- `docs/ux-kit.md` where each UX kit file lives and what was changed for the harness, for whoever updates the kit
+- `docs/architecture-roadmap.md` what the harness is, how it is built, what it does, and where it goes next
 - `build.sh`, `Makefile`, `docker-compose.yml`, `Dockerfile` setup and build
 
 ## Troubleshooting
