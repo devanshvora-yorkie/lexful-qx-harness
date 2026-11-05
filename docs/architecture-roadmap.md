@@ -130,14 +130,60 @@ A sealed run keeps only this record. A halted or failed run keeps everything so 
 - **Traceability.** Every test, bug and UX finding links back to its ticket and PR.
 - **Security.** Secrets stay in the environment, and the agent can read only the named ticket, its related items and the PR files ([security.md](security.md)).
 
-## 9. Current limits
+## 9. Token and cost profile (Haiku 5.5)
+
+Measured over eight recent completed ticket runs, all on Haiku 5.5 through Bedrock. Cost per run is exact, taken from the run summaries. Token figures are approximate: the agent transcripts of sealed runs are pruned, so the token mix comes from the sessions that were kept and is scaled to each run's recorded total cost.
+
+**Cost per run**
+
+| Measure | Value |
+|---|---|
+| Typical run (median) | about $1.3 |
+| Average | about $1.4 |
+| Range | $0.49 for a small change, up to about $3.15 for the largest run so far |
+| Runs under $2 | 7 of 8 |
+| Wall-clock time | about 50 minutes on average, from about 20 minutes (small ticket) to about 2 hours (heavy) |
+
+A normal run lands in the $0.70 to $2 range.
+
+**Tokens per typical run (approximate)**
+
+| Token type | Amount |
+|---|---|
+| Fresh input | under 1K |
+| Output | about 150K |
+| Cache read | about 20M (14M to 45M depending on the feature) |
+| Cache write | about 350K |
+| Model steps | about 130 |
+
+Cache reads are over 99% of all tokens, but they are billed at a small fraction of the normal input price. That is why a run that reads 20M tokens still costs about a dollar. The harness is built to keep the prompt prefix stable so the cache keeps hitting: small per-phase skills, a stable shared prompt, and sessions that do not reload unneeded context.
+
+**Where the money goes**
+
+| Phase | Share of cost |
+|---|---|
+| Explore and author | about 59% |
+| UX audit | about 19% |
+| Heal (feature and E2E) | about 13% |
+| Plan, verify and promote | about 9% combined |
+
+**What moves the cost**
+
+- Feature size and complexity: more screens to explore and more specs to write.
+- Heal attempts, capped at three per run.
+- Whether the E2E stage found drift to repair.
+- Length of the exploration: a long session builds a long cached history that is re-read on every step.
+
+The sample is small (eight runs) and includes one unusually long run, so treat these as planning figures, not guarantees.
+
+## 10. Current limits
 
 - The harness **reads** Linear and GitHub but does **not** write to them yet.
 - One run at a time. The agents share one set of permanent test files, and overlapping runs would make it hard to track edits to them.
 - A single model serves every phase. That keeps cost low, but it is also a single point of quality.
 - UAT sits behind CloudFront rate limiting, which limits how many browsers can run in parallel.
 
-## 10. Roadmap
+## 11. Roadmap
 
 This is the direction of travel. Items are ordered by expected value and are proposals, not commitments.
 
