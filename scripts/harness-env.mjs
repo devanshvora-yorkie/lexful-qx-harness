@@ -569,7 +569,17 @@ export async function fetchPullRequest(number, fullRepo = `${CFG.githubOrg}/${CF
  * PRs for this ticket: the ones linked on the Linear issue (any repo of the org), plus the
  * ones whose title or body mentions the key in the default repo. Does not list a repository.
  */
-export async function searchPullRequests(ticketKey, known = [], linked = []) {
+/**
+ * A linked pull request in another repository of the org that the token cannot read (GitHub answers
+ * 404 for a private repo it has no access to, 403 when access is refused). It is skipped, not fatal:
+ * one ops-repo link must not stop the run. In the default repository the same answer is a real token
+ * problem and still fails.
+ */
+export function skippablePullError(err, fullRepo, defaultRepo) {
+  return fullRepo.toLowerCase() !== defaultRepo.toLowerCase() && /^GitHub (403|404) /.test(String(err?.message || ''));
+}
+
+export async function searchPullRequests(ticketKey, known = [], linked = [], unreadable = []) {
   const { githubOrg: owner, githubRepo: repo } = CFG;
   const defaultRepo = `${owner}/${repo}`;
   const key = (fullRepo, number) => `${fullRepo.toLowerCase()}#${number}`;
@@ -586,7 +596,16 @@ export async function searchPullRequests(ticketKey, known = [], linked = []) {
   const have = new Map(known.filter((pr) => pr?.number != null).map((pr) => [key(pr.repo || defaultRepo, pr.number), pr]));
   const pulls = [];
   for (const [id, item] of wanted) {
-    pulls.push(have.get(id) || await fetchPullRequest(item.number, item.repo));
+    if (have.get(id)) {
+      pulls.push(have.get(id));
+      continue;
+    }
+    try {
+      pulls.push(await fetchPullRequest(item.number, item.repo));
+    } catch (err) {
+      if (!skippablePullError(err, item.repo, defaultRepo)) throw err;
+      unreadable.push({ repo: item.repo, number: item.number, reason: String(err.message).slice(0, 60) });
+    }
   }
   for (const [id, pr] of have) if (!wanted.has(id)) pulls.push(pr);
   return pulls.sort((a, b) => String(a.mergedAt || '').localeCompare(String(b.mergedAt || '')));

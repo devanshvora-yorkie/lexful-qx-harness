@@ -43,3 +43,9 @@ test('no Not on UAT section when everything is deployed', () => {
     ticket: { key: 'LEX-1' }, pullRequests: [{ number: 1, merged: true, files: [] }] });
   assert.doesNotMatch(brief, /Not on UAT/);
 });
+
+test('a linked pull request the token cannot read is named in the brief', () => {
+  const brief = buildBrief({ appUrl: 'u', ticket: { key: 'LEX-1' }, pullRequests: [],
+    unreadablePullRequests: [{ repo: 'Lexful-ai/lexful-ops', number: 137, reason: 'GitHub 404' }] });
+  assert.match(brief, /Linked but not readable .*Lexful-ai\/lexful-ops#137/);
+});

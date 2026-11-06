@@ -121,6 +121,10 @@ export function buildBrief(pack, index = null) {
     out.push(...shown.map((c) => `- ${c.author || 'someone'}: ${clip(c.body, 240)}`), '');
   }
   out.push('## Pull requests');
+  const unread = pack.unreadablePullRequests || [];
+  if (unread.length) {
+    out.push(`Linked but not readable with the harness token (another repository): ${unread.map((u) => `${u.repo}#${u.number}`).join(', ')}. Do not guess what they change; say so where it matters.`, '');
+  }
   for (const pull of pack.pullRequests || []) {
     const files = pull.files || [];
     const state = pull.merged ? 'merged' : pull.state;

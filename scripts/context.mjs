@@ -31,8 +31,9 @@ export async function buildContext({ ticket, pr, outDir }) {
 
   const issue = await fetchTicket(issueKey);
   let pulls = known;
+  const unreadable = [];
   try {
-    pulls = await searchPullRequests(issue.key, known, issue.linkedPullRequests || []);
+    pulls = await searchPullRequests(issue.key, known, issue.linkedPullRequests || [], unreadable);
   } catch (err) {
     errors.push({ source: 'github', reason: 'pull_request_search_failed', detail: err.message });
   }
@@ -52,6 +53,7 @@ export async function buildContext({ ticket, pr, outDir }) {
     repo: `${CFG.githubOrg}/${CFG.githubRepo}`,
     scope: 'pull-request-files-and-connected-linear-issues',
     pullRequests: pulls,
+    unreadablePullRequests: unreadable,
     primaryPr: pr || pickPrimaryPr(pulls),
     deployment,
     contextErrors: errors,
