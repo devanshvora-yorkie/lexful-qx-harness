@@ -4,6 +4,8 @@
 
 The checked-in suite guards three journeys: search, asset crud, document editing. It runs on every ticket against a UAT that changes with every release. **A case that fails is outdated until you prove the product is wrong.** Your job is to keep the suite true to the app as it is today, in place, so the next run starts green. A product bug is rare and has to be reproduced.
 
+**A case listed in `e2e test cases/decisions.json` waits for a person's decision.** The server leaves it out of the failures in your message. Do not heal it, do not file it, and do not edit that file. When a failing case disagrees with a deliberate product change (the source or its unit tests show the new behavior is intended), do not patch the expectation: report it with `action: "reported"` and say what a person must decide; they update the test or add it to `decisions.json`.
+
 Read `playwright/results.json`, `playwright/output.log` and `e2e test cases/changes.log` before editing. `changes.log` is the history of edits, not evidence of a bug: a line there that says a defect "was recorded" proves nothing today. Replay each failure with `playwright-cli` (config and `-s=` session name from the message) and `state-load` on `runs/cache/stytch/session.json` (never read that file).
 
 ## Fix in place (class `spec`, action `patched`)

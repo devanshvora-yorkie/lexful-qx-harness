@@ -198,8 +198,13 @@ def write_cli_config(folder: Path) -> Path | None:
         return None
     target = folder / "explore" / "pw-cli.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"browser": {"browserName": "chromium", "launchOptions": {
-        "headless": True, "executablePath": executable}}}, indent=2) + "\n", encoding="utf-8")
+    target.write_text(json.dumps({
+        "browser": {"browserName": "chromium", "launchOptions": {"headless": True, "executablePath": executable}},
+        # CLI actions on a control that never appears fail after 10 s instead of 30 s. run-code scripts use
+        # the context default instead; custom-instructions.md has the agent set it to 10 s once per session.
+        # One script with a few stuck clicks used to run for over 5 minutes and expired the prompt cache.
+        "timeouts": {"action": 10_000, "navigation": 30_000},
+    }, indent=2) + "\n", encoding="utf-8")
     return target
 
 
@@ -212,6 +217,31 @@ def _repo_lock(name: str) -> threading.Lock:
         return _REPO_LOCKS.setdefault(name, threading.Lock())
 
 
+# Settings forced on every git command the server (root) runs. A clone the agent could reach must not
+# make root run code: no hooks, no fsmonitor, no external diff, no filter drivers from the repo config.
+GIT_HARDENING = (
+    ("core.hooksPath", "/dev/null"),
+    ("core.fsmonitor", "false"),
+    ("diff.external", ""),
+    ("core.sshCommand", "false"),
+    ("protocol.allow", "never"),
+    ("protocol.https.allow", "always"),
+)
+
+
+def git_safe_env(extra: tuple[tuple[str, str], ...] = ()) -> dict[str, str]:
+    """Environment for a server git process: no secrets, the hardening above, and `extra` config."""
+    env = {key: value for key, value in os.environ.items() if key not in SECRET_ENV}
+    pairs = (*GIT_HARDENING, *extra)
+    env["GIT_CONFIG_COUNT"] = str(len(pairs))
+    for index, (key, value) in enumerate(pairs):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ATTR_NOSYSTEM"] = "1"
+    return env
+
+
 def _git_env() -> dict[str, str] | None:
     """The GitHub token travels in the environment of the server's own git process.
 
@@ -221,14 +251,7 @@ def _git_env() -> dict[str, str] | None:
     if not token:
         return None
     auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    env = {key: value for key, value in os.environ.items() if key not in SECRET_ENV}
-    env.update({
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth}",
-        "GIT_TERMINAL_PROMPT": "0",
-    })
-    return env
+    return git_safe_env((("http.extraHeader", f"Authorization: Basic {auth}"),))
 
 
 def _repos_of(pack: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -347,7 +370,7 @@ def cleanup_source(folder: Path) -> None:
         clone = get_settings().root / "runs" / "source" / tree.name.split("@", 1)[0]
         try:
             subprocess.run(["git", "-C", str(clone), "worktree", "remove", "--force", str(tree)],
-                           capture_output=True, timeout=120)
+                           capture_output=True, timeout=120, env=git_safe_env())
         except (OSError, subprocess.TimeoutExpired):
             pass
     shutil.rmtree(root, ignore_errors=True)
@@ -360,11 +383,41 @@ def _relative_to_root(path: Path) -> str:
         return str(path)
 
 
+_SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|COOKIE)", re.I)
+
+
+def scrubbed_env() -> dict[str, str]:
+    """The server's environment without anything that looks like a secret.
+
+    Matching by name, not by a fixed list, so a key added to .env later (an AWS or OpenRouter key)
+    never reaches an agent or a model-written spec by accident.
+    """
+    return {k: v for k, v in os.environ.items() if k not in SECRET_ENV and not _SECRET_NAME.search(k)}
+
+
+def agent_tmp(run_dir: Path) -> Path:
+    """A temp folder the agent can write: the system /tmp is not reliably writable for the qa user."""
+    tmp = run_dir / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    identity = agent_identity()
+    if identity is not None:
+        try:
+            os.chown(tmp, identity[0], identity[1])
+        except OSError:
+            pass
+    return tmp
+
+
+def _tool_path(env: dict[str, str]) -> str:
+    """node_modules/.bin first, so `playwright-cli` resolves without a path in every phase."""
+    bin_dir = str(get_settings().root / "node_modules" / ".bin")
+    parts = [p for p in (env.get("PATH") or "").split(os.pathsep) if p and p != bin_dir]
+    return os.pathsep.join([bin_dir, *parts])
+
+
 def _opencode_env(run_dir: Path) -> dict[str, str]:
     settings = get_settings()
-    env = os.environ.copy()
-    for key in (*SECRET_ENV, "BEDROCK_API_KEY"):
-        env.pop(key, None)
+    env = scrubbed_env()
     token = _bedrock_token()
     if token:
         env["AWS_BEARER_TOKEN_BEDROCK"] = token
@@ -373,6 +426,9 @@ def _opencode_env(run_dir: Path) -> dict[str, str]:
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
+    env["PATH"] = _tool_path(env)
+    tmp = str(agent_tmp(run_dir))
+    env["TMPDIR"] = env["TMP"] = env["TEMP"] = tmp
     return _agent_env(env)
 
 
@@ -382,9 +438,7 @@ def _playwright_env(run_dir: Path) -> dict[str, str]:
     Cookies are read from runs/cache/stytch/session.json. A spec that prints process.env cannot see the secrets.
     """
     settings = get_settings()
-    env = os.environ.copy()
-    for key in (*SECRET_ENV, "BEDROCK_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
-        env.pop(key, None)
+    env = scrubbed_env()
     env["QA_RUN_DIR"] = str(run_dir)
     env["AUTH_STATE"] = str(session_state_path())
     env["QA_ENV_URL"] = settings.qa_url
@@ -418,6 +472,31 @@ def ensure_session(*, fresh: bool = False, persona: str | None = None) -> tuple[
 
 # Two runs refreshing the same cookie file at once would race; one sign-in at a time.
 _SESSION_LOCK = threading.Lock()
+_LAST_SESSION_CHECK = [0.0]
+SESSION_CHECK_GAP_SECONDS = 300
+
+
+def keep_sessions_fresh() -> list[str]:
+    """Before an agent session: every cached persona has at least an hour left, or is signed in again.
+
+    The API server's keeper does this on a timer, but a run started by the CLI (one container per
+    UAT deploy) has no keeper, and a heal two hours into a run met an expired session. At most once
+    every five minutes; QA_SESSION_CHECK_MINUTES=0 turns it off with the keeper.
+    """
+    if get_settings().session_check_minutes <= 0 or time.time() - _LAST_SESSION_CHECK[0] < SESSION_CHECK_GAP_SECONDS:
+        return []
+    _LAST_SESSION_CHECK[0] = time.time()
+    cache = session_state_path().parent
+    personas = [name for name in ("admin", "support", "viewer") if (cache / f"{name}.json").is_file()]
+    notes: list[str] = []
+    for persona in personas:
+        try:
+            code, line = ensure_session(persona=persona)
+        except (OSError, subprocess.SubprocessError) as error:
+            code, line = 1, str(error)
+        if code != 0 or "refreshed" in line:
+            notes.append(f"{persona}: {line}")
+    return notes
 
 
 _LOOKUP_REF = re.compile(r"^(LEX-\d+|#?\d+|[a-z0-9][\w.-]*/[a-z0-9][\w.-]*#\d+)\Z", re.IGNORECASE | re.ASCII)
@@ -553,7 +632,10 @@ def run_opencode(
 ) -> tuple[int, str]:
     """Run one OpenCode turn. A transient failure resumes the same session up to QA_AGENT_RETRIES times."""
     settings = get_settings()
+    refreshed = keep_sessions_fresh()
     book = Logbook(run_dir, book_name, role=role)
+    for note in refreshed:
+        book.row("server", "session", note[:200])
     code, session = _run_opencode_once(
         run_dir, session_id=session_id, prompt=prompt, title=title, log_name=log_name,
         resume=resume, role=role, book=book,

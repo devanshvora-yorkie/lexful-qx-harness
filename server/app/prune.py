@@ -20,9 +20,9 @@ from app.settings import get_settings
 # Only while the run was alive, or the same data is in summary.json, bugs.json or linear-report.md.
 ALWAYS = (
     "contents.txt", "toolchain.log", "preflight.log", "prompt.md", "ux-prompt.md", "promote-prompt.md",
-    "verify-prompt.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "context", "api-probes.jsonl",
+    "verify-prompt.md", "handoff-repair.md", "heal-*.md", "affected-heal-*.md", "context-pack.json", "context", "api-probes.jsonl",
     "ux-audit.log",  # runs from before the UX audit wrote into run.log
-    "e2e-coverage.md", "planned-specs.json", "report.html",
+    "e2e-coverage.md", "planned-specs.json", "report.html", "tmp",
 )
 # Raw page snapshots and the browser config. The walk scripts stay: bugs cite them.
 EXPLORE_SCRATCH = ("*.yml", "*.yaml", "*.txt", "pw-cli.json")
@@ -33,7 +33,7 @@ HEAVY_FILES = ("*.zip", "*.webm", "*.mp4", "*.trace")
 # show a bug were copied into bug-evidence/ when the bug was filed.
 PLAYWRIGHT_KEEP = ("test-outcomes.json",)
 # Transcripts kept (gzipped): the session that wrote the specs (agent), the heals, and the verifier.
-TRANSCRIPTS_KEPT = ("heal-", "verify-")
+TRANSCRIPTS_KEPT = ("heal-", "verify-", "agent-repair")
 # The E2E User Journey stage of a ticket run keeps what ran, what failed and the bugs it filed.
 E2E_KEEP = ("qa-result.json", "playwright", "bugs.json", "bugs.md", "bug-evidence", "verify.json", "summary.json")
 # The checked-in cases a ticket's diff touches: what ran and what the heal said about them.
@@ -55,6 +55,8 @@ def _remove(path: Path) -> int:
 
 def _gzip(path: Path) -> int:
     target = path.with_name(path.name + ".gz")
+    if path.is_symlink() or target.is_symlink():
+        return 0  # never compress or write through a link the agent planted
     try:
         before = path.stat().st_size
         with path.open("rb") as src, gzip.open(target, "wb", compresslevel=6) as dst:

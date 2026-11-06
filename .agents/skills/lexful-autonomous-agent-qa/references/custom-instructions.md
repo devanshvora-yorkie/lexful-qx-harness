@@ -3,6 +3,28 @@
 Project caveats only, loaded by `opencode.jsonc` for every session. The procedure for each phase is in `.agents/skills/lexful-autonomous-agent-qa/phases/`, and the rules every phase shares are in `.agents/prompts/qa.md`.
 Everything here was verified against the live UAT DOM (2026-10); do not treat it as theory.
 
+## playwright-cli (every phase)
+`playwright-cli` is on PATH. `-s=<name>` and the global `--raw` go **before** the command; a command's own options go after it. `--config` is an option of `open` only:
+
+```bash
+playwright-cli -s=<name> open --config=<run dir>/explore/pw-cli.json      # start the browser once
+playwright-cli -s=<name> run-code "async page => { page.context().setDefaultTimeout(10000); page.context().setDefaultNavigationTimeout(30000) }"   # once, right after open
+playwright-cli -s=<name> state-load runs/cache/stytch/session.json         # admin; does not navigate
+playwright-cli -s=<name> goto https://e2e-test.uat.lexful.net/docs/assets  # then open the page
+playwright-cli -s=<name> run-code --filename=<run dir>/explore/step.js     # a flow segment in one call
+playwright-cli -s=<name> --raw snapshot > <run dir>/explore/snap.yml       # snapshot to a file, then grep it
+playwright-cli -s=<name> close                                             # before you return
+```
+
+- `playwright-cli --config=... state-load ...` and `playwright-cli state-load` without `-s` both fail (usage text). Do not run `--help`.
+- Support or viewer: `node scripts/persona.mjs support` (or `viewer`), then `state-load runs/cache/stytch/<persona>.json`.
+- Timeouts: `pw-cli.json` sets 10 s for CLI actions, but `run-code` scripts use the browser context's default (30 s) until you run the one-line `setDefaultTimeout(10000)` above; it then holds for every later script in that session. A control that does not appear in 10 s is not there: re-snapshot instead of retrying the same click. A script with several stuck clicks otherwise runs for minutes.
+- Element refs (`e15`) go stale after any re-render; use locators (`getByRole(...)`) in scripts. Inside `run-code`, `setTimeout` and `require` are not in scope.
+
+## Locators in specs
+- `getByRole('checkbox')` matches a native `<input type="checkbox">`; the CSS `[role=checkbox]` does not. Never write `[role=...]` in a CSS locator. The server checks specs for this before they run.
+- No `waitForTimeout` of 2 s or more and no `networkidle`: wait for the response or the state (`expect.poll`, `waitForResponse`, `toBeVisible`).
+
 ## Caveats
 - **AG Grid loads rows async**: placeholder rows show disabled checkboxes ("Row selection is disabled
   for this row") + "Row data is loading". Wait for a real row (`rowByName('AAA-SRV-001')`) in

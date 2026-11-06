@@ -322,41 +322,31 @@ test.describe('Document editing — negative', () => {
     await expect(drawer.dialog).toBeVisible()
   })
 
-  test('TC-DOC-010: Creating with an empty document name is rejected', async ({ page }) => {
+  test('TC-DOC-010: Creating with an empty document name saves the default name "New document"', async ({ page }) => {
+    // The product names an unnamed document "New document" instead of rejecting it
+    // (apps/docu-app/src/components/assets/AssetCreateForm.tsx: defaultName, and the name input is not
+    // required when a default exists). Fails when an empty name is sent as empty, is rejected, or is
+    // saved under any other name.
     const list = new AssetRecordListPage(page, DOCUMENT_TYPE)
     await list.goto()
 
-    const posts: string[] = []
-    page.on('request', request => {
-      if (request.method() === 'POST' && request.url().includes(`/v1/assets/${DOCUMENT_TYPE}`)) {
-        posts.push(request.url())
-      }
-    })
-
     const drawer = await DocumentCreateDrawer.open(page)
     await drawer.selectOrganization(TEST_ORGANIZATION)
+    await expect(drawer.nameInput).toHaveValue('')
     await expect(drawer.createButton).toBeEnabled()
 
-    // Wait briefly for a submit the app sends, so a record it creates is archived in afterEach.
-    const sent = page
-      .waitForResponse(
-        response =>
-          response.request().method() === 'POST' && response.url().includes(`/v1/assets/${DOCUMENT_TYPE}`),
-        { timeout: 5_000 },
-      )
-      .catch(() => null)
+    const sent = page.waitForResponse(
+      response =>
+        response.request().method() === 'POST' && response.url().includes(`/v1/assets/${DOCUMENT_TYPE}`),
+      { timeout: 15_000 },
+    )
     await drawer.createButton.click()
     const created = await sent
-    if (created?.ok()) {
-      const body = (await created.json().catch(() => null)) as { id?: string } | null
-      if (body?.id) createdRecords.push({ id: body.id, api: new ApiContext(page) })
-    }
+    const body = (await created.json().catch(() => null)) as { id?: string; name?: string } | null
+    if (body?.id) createdRecords.push({ id: body.id, api: new ApiContext(page) })
 
-    expect(posts).toHaveLength(0)
-    await expect(drawer.dialog).toBeVisible()
-    await expect(drawer.dialog.getByRole('heading', { name: /New Documents/i })).toBeVisible()
-    expect(
-      await drawer.nameInput.evaluate(el => (el as HTMLInputElement).checkValidity()),
-    ).toBe(false)
+    expect(created.status()).toBe(201)
+    expect(created.request().postDataJSON()?.name).toBe('New document')
+    expect(body?.name).toBe('New document')
   })
 })

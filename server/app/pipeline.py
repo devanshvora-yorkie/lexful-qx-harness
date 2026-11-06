@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from app import checks, linear_log, linear_report, prune, runners, store, summary as run_summary
-from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings, triage_files
+from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings, same_test, triage_files
 from app.coverage import load_cases, write_coverage_index
 from app.logbook import Logbook, echo_run, plain, route, unroute
 from app.settings import get_settings
@@ -64,6 +64,22 @@ def _begin(run_id: str, book: Logbook, title: str, *, parallel: bool = False) ->
 
 def _end(run_id: str, title: str | None = None, status: str = "ok", detail: str = "") -> None:
     run_summary.get(run_id).end(title, status, detail[:200])
+
+
+def prompt_files_digest() -> str:
+    """One hash of every prompt, skill and reference file, and the OpenCode config."""
+    import hashlib
+
+    root = get_settings().root
+    digest = hashlib.sha256()
+    files = sorted((root / ".agents").rglob("*")) + [root / "opencode.jsonc"]
+    for path in files:
+        if path.is_file() and not path.is_symlink():
+            try:
+                digest.update(str(path.relative_to(root)).encode() + b"\0" + path.read_bytes())
+            except OSError:
+                continue
+    return digest.hexdigest()
 
 
 def verdict_for(summary: dict[str, int], *, preflight_ok: bool, produced_specs: bool) -> str:
@@ -352,6 +368,7 @@ def execute_run(run_id: str) -> None:
     folder = store.run_dir(run_id)
     book = Logbook(folder)
     run_summary.get(run_id)
+    prompts_at_start = prompt_files_digest()
     try:
         if row.get("kind") == "phase1":
             with SUITE_LOCK:
@@ -369,6 +386,9 @@ def execute_run(run_id: str) -> None:
         store.update_run(run_id, status="failed", error=str(exc)[:500])
         _seal(run_id, None, "HALTED", issues=[str(exc)[:500]], error=str(exc)[:200])
     finally:
+        if prompt_files_digest() != prompts_at_start:
+            # A session that starts or resumes later reads the new text: the phases of this run may disagree.
+            book.row("server", "warning", "prompt files under .agents/ or opencode.jsonc changed during this run")
         with _CANCELLED_LOCK:
             _CANCELLED.discard(run_id)
         run_summary.drop(run_id)
@@ -486,8 +506,44 @@ def _explore_and_author(
         _write_qa_result(folder, ticket, "HALTED", summary, [reason])
         _seal(run_id, summary, "HALTED", issues=[reason])
         return None
+    _repair_handoff(run_id, folder, book, ticket, session_id)
     _end(run_id, "explore + author")
     return session_id, started
+
+
+def _repair_handoff(run_id: str, folder: Path, book: Logbook, ticket: str, session_id: str) -> None:
+    """One short turn in the explore session when its hand-off is incomplete or a spec has a known bad pattern.
+
+    The session still holds the walk, so it can write a missing coverage.json or swap a selector for a
+    few cents. Problems left after the turn stay in the run: the sign-off checks report them.
+    """
+    problems = checks.handoff_problems(folder)
+    lint = checks.spec_lint(folder)
+    if not problems and not lint:
+        return
+    book.row("server", "handoff", f"{len(problems)} hand-off problem(s), {len(lint)} spec pattern(s); one repair turn")
+    prompt = _message(
+        "explore+author", folder,
+        "The server checked your hand-off. Fix only what is listed, then stop. Do not walk again unless an item needs it.",
+        *(["Hand-off:", *[f"- {p}" for p in problems]] if problems else []),
+        *(["Spec patterns to replace:", *[f"- {line}" for line in lint[:30]]] if lint else []),
+    )
+    (folder / "handoff-repair.md").write_text(prompt + "\n", encoding="utf-8")
+    suite_before = _suite_files()
+    code, _session = runners.run_opencode(
+        folder, session_id=session_id or None, prompt=prompt, title=f"{ticket} hand-off repair",
+        log_name="agent-repair.jsonl",
+    )
+    _guard_suite(suite_before, book, "explore")
+    _check_cancel(run_id)
+    left = checks.handoff_problems(folder)
+    left_lint = checks.spec_lint(folder)
+    book.row("server", "handoff", (
+        "repaired" if not left and not left_lint
+        else f"after repair: {len(left)} hand-off problem(s), {len(left_lint)} spec pattern(s) left"
+    ) + ("" if code == 0 else f" (opencode exited {code})"))
+    for line in left_lint[:5]:
+        book.row("server", "lint", line[:220])
 
 
 def _guard_suite(before: dict[str, str], book: Logbook, phase: str) -> None:
@@ -583,10 +639,16 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         _check_cancel(run_id)
     ux_issue = _finish_ux(run_id, folder, ticket, book, ux_state) if settings.run_ux_audit and ticket else ""
 
+    # Bugs are filed before the verdict, so a bug found while every test passed still blocks sign-off.
+    bugs_filed = _record_bugs(folder, store.get_run(run_id) or row, summary)
     verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
     issues = [] if verdict == "PERFECT" else [_open_issue(summary)]
     blockers = signoff_blockers(folder) if ticket else []
     blockers.extend(affected)
+    blockers.extend(filed_bug_blockers(folder))
+    blockers.extend(e2e_stage_blockers(folder))
+    blockers.extend(reported_but_passed(folder))
+    blockers.extend(unstable_notes(folder))
     edits = checks.assertion_edits(folder)
     if edits:
         run_summary.get(run_id).note("assertions", f"{len(edits)} expectation(s) changed by heal")
@@ -615,7 +677,7 @@ def _execute(run_id: str, row: dict[str, Any], folder: Path, book: Logbook) -> N
         _end(run_id, "promote", "reverted" if outcome.startswith("reverted") else "ok", outcome)
 
     store.update_run(run_id, status=status, error=None)
-    if _record_bugs(folder, store.get_run(run_id) or row, summary):
+    if bugs_filed:
         book.row("server", "bugs", "bugs.json and bugs.md")
     _note_findings(run_id, folder)
     _write_qa_result(folder, ticket, verdict, summary, issues, specs)
@@ -743,14 +805,22 @@ def _e2e_suite(
     runners.write_cli_config(folder)
     summary = _execute_and_heal(run_id, folder, "checked-in", specs, settings.heal_attempts, "", book,
                                 classify=True, stage=stage)
-    verdict = verdict_for(summary, preflight_ok=True, produced_specs=True)
-    issues = _phase1_issues(folder, summary)
+    decisions = suite_decisions()
+    outcomes = _outcomes_from_file(folder)
+    waiting = decided_failures(outcomes, decisions)
+    judged = {**summary, "failed": max(0, int(summary.get("failed") or 0) - len(waiting))}
+    verdict = verdict_for(judged, preflight_ok=True, produced_specs=True)
+    issues = _phase1_issues(folder, judged) + unstable_notes(folder)
+    issues += [f"waiting for a decision (decisions.json): {line}" for line in waiting]
     if _healer_hid_a_bug(folder) and verdict == "PERFECT":
         verdict = "NEEDS_REVISION"
     book.row("server", "verdict", f"{stage}{verdict}  {_counts(summary)}")
     # A bug in the checked-in suite is not this ticket's bug: it is filed under the E2E suite.
     if _record_bugs(folder, {"id": run_id, "ticket": None, "sha": row.get("sha")}, summary, context=context or folder):
         book.row("server", "bugs", f"{stage}bugs.json and bugs.md")
+    dropped = _drop_decided_bugs(folder, decisions)
+    if dropped:
+        book.row("server", "bugs", f"{stage}{dropped} bug(s) not filed: their cases wait for a decision")
     _write_qa_result(folder, None, verdict, summary, issues, specs, extra=_phase1_meta())
     return summary, verdict, issues
 
@@ -870,6 +940,7 @@ def _execute_and_heal(
         return summary
     attempts_used: dict[str, int] = {}
     edited: set[Path] = set()
+    edited_files: set[Path] = set()
     verifier_hints_now: dict[str, str] = {}
     fresh_heal = not classify and get_settings().heal_fresh_session
     if fresh_heal:
@@ -880,6 +951,13 @@ def _execute_and_heal(
         who = "qa E2E heal" if classify else "qa feature heal"
         book.row("server", "heal", f"{attempt} of {heal_attempts}  {who}  {len(specs)} files")
         failing_now = failed_tests(_read_json(folder / "playwright" / "results.json"))
+        if classify:
+            decisions = suite_decisions()
+            waiting = [f for f in failing_now if decision_for(f["title"], decisions)]
+            if waiting and len(waiting) == len(failing_now):
+                book.row("server", "heal", f"skipped: {len(waiting)} failing case(s) wait for a decision in decisions.json")
+                _end(run_id, None, "skipped", "every failure waits for a decision")
+                break
         for item in failing_now:
             attempts_used[item["title"]] = attempts_used.get(item["title"], 0) + 1
         prompt = (
@@ -935,6 +1013,7 @@ def _execute_and_heal(
         book.row("server", "heal", f"patched {', '.join(changed)}"[:240])
         base = _suite_root() if classify else folder / "specs"
         edited.update((base / name).resolve().parent for name in changed)
+        edited_files.update((base / name).resolve() for name in changed)
         store.update_run(run_id, status="execute")
         _begin(run_id, book, f"{stage}playwright after heal {attempt}")
         test_outcomes = _rerun_not_passed(folder, specs, test_outcomes, book, attempt)
@@ -947,13 +1026,51 @@ def _execute_and_heal(
     if edited:
         store.update_run(run_id, status="execute")
         _begin(run_id, book, f"{stage}playwright confirm")
-        test_outcomes = _confirm_after_heals(folder, specs, test_outcomes, edited, book)
+        test_outcomes = _confirm_after_heals(folder, specs, test_outcomes, edited, book, edited_files)
         _check_cancel(run_id)
         summary = outcome_counts(test_outcomes)
         book.row("playwright", "result", _counts(summary))
         _end(run_id, None, "ok", _counts(summary))
     write_test_outcomes_json(folder, test_outcomes)
     return summary
+
+
+_RELATIVE_IMPORT = re.compile(r"""(?:from|import)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]""")
+
+
+def spec_dependencies(spec: Path, limit: int = 60) -> set[Path]:
+    """The spec and every local file it imports, followed through relative imports (`./x-pom`)."""
+    seen: set[Path] = set()
+    todo = [spec.resolve()]
+    while todo and len(seen) < limit:
+        current = todo.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        try:
+            text = current.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for target in _RELATIVE_IMPORT.findall(text):
+            base = (current.parent / target).resolve()
+            for candidate in (base, *(base.with_name(base.name + ext) for ext in (".ts", ".tsx", ".js", ".mjs"))):
+                if candidate.is_file():
+                    todo.append(candidate)
+                    break
+    return seen
+
+
+def _outcomes_from_file(folder: Path) -> dict[str, dict[str, dict[str, Any]]]:
+    """test-outcomes.json back into {file: {test: row}}."""
+    try:
+        rows = json.loads((folder / "playwright" / "test-outcomes.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    found: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            found.setdefault(str(row.get("file") or ""), {})[str(row.get("title") or "")] = row
+    return found
 
 
 def _not_passed(outcomes: dict[str, dict[str, dict[str, Any]]]) -> dict[str, set[str]]:
@@ -998,6 +1115,7 @@ def _rerun_not_passed(
 
 def _confirm_after_heals(
     folder: Path, specs: list[str], outcomes: dict[str, dict[str, dict[str, Any]]], edited: set[Path], book: Logbook,
+    edited_files: set[Path] | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """One full run of every spec in a folder a heal edited, and of every file that still fails.
 
@@ -1013,7 +1131,50 @@ def _confirm_after_heals(
     book.row("playwright", "started", f"confirming {len(files)} file(s) in full after the heals: {', '.join(files)}"[:240])
     runners.run_playwright(folder, files)
     report = _read_json(folder / "playwright" / "results.json")
-    return merge_test_outcomes(outcomes, report, test_outcomes_from_report(report))
+    merged = merge_test_outcomes(outcomes, report, test_outcomes_from_report(report))
+    return mark_unstable(folder, outcomes, merged, files, edited, book, edited_files)
+
+
+def mark_unstable(
+    folder: Path,
+    before: dict[str, dict[str, dict[str, Any]]],
+    after: dict[str, dict[str, dict[str, Any]]],
+    files: list[str],
+    edited: set[Path],
+    book: Logbook | None = None,
+    edited_files: set[Path] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """A test that passed earlier in this run and fails only in the confirm pass is unstable, not failed.
+
+    It ran again only because a heal edited its folder or another test in its file still failed. When
+    no heal edited its spec or a file the spec imports, the code is the one that passed: the difference
+    is data left by other tests, timing or UAT. It counts as flaky and is reported. A test whose spec or
+    imports a heal edited keeps its failure: the edit may have broken it. Without the list of edited
+    files (`edited_files`), any edit in its folder counts.
+    """
+    root = get_settings().root
+    path_of = {_spec_name(spec): (root / spec).resolve() for spec in files}
+    names: list[str] = []
+    for file_key, tests in after.items():
+        spec_path = path_of.get(file_key)
+        if spec_path is None:
+            continue
+        if edited_files is None:
+            if spec_path.parent in edited:
+                continue
+        elif spec_dependencies(spec_path) & edited_files:
+            continue
+        for name, row in list(tests.items()):
+            earlier = (before.get(file_key) or {}).get(name) or {}
+            if row.get("status") == "failed" and earlier.get("status") in {"passed", "flaky"}:
+                tests[name] = {**row, "status": "flaky", "unstable": True}
+                names.append(f"{file_key} › {name}")
+    if names:
+        (folder / "playwright").mkdir(parents=True, exist_ok=True)
+        (folder / "playwright" / "unstable.json").write_text(json.dumps({"tests": names}, indent=2) + "\n", encoding="utf-8")
+        if book is not None:
+            book.row("playwright", "unstable", f"{len(names)} test(s) passed before and failed only in the confirm pass; counted flaky"[:220])
+    return after
 
 
 def _counts(summary: dict[str, int]) -> str:
@@ -1466,12 +1627,19 @@ def _heal_prompt(
 def _phase1_heal_prompt(
     folder: Path, attempt: int, total: int, specs: list[str], hints: dict[str, str] | None = None,
 ) -> str:
-    failures = failed_tests(_read_json(folder / "playwright" / "results.json"))
+    decisions = suite_decisions()
+    every = failed_tests(_read_json(folder / "playwright" / "results.json"))
+    failures = [f for f in every if not decision_for(f["title"], decisions)]
+    waiting = [f"- {f['title']}" for f in every if decision_for(f["title"], decisions)]
     listed = "\n".join(
         f"- {item['title']}  ({_short_file(item['file'])})  {item['error']}".rstrip()
         for item in failures[:40]
     ) or "- the Playwright report has failures, but no test title was parsed"
     seen = [f"- {name}: {hint}" for name, hint in (hints or {}).items()]
+    if waiting:
+        seen_note = ["These wait for a person's decision (decisions.json). Do not heal them and do not file them:", *waiting]
+    else:
+        seen_note = []
     return _message(
         "e2e-heal", folder,
         "Suite: E2E User Journey TCs (not a ticket)",
@@ -1481,6 +1649,7 @@ def _phase1_heal_prompt(
         "Failures:",
         listed,
         *(["The verifier could not reproduce a product defect for these. The test or its data is outdated; fix it:", *seen] if seen else []),
+        *seen_note,
     )
 
 
@@ -1777,6 +1946,112 @@ def _record_bugs(folder: Path, row: dict[str, Any], summary: dict[str, int], *, 
     )
     probed = publish_findings(folder, ticket=found_by, run_id=str(row.get("id") or folder.name), url=url, build=build)
     return filed or probed > 0
+
+
+def suite_decisions() -> list[dict[str, str]]:
+    """`e2e test cases/decisions.json`: checked-in cases that wait for a person's decision.
+
+    `{"decisions": [{"test": "TC-DOC-010", "note": "the product now defaults the name", "since": "2026-11-06"}]}`
+    A listed case that fails is not healed, not filed as a bug and does not fail the E2E verdict. It is
+    reported as waiting for a decision until a person updates the test or the product and removes it.
+    """
+    items = _read_json(_suite_root() / "decisions.json").get("decisions")
+    if not isinstance(items, list):
+        return []
+    return [
+        {"test": str(d["test"]).strip(), "note": str(d.get("note") or "").strip()}
+        for d in items if isinstance(d, dict) and str(d.get("test") or "").strip()
+    ]
+
+
+def decision_for(title: str, decisions: list[dict[str, str]]) -> dict[str, str] | None:
+    """The decision that names this test by id (`TC-DOC-010`) or by its full title."""
+    lowered = title.lower()
+    for decision in decisions:
+        key = decision["test"].lower()
+        if key == lowered or lowered.startswith(key + ":") or f"› {key}" in lowered or f"{key}:" in lowered:
+            return decision
+    return None
+
+
+def decided_failures(outcomes: dict[str, dict[str, dict[str, Any]]], decisions: list[dict[str, str]]) -> list[str]:
+    """Failing tests that wait for a decision, as `<test>: <note>`."""
+    found: list[str] = []
+    for tests in outcomes.values():
+        for name, row in tests.items():
+            if row.get("status") == "failed":
+                decision = decision_for(name, decisions)
+                if decision:
+                    found.append(f"{decision['test']}: {decision['note'] or 'waiting for a decision'}")
+    return found
+
+
+def _drop_decided_bugs(folder: Path, decisions: list[dict[str, str]]) -> int:
+    """Remove bugs whose every affected test waits for a decision; render bugs.md again."""
+    if not decisions:
+        return 0
+    data = _read_json(folder / "bugs.json")
+    records = [b for b in data.get("bugs") or [] if isinstance(b, dict)]
+    def decided(bug: dict[str, Any]) -> bool:
+        tests = [str(t) for t in bug.get("affectedTests") or []]
+        return bool(tests) and all(decision_for(t, decisions) for t in tests)
+    kept = [b for b in records if not decided(b)]
+    if len(kept) == len(records):
+        return 0
+    from app.bugs import render_bugs
+
+    (folder / "bugs.json").write_text(json.dumps({"bugs": kept}, indent=2) + "\n", encoding="utf-8")
+    (folder / "bugs.md").write_text(render_bugs(kept), encoding="utf-8")
+    return len(records) - len(kept)
+
+
+def unstable_notes(folder: Path) -> list[str]:
+    """Tests that passed earlier in this run and failed only in the confirm pass (see `_confirm_after_heals`)."""
+    data = _read_json(folder / "playwright" / "unstable.json")
+    names = data.get("tests") if isinstance(data.get("tests"), list) else []
+    return [f"unstable: {name} passed earlier in this run and failed in the confirm pass" for name in names]
+
+
+def reported_but_passed(folder: Path) -> list[str]:
+    """The healer left a test for a person to decide, and a later rerun passed it anyway.
+
+    That pass is not evidence the question was answered: the test may pass by timing. It stays a
+    sign-off item until a person looks at it.
+    """
+    triage, _round = latest_triage(folder)
+    passing = _passing_title_list(folder)
+    lines: list[str] = []
+    for item in triage.get("failures") or []:
+        if not isinstance(item, dict) or str(item.get("action") or "").lower() != "reported":
+            continue
+        name = str(item.get("test") or item.get("title") or "")
+        if name and any(same_test(name, title.split(" › ")[-1]) or same_test(name, title) for title in passing):
+            lines.append(f"{name} passed after the healer left it for a person to decide: {_failure_reason(item)[:160]}")
+    return lines
+
+
+def e2e_stage_blockers(folder: Path) -> list[str]:
+    """A ticket run's E2E User Journey stage that did not pass blocks the ticket's sign-off.
+
+    The deploy is what is tested: a ticket can be right while the build broke search.
+    """
+    result = _read_json(folder / "e2e" / "qa-result.json")
+    verdict = str(result.get("verdict") or "")
+    if not verdict or verdict == "PERFECT":
+        return []
+    counts = result.get("test_results") if isinstance(result.get("test_results"), dict) else {}
+    line = f"E2E User Journey TCs {verdict}: {_counts(counts)}" if counts else f"E2E User Journey TCs {verdict}"
+    first = next((str(i) for i in result.get("open_issues") or [] if str(i).strip()), "")
+    return [f"{line}. {first}"[:300] if first else line]
+
+
+def filed_bug_blockers(folder: Path) -> list[str]:
+    """A product bug filed by this run blocks sign-off, even when every test passed."""
+    bugs = [b for b in _read_json(folder / "bugs.json").get("bugs") or [] if isinstance(b, dict)]
+    if not bugs:
+        return []
+    titles = "; ".join(str(b.get("title") or "")[:90] for b in bugs[:3])
+    return [f"{len(bugs)} product bug(s) filed: {titles}"]
 
 
 def _healer_hid_a_bug(folder: Path) -> list[str]:

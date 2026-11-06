@@ -9,9 +9,10 @@ Two sources, both real captures and neither made up by the server:
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any
+
+from app import safefs
 
 DIR = "bug-evidence"
 MAX_PER_BUG = 3
@@ -101,7 +102,7 @@ def screenshots_for(folder: Path, ref: str, bug: dict[str, Any]) -> list[str]:
             target = out / f"{slug(ref)}-failure-{count}.png"
             out.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.copyfile(path, target)
+                target.write_bytes(safefs.read_bytes(path))  # a planted symlink is not copied
             except OSError:
                 continue
             shots.append(f"{DIR}/{target.name}")

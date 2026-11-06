@@ -48,6 +48,8 @@ All from this folder. `./build.sh` is the normal way in; the rest are the `docke
 | Open a shell inside | `docker compose exec harness bash` |
 | Stop every run now | `docker compose exec harness npm run cancel-runs` |
 
+The product clones (`runs/source/`) live in the Docker volume `qa-source`, not on your disk: the agent must not be able to edit them (see [docs/security.md](docs/security.md)). `docker compose down -v` removes the volume; the next run clones again.
+
 `scripts/`, `server/app/`, `.agents/`, `opencode.jsonc` and the Playwright config are mounted into the container. Prompt, skill and script edits apply to the next session without a rebuild; Python changes need a restart. `./build.sh` refuses to restart while a run is in progress. The `runs/` and `e2e test cases/` folders live on your disk, so removing the container or the image keeps every run.
 
 ## Run a ticket or a pull request
@@ -99,6 +101,20 @@ node scripts/specs.mjs --headed "e2e test cases/search"
 
 A verdict is `PERFECT`, `NEEDS_REVISION` or `HALTED`. A case the walk never reached is a gap, not a
 bug. A failure the heal did not describe as a bug stays an open issue.
+
+A ticket run is `PERFECT` only when its own tests pass and nothing else is open. Any of these keeps it in
+`NEEDS_REVISION`: an acceptance criterion with no passing test, a product bug filed by the run (even when
+every test passed), an E2E User Journey stage that did not pass (the deploy broke a core journey), a test
+the healer left for a person that passed later anyway, and a test that passed and then failed only in the
+confirm pass (reported as unstable).
+
+Right after Explore and Author, the server checks the hand-off files and the specs. When something is
+missing (`coverage.json`, an AC, an outcome) or a spec uses a pattern that broke earlier runs (a CSS
+`[role=...]` locator, `networkidle`, a long fixed sleep), the same session gets one short repair turn.
+
+A checked-in case that disagrees with a deliberate product change is listed in
+`e2e test cases/decisions.json` (`{"decisions": [{"test": "TC-DOC-010", "note": "..."}]}`) until a person
+updates it. A listed case is not healed, not filed and does not fail the E2E verdict; the report lists it.
 
 ## Where the results are
 

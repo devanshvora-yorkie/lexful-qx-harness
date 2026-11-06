@@ -33,6 +33,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from app import safefs
 from app.settings import get_settings
 
 BUG_LABELS = ("Bug: Functionality", "automated")
@@ -104,7 +105,7 @@ def gql(cfg: dict[str, str], query: str, variables: dict[str, Any] | None = None
 
 def upload(cfg: dict[str, str], file: Path) -> str:
     """Store a file in Linear and return its URL. Only signed-in members of the workspace can open it."""
-    data = file.read_bytes()
+    data = safefs.read_bytes(file)  # never upload what a planted symlink points at
     kind = {".png": "image/png", ".html": "text/html"}.get(file.suffix.lower(), "application/octet-stream")
     slot = gql(
         cfg,
@@ -128,7 +129,7 @@ def upload(cfg: dict[str, str], file: Path) -> str:
 
 def _json(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(safefs.read_text(path))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -149,11 +150,13 @@ def collect_bugs(folder: Path, scope: str) -> list[dict[str, Any]]:
     bugs = _json(folder / "bugs.json").get("bugs") or []
     sections = []
     try:
-        sections = bug_sections((folder / "bugs.md").read_text(encoding="utf-8"))
+        sections = bug_sections(safefs.read_text(folder / "bugs.md"))
     except OSError:
         pass
     found = []
     for index, bug in enumerate(b for b in bugs if isinstance(b, dict)):
+        if not (str(bug.get("expected") or "").strip() and str(bug.get("actual") or "").strip()):
+            continue  # not a ticket a developer can act on (older runs filed placeholders)
         title, body = sections[index] if index < len(sections) else (str(bug.get("title") or "Untitled bug"), str(bug.get("description") or ""))
         found.append({
             "scope": scope,
@@ -214,8 +217,9 @@ def _comment(cfg: dict[str, str], issue_id: str, body: str) -> str:
 
 
 def tracking_ticket(cfg: dict[str, str], labels: dict[str, str], source: str) -> tuple[dict[str, Any], bool]:
+    # The search is a substring match, so the marker ends with " -->": "qx-ticket:LEX-2" must not find LEX-2293.
     marker = f"qx-ticket:{source}"
-    found = _find(cfg, marker)
+    found = _find(cfg, f"{marker} -->")
     if found:
         return found, False
     if source == "e2e-journeys":
@@ -237,7 +241,11 @@ def file_bug(cfg: dict[str, str], labels: dict[str, str], parent: dict[str, Any]
     marker = f"qx-bug:{fp}"
     existing = _find(cfg, marker)
     record = {"title": bug["title"], "severity": bug["severity"], "scope": bug["scope"], "fingerprint": fp}
-    if existing and (existing.get("state") or {}).get("type") not in CLOSED_STATES:
+    state = (existing or {}).get("state", {}).get("type") if existing else None
+    if state == "canceled":
+        # A person closed it as not a bug (or a duplicate). Do not file it again.
+        return {**record, "status": "suppressed", "occurrence": 0, "identifier": existing["identifier"], "url": existing["url"]}
+    if existing and state not in CLOSED_STATES:
         seen = sum(SEEN_MARK in (c.get("body") or "") for c in (existing.get("comments") or {}).get("nodes", [])) + 2
         _comment(cfg, existing["id"], f"{SEEN_MARK}\nSeen again in run `{run}` (occurrence {seen}).")
         return {**record, "status": "seen again", "occurrence": seen, "identifier": existing["identifier"], "url": existing["url"]}
@@ -267,7 +275,7 @@ def _bug_lines(records: list[dict[str, Any]]) -> list[str]:
         return ["None."]
     lines = []
     for r in records:
-        tag = "new" if r["status"] == "new" else f"seen again, occurrence {r['occurrence']}"
+        tag = {"new": "new", "suppressed": "closed as not a bug, not filed"}.get(r["status"], f"seen again, occurrence {r['occurrence']}")
         lines.append(f"- [{r['identifier']}]({r['url']}) ({r['severity']}, {tag}): {r['title'][:110]}")
     return lines
 

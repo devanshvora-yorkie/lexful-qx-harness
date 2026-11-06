@@ -110,7 +110,7 @@ Legend: `[x]` covered by a scripted test · `[ ]` not covered (see §7).
 |---|--------|-------|-------------|--------|
 | 1 | Create a document (name + org + body) | `New` drawer | TC-DOC-001 | [x] |
 | 2 | Create with **no** organization | `New` drawer | TC-DOC-009 | [x] |
-| 3 | Create with an **empty** name (required-field rejection) | `New` drawer | TC-DOC-010 | [x] |
+| 3 | Create with an **empty** name (saved as the default name "New document") | `New` drawer | TC-DOC-010 | [x] |
 | 4 | Open a document from the grid | grid cell → drawer | TC-DOC-001, TC-DOC-002 | [x] |
 | 5 | **Rename** a document (inline header edit) | `Edit Name` | TC-DOC-002 | [x] |
 | 6 | **Discard** a staged rename | `Discard` | TC-DOC-011 | [x] |
@@ -152,7 +152,7 @@ Legend: `[x]` covered by a scripted test · `[ ]` not covered (see §7).
 | TC-DOC-007 | Switch the body editor between Markdown and HTML modes | positive | Smoke | High | `doceditspec.ts` |
 | TC-DOC-008 | Archive a document from the record drawer | positive | Smoke | High | `doceditspec.ts` |
 | TC-DOC-009 | Create is blocked while no organization is selected | negative | Smoke | High | `doceditspec.ts` |
-| TC-DOC-010 | Creating with an empty document name is rejected | negative | Smoke | High | `doceditspec.ts` |
+| TC-DOC-010 | Creating with an empty document name saves the default name "New document" | edge | Smoke | High | `doceditspec.ts` |
 | TC-DOC-011 | Discard a staged rename leaves the record name unchanged | edge | Regression | Medium | `doceditspec-2.spec.ts` |
 | TC-DOC-012 | Cancel the body editor keeps the stored content | edge | Regression | Medium | `doceditspec-2.spec.ts` |
 | TC-DOC-013 | Clear an expiry date removes only the expiry | edge | Regression | Medium | `doceditspec-2.spec.ts` |

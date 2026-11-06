@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,11 +53,34 @@ def _legacy_path(run_id: str) -> Path:
     return nested
 
 
+_FOLDER = re.compile(r"^(tickets/LEX-\d+|phase-1|pull-requests/pr-\d+|deploys/[0-9a-f]{7,40}|manual|[A-Za-z0-9-]+)/[\w.-]+$")
+
+
+def safe_folder(folder: str) -> str | None:
+    """A run folder from the index, if it is one the server could have made.
+
+    The index lives under runs/, which the agent can write on some hosts. A folder such as
+    `../../root` would send the server's root writes outside runs/, so only the shapes
+    `relative_folder` produces are accepted, and the path must resolve inside runs/.
+    """
+    if not _FOLDER.match(folder) or ".." in folder.split("/"):
+        return None
+    root = runs_root().resolve()
+    try:
+        (root / folder).resolve().relative_to(root)
+    except ValueError:
+        return None
+    return folder
+
+
 def run_dir(run_id: str) -> Path:
     """The folder recorded on the run, or the older runs/<group>/<id>/ path."""
     for row in _read_index()["runs"]:
         if row.get("id") == run_id and row.get("folder"):
-            return runs_root() / str(row["folder"])
+            folder = safe_folder(str(row["folder"]))
+            if folder is None:
+                raise ValueError(f"run {run_id} has an unsafe folder in the index: {row['folder']!r}")
+            return runs_root() / folder
     return _legacy_path(run_id)
 
 
@@ -160,7 +182,7 @@ def write_atomic(file: Path, text: str) -> None:
 def _write_index(data: dict[str, Any]) -> None:
     file = _index_path()
     if file.is_file() and _parse_index(file) is not None:
-        shutil.copyfile(file, file.with_name("index.json.bak"))
+        file.with_name("index.json.bak").write_text(file.read_text(encoding="utf-8"), encoding="utf-8")
     write_atomic(file, json.dumps(data, indent=2) + "\n")
 
 

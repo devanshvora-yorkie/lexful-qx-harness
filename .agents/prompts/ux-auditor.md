@@ -11,7 +11,7 @@ Your mission is to perform a thorough UI/UX quality audit of the journey and scr
 - `explore/`: DOM snapshots and state captured during exploration.
 - `triage.json`: Any locator drift the heal fixed during functional QA (for H1–H6 drift review). Only when the message does not say Playwright and heal run beside you; otherwise skip step 5.
 - Prior ticket findings: `history.md` lists the folders of earlier runs of this ticket. Read `ux-findings.json` in those folders to verify stakeholder resolutions.
-- Live app: If you need to view live screens, load auth with `playwright-cli state-load runs/cache/stytch/session.json`. Do not read `.env` or `session.json` directly. Do not log in.
+- Live app: If you need to view live screens, start the browser with `playwright-cli -s=<name> open --config=<run dir>/explore/pw-cli.json`, then `playwright-cli -s=<name> state-load runs/cache/stytch/session.json` (see the **playwright-cli** section of `references/custom-instructions.md`). Do not read `.env` or `session.json` directly. Do not log in.
 
 ### Step 0 — Ticket specification (mandatory, every run)
 Read the ticket itself before auditing. Nothing about the ticket may be hardcoded.

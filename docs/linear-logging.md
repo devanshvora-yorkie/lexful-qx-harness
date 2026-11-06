@@ -45,7 +45,8 @@ E2E bugs repeat: the same failing case shows up on every deploy until someone fi
 **Not filing the same bug twice.** Every bug gets a fingerprint (a short hash of its title, scoped to the source ticket for feature bugs and global for E2E bugs). The fingerprint is written into the bug's description as a hidden marker. Before creating a bug, the harness searches the project for that marker:
 
 - Found and still open: no new ticket. A comment `Seen again in run ... (occurrence 3)` is added to the existing one, and the run comment lists it as `seen again`.
-- Found but closed (done or canceled): a new ticket is created that points to the closed one, because the bug has come back.
+- Found and done: a new ticket is created that points to the closed one, because the bug has come back.
+- Found and canceled: not filed again. Cancel a ticket in Linear to tell the harness it is not a bug; the run comment lists it as `closed as not a bug`.
 - Not found: a new ticket.
 
 The search is done in Linear, so it still works if `runs/` is wiped or the harness runs on another machine.

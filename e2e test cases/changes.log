@@ -4,3 +4,81 @@ The server appends one entry per heal and one per promotion from a ticket run (w
 2026-11-04T00:00:00Z  log restarted
   Earlier entries are in git history. They recorded heals before the suite was brought up to date and are not evidence of what the app does now.
 
+2026-11-06T00:00:00Z  changed by a person (decision)  document editing/doceditspec.spec.ts  TC-DOC-010
+  The case expected an empty name to be rejected. The product names an unnamed document "New document" on purpose
+  (AssetCreateForm.tsx defaultName; AssetCreateForm.spec.tsx). The case now asserts that default. Earlier bugs filed for it were false positives.
+2026-11-06T10:53:46Z  regression-20261106T103823Z-cc41  heal 1
+  files: e2e test cases/asset crud/move-records-pom.ts, e2e test cases/asset crud/password-records-pom.ts, e2e test cases/asset crud/password-records-smoke.spec.ts
+  - spec / patched: Move password stays disabled until a destination is chosen and excludes the current organization — Environment: UAT answered the navigation to /docs/d/all/system.password with a CloudFront 403 "Request blocked" page on all 3 navigations (WAF block, not product). Patched asset crud/move-records-pom.ts gotoApp to make 4 navigations spaced ...
+  - spec / patched: password record drawer Overview shows username, URL and a masked password — Timeout in PasswordsListPage.open(): the test registered page.waitForRequest for the API call with x-account-id before navigating, but the page was the CloudFront 403 "Request blocked" document (screenshot test-failed-1.png), so the app nev...
+  - spec / patched: Copy password requests the secure password from the API — Same cause as the Overview case: the page never loaded past the CloudFront 403 "Request blocked" page, so the waitForRequest in PasswordsListPage.open() timed out. Fixed by the same asset crud/password-records-pom.ts open() retry and the 36...
+
+--- e2e test cases/asset crud/move-records-pom.ts
++++ e2e test cases/asset crud/move-records-pom.ts
+@@ -126,5 +126,7 @@
+ /** Navigate to a list. UAT sometimes answers with a CloudFront 403 page; reload until the app shell renders. */
+ export async function gotoApp(page: Page, url: string): Promise<void> {
+-  for (let attempt = 1; attempt <= 3; attempt++) {
++  // Four navigations, 45 s apart: a CloudFront WAF block on UAT can outlast three.
++  const attempts = 4
++  for (let attempt = 1; attempt <= attempts; attempt++) {
+     await page.goto(url, { waitUntil: 'domcontentloaded' })
+     const blocked = page.getByRole('heading', { name: '403 ERROR' })
+@@ -132,7 +134,7 @@
+     await expect(blocked.or(shell).first()).toBeVisible({ timeout: 15000 })
+     if (!(await blocked.isVisible())) return
+-    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 45_000))
++    if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, 45_000))
+   }
+-  throw new Error(`CloudFront 403 persisted for ${url} after 3 navigations`)
++  throw new Error(`CloudFront 403 persisted for ${url} after ${attempts} navigations`)
+ }
+
+--- e2e test cases/asset crud/password-records-pom.ts
++++ e2e test cases/asset crud/password-records-pom.ts
+@@ -43,18 +43,21 @@
+    */
+   async open(): Promise<string> {
+-    const accountRequest = this.page.waitForRequest(
+-      (request) => request.url().startsWith(API_URL) && Boolean(request.headers()['x-account-id']),
+-      { timeout: 20_000 },
+-    )
+-    const listing = this.page.waitForResponse(
+-      (response) =>
+-        response.url().startsWith(`${API_URL}/v1/assets/system.password?`) && response.status() === 200,
+-      { timeout: 20_000 },
+-    )
+-    await gotoApp(this.page, PASSWORDS_URL)
+-    await listing
+-    await this.row(SEEDED_PASSWORD).waitFor({ state: 'visible', timeout: 15_000 })
+-    const request: Request = await accountRequest
+-    return request.headers()['x-account-id']
++    // A CloudFront 403 can arrive after gotoApp has returned, so the app's own request never
++    // fires. Re-navigate until the seeded row renders; only then is the request expected.
++    for (let attempt = 1; attempt <= 2; attempt++) {
++      const accountRequest = this.page.waitForRequest(
++        (request) => request.url().startsWith(API_URL) && Boolean(request.headers()['x-account-id']),
++        { timeout: 20_000 },
++      )
++      accountRequest.catch(() => undefined)
++      await gotoApp(this.page, PASSWORDS_URL)
++      const rendered = await this.row(SEEDED_PASSWORD)
++        .waitFor({ state: 'visible', timeout: 20_000 })
++        .then(() => true, () => false)
++      if (!rendered) continue
++      const request: Request = await accountRequest
++      return request.headers()['x-account-id']
++    }
++    throw new Error(`Passwords listing did not render for ${PASSWORDS_URL} after 2 navigations`)
+   }
+
+--- e2e test cases/asset crud/password-records-smoke.spec.ts
++++ e2e test cases/asset crud/password-records-smoke.spec.ts
+@@ -28,5 +28,6 @@
+ 
+ test.beforeEach(() => {
+-  test.setTimeout(240_000)
++  // Two listing navigations, each with CloudFront 403 retries spaced 45 s apart, fit in this budget.
++  test.setTimeout(360_000)
+ })
+

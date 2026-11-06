@@ -37,6 +37,8 @@ Only when none of these can reach the behavior is it a gap, and the gap says whi
 
 - Map a test to an acceptance criterion only when the test **fails if that criterion is broken**. A test that merely passes through the same screen is not coverage: write a `gap` and say what is missing.
 - A hypothesis is `refuted` only when you created the condition it needs and the product held. If the attempt could not create that condition (for example, it matched nothing), it is `unreached`, however cleanly the call returned.
+- An observation that matches the defect the change claims to fix is never closed as `unreached` for one unknown fact: settle the fact with another persona, an API read or the deployed source, or file it as a suspected finding for verify (`phases/explore-author.md`, Hypotheses).
+- **Deployed code is what you test.** `pr-brief.md` lists **Not on UAT**: commits of this ticket that the deployed build does not contain. A review fix there is not live: test the deployed behavior, and do not mark a criterion covered by code UAT does not run.
 
 ## Before you hand off
 

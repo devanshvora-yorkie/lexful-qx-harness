@@ -20,10 +20,10 @@ def make_run(root: Path, *, kind: str = "ticket") -> Path:
     write(folder / "summary.json", {"verdict": "NEEDS_REVISION", "seconds": 600, "cost": 1.5,
                                     "tests": {"passed": 5, "failed": 1, "flaky": 0}, "e2e": "NEEDS_REVISION  passed 9", "ux": "PASS  score 90"})
     write(folder / "ux-report.html", "<html></html>")
-    write(folder / "bugs.json", {"bugs": [{"title": "A: broken", "severity": "High", "priority": "P1"}]})
+    write(folder / "bugs.json", {"bugs": [{"title": "A: broken", "severity": "High", "priority": "P1", "expected": "e", "actual": "a"}]})
     write(folder / "bugs.md", "## A: broken\n\nBody ![x](bug-evidence/a.png)\n")
     write(folder / "bug-evidence" / "a.png", "png")
-    write(folder / "e2e" / "bugs.json", {"bugs": [{"title": "Docs: empty name accepted", "severity": "Medium", "priority": "P2"}]})
+    write(folder / "e2e" / "bugs.json", {"bugs": [{"title": "Docs: empty name accepted", "severity": "Medium", "priority": "P2", "expected": "e", "actual": "a"}]})
     write(folder / "e2e" / "bugs.md", "## Docs: empty name accepted\n\nBody\n")
     return folder
 
@@ -106,6 +106,16 @@ class LinearLogTest(unittest.TestCase):
             bug = next(c[0] for c in fake.created if c[0]["title"] == "A: broken")
             self.assertIn("Previously filed as YOR-5", bug["description"])
 
+    def test_a_canceled_bug_is_not_filed_again(self):
+        with tempfile.TemporaryDirectory() as raw:
+            fp = linear_log.fingerprint("e2e", "LEX-1", "Docs: empty name accepted")
+            old = {"id": "old", "identifier": "YOR-7", "url": "u", "state": {"type": "canceled"}, "comments": {"nodes": []}}
+            fake = FakeLinear({f"qx-bug:{fp}": old})
+            result = self.file(fake, make_run(Path(raw)))
+            self.assertNotIn("[E2E] Docs: empty name accepted", [c[0]["title"] for c in fake.created])
+            self.assertEqual(result["e2e_bugs"][0]["status"], "suppressed")
+            self.assertIn("closed as not a bug", fake.comments[0]["body"])
+
     def test_a_run_is_filed_once_unless_forced(self):
         with tempfile.TemporaryDirectory() as raw:
             folder = make_run(Path(raw))
@@ -116,6 +126,25 @@ class LinearLogTest(unittest.TestCase):
             self.assertEqual(second.created, [])
             self.file(second, folder, force=True)
             self.assertTrue(second.created)
+
+    def test_tracking_ticket_search_does_not_match_a_longer_ticket_key(self):
+        seen = []
+
+        class Fake(FakeLinear):
+            def gql(self, cfg, query, variables=None):
+                if "issues(first:1" in query:
+                    seen.append(variables["m"])
+                return super().gql(cfg, query, variables)
+
+        with mock.patch.object(linear_log, "gql", Fake().gql):
+            linear_log.tracking_ticket(CFG, {}, "LEX-2")
+        self.assertEqual(seen, ["qx-ticket:LEX-2 -->"])
+
+    def test_placeholder_bugs_without_expected_or_actual_are_not_filed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            folder = Path(raw)
+            write(folder / "bugs.json", {"bugs": [{"title": "App — failure — LEX-1", "expected": "", "actual": ""}]})
+            self.assertEqual(linear_log.collect_bugs(folder, "feature"), [])
 
     def test_refuses_the_read_team(self):
         with self.assertRaises(linear_log.LinearError):

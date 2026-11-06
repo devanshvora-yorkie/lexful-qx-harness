@@ -52,6 +52,10 @@ services:
       # Read-write so a locator heal is written back to this folder. The space stays inside the quotes.
       - "./e2e test cases:/opt/lexful-qa-opencode/e2e test cases"
       - ./runs:/opt/lexful-qa-opencode/runs
+      # The product clones and their worktrees live in a Docker volume, not in the ./runs bind mount.
+      # Docker Desktop on macOS does not enforce file ownership on bind mounts, so the agent user could
+      # otherwise edit .git/config or hooks, and root runs git there with the GitHub token.
+      - qa-source:/opt/lexful-qa-opencode/runs/source
     shm_size: "2gb"
     init: true
     restart: unless-stopped
@@ -61,3 +65,6 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 5
+
+volumes:
+  qa-source:

@@ -208,6 +208,64 @@ def unreadable_files(folder: Path) -> list[str]:
     return bad
 
 
+REQUIRED_HANDOFF = ("coverage.json", "hypotheses.json", "affected-cases.json", "api-findings.json", "planned-specs.json")
+
+
+def handoff_problems(folder: Path) -> list[str]:
+    """What the explore+author hand-off is missing, as instructions the agent can act on.
+
+    Checked as soon as the session returns, so one short repair turn can fix it. Found only at
+    sign-off, a missing coverage.json turns a run whose tests all passed into NEEDS_REVISION.
+    """
+    problems = unreadable_files(folder)
+    for name in REQUIRED_HANDOFF:
+        if not (folder / name).is_file():
+            problems.append(f"{name} is missing: write it as phases/explore-author.md section 10 says")
+    data = _read(folder / "coverage.json", None)
+    rows = data if isinstance(data, list) else (data.get("criteria") or data.get("coverage")) if isinstance(data, dict) else None
+    if (folder / "coverage.json").is_file() and isinstance(data, (dict, list)):
+        if not isinstance(rows, list) or not rows:
+            problems.append('coverage.json has no criteria: write {"criteria": [...]} with every AC from pr-brief.md once')
+        else:
+            mapped = {str(item.get("ac") or "").upper().replace(" ", "") for item in rows if isinstance(item, dict)}
+            absent = [f"AC{n}" for n in range(1, len(brief_criteria(folder)) + 1) if f"AC{n}" not in mapped]
+            if absent:
+                problems.append(f"coverage.json does not list {', '.join(absent[:12])}: map each to tests, a gap or na")
+    hyp = _read(folder / "hypotheses.json", None)
+    if isinstance(hyp, dict):
+        for item in hyp.get("hypotheses") or []:
+            if isinstance(item, dict) and str(item.get("outcome") or "").lower() not in {"confirmed", "refuted", "unreached"}:
+                problems.append(f"hypothesis {item.get('id', '?')} has no outcome (confirmed, refuted or unreached)")
+    return problems
+
+
+# Spec patterns that broke real runs. Each line: (regex, what to do instead).
+SPEC_LINT = (
+    (re.compile(r"""locator\(\s*['"`][^'"`]*\[role=['"]?(checkbox|button|row|radio|switch|option|tab)"""),
+     "a CSS [role=...] selector does not match native elements (an <input type=checkbox> has no role attribute): use getByRole(...)"),
+    (re.compile(r"networkidle"), "waitUntil 'networkidle' is banned (multi-minute hangs): wait for a response or a visible state"),
+    (re.compile(r"\bwaitForTimeout\(\s*([2-9]\d{3}|\d{5,})"), "a fixed sleep of 2s or more: wait for the condition (expect.poll, waitForResponse, toBeVisible)"),
+    (re.compile(r"\btest\.only\(|\bdescribe\.only\("), ".only would skip every other test in the run"),
+)
+
+
+def spec_lint(folder: Path) -> list[str]:
+    """Patterns in the run's specs and page objects that have made tests fail or hang on UAT."""
+    found: list[str] = []
+    for path in sorted((folder / "specs").glob("*.ts")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for number, line in enumerate(lines, start=1):
+            if line.lstrip().startswith("//"):
+                continue
+            for pattern, advice in SPEC_LINT:
+                if pattern.search(line):
+                    found.append(f"specs/{path.name}:{number}: {advice}")
+    return found
+
+
 def _read(path: Path, default: Any) -> Any:
     if not path.is_file():
         return default
