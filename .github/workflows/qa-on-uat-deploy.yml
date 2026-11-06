@@ -4,6 +4,10 @@
 #   repository_dispatch  uat-deployed   sent by docu-stack when a UAT deploy succeeds (see docs/setup.md)
 #   workflow_dispatch                   run it by hand: sha, pr or ticket
 #
+# Which deploys start a run: the UAT environments in the repository variable QA_UAT_ENVIRONMENTS
+# (Settings > Secrets and variables > Actions > Variables), space separated. When it is not set, only
+# docu-app-uat and docu-service-uat start a run. A manual run (sha, pr or ticket) is never filtered.
+#
 # The job runs `docker compose run` in QA_HARNESS_DIR (set in the runner's .env by build.sh), so the
 # compose file, .env and the runs/ volume are the ones the API container uses. Exit codes of the run:
 # 0 PERFECT and 1 NEEDS_REVISION are reported and the job passes; 2 (halted or failed) and 64 fail the job.
@@ -23,6 +27,10 @@ on:
       ticket:
         description: Linear ticket, LEX-1234
         required: false
+      again:
+        description: run this commit again even if it was already tested
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,8 +48,35 @@ jobs:
       SHA: ${{ github.event.client_payload.sha || inputs.sha }}
       PR: ${{ inputs.pr }}
       TICKET: ${{ inputs.ticket }}
+      AGAIN: ${{ inputs.again }}
+      DEPLOY_WORKFLOW: ${{ github.event.client_payload.workflow }}
+      ALLOWED_ENVIRONMENTS: ${{ vars.QA_UAT_ENVIRONMENTS || 'docu-app-uat docu-service-uat' }}
     steps:
+      - name: Is this deploy one we test?
+        id: scope
+        run: |
+          # "docu-app - Build & Deploy UAT" ships to the GitHub environment docu-app-uat.
+          if [ -n "$DEPLOY_WORKFLOW" ]; then
+            name="$(printf '%s' "$DEPLOY_WORKFLOW" | sed -nE 's/^([a-z0-9-]+) - Build & Deploy UAT$/\1/p')"
+            if [ -z "$name" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Not a UAT deploy workflow: '$DEPLOY_WORKFLOW'. Nothing to test."
+              exit 0
+            fi
+            env_name="$name-uat"
+            case " $ALLOWED_ENVIRONMENTS " in
+              *" $env_name "*) echo "$env_name is in the list ($ALLOWED_ENVIRONMENTS)." ;;
+              *)
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "$env_name is not in QA_UAT_ENVIRONMENTS ($ALLOWED_ENVIRONMENTS). Nothing to test."
+                echo "### QA skipped" >> "$GITHUB_STEP_SUMMARY"
+                echo "The deploy of \`$env_name\` is not in the list of environments that start QA." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+            esac
+          fi
+
       - name: Check the trigger and the machine
+        if: steps.scope.outputs.skip != 'true'
         run: |
           if [ -z "${QA_HARNESS_DIR:-}" ]; then
             echo "QA_HARNESS_DIR is not set. Run ./build.sh --runner on the QA machine." >&2
@@ -68,12 +103,14 @@ jobs:
           echo "trigger: sha=${SHA:-none} pr=${PR:-none} ticket=${TICKET:-none}"
 
       - name: Update the harness and rebuild its image
+        if: steps.scope.outputs.skip != 'true'
         run: |
           cd "$QA_HARNESS_DIR"
           git pull --ff-only
           docker compose build harness
 
       - name: Run the QA
+        if: steps.scope.outputs.skip != 'true'
         id: qa
         run: |
           cd "$QA_HARNESS_DIR"
@@ -81,12 +118,13 @@ jobs:
           [ -n "$SHA" ] && args+=(--sha "$SHA")
           [ -n "$PR" ] && args+=(--pr "$PR")
           [ -n "$TICKET" ] && args+=(--ticket "$TICKET")
+          [ "$AGAIN" = "true" ] && args+=(--again)
           set +e
           docker compose run --rm --no-deps harness \
             server/.venv/bin/python -m app.cli "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/qa-run.log"
           code=${PIPESTATUS[0]}
           set -e
-          result="$(grep -E '^run .* verdict ' "$RUNNER_TEMP/qa-run.log" | tail -1 || true)"
+          result="$(grep -E '^run .* (verdict|skipped)' "$RUNNER_TEMP/qa-run.log" | tail -1 || true)"
           echo "exit=$code" >> "$GITHUB_OUTPUT"
           {
             echo "### QA run"

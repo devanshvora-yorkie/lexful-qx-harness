@@ -4,6 +4,9 @@
     python -m app.cli --ticket LEX-3700                                      one ticket
     python -m app.cli --e2e                                                  E2E User Journey TCs only
 
+A commit that is already running, or already finished cleanly, is not run twice: one merge that
+changes docu-app and docu-service sends two deploy events with the same commit. `--again` runs it anyway.
+
 The run is the same one the server would queue: preflight, the E2E stage, the ticket's tests, the
 UX audit and the report. Its folder is written under QA_RUNS_DIR (mount runs/ to keep it), and run.log
 is printed as it grows. Nothing is written to GitHub; Linear is written only when QA_LINEAR_LOG=true.
@@ -54,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pr", type=_pr, help="pull request number")
     parser.add_argument("--sha", type=_sha, help="the commit the UAT deployment shipped")
     parser.add_argument("--e2e", action="store_true", help="run only the E2E User Journey TCs")
+    parser.add_argument("--again", action="store_true", help="run a commit even if it was already tested")
     try:
         args = parser.parse_args(argv)
     except SystemExit as stop:
@@ -64,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
     if not (args.e2e or args.ticket or args.pr or args.sha):
         print("give --sha (a UAT deploy), --ticket, --pr, or --e2e", file=sys.stderr)
         return 64
+
+    if args.sha and not args.again:
+        earlier = store.find_active_sha(args.sha)
+        if earlier:
+            print(f"\nrun {earlier['id']}  status {earlier.get('status')}  skipped: commit {args.sha[:12]} was already accepted. Use --again to run it again.", flush=True)
+            return 0
 
     if args.e2e:
         row = store.create_run(ticket=None, pr=None, sha=None, kind="phase1", trigger="e2e")

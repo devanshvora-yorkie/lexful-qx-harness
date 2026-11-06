@@ -34,6 +34,72 @@ merge to main
 - **Only the commit is sent.** The harness works out the pull request and the ticket from that commit
   (`scripts/resolve-trigger.mjs`). docu-stack does not need to know about tickets.
 
+### What starts when, and what stays running
+
+| Piece | Lifetime | Started by |
+|---|---|---|
+| GitHub Actions runner (a service on the QA machine, label `qa-harness`) | always on; waits for jobs | `./build.sh --runner` (launchd on macOS, systemd on Linux) |
+| Harness API container (`harness`, port 8787) | always on; optional for deploy runs | `./build.sh` |
+| **Run container** (`docker compose run --rm harness python -m app.cli --sha <sha>`) | **one deploy, then it exits and is removed** | the workflow, for each deploy |
+
+So nothing has to be started by hand after a deploy. The workflow pulls the latest harness code, rebuilds
+the image if it changed, starts a fresh container with the same `.env`, `runs/` folder and settings the API
+container uses, runs the one deploy to the end, and removes the container. The QA machine only needs the
+runner service and Docker to be up.
+
+To turn it off, for example while the machine is serviced, stop the runner service. Queued deploys wait
+(GitHub holds a queued job for up to 24 hours) and start when it is back:
+
+```bash
+cd ~/actions-runner-qa-harness      # QA_RUNNER_DIR if you changed it
+./svc.sh stop                       # Linux: sudo ./svc.sh stop
+./svc.sh start
+./svc.sh status
+```
+
+**Why there is no fallback to GitHub-hosted runners.** A generic runner guide often routes a job to
+`ubuntu-latest` when the self-hosted runner is offline. That does not fit here: the harness needs the QA
+machine's `.env` (UAT, Linear, GitHub and Bedrock keys), its Docker image and its disk. A GitHub-hosted
+runner has none of them, and the keys must not be put in GitHub. When the machine is off, deploys wait.
+
+### Which UAT deploys start QA
+
+docu-stack has one workflow per component, named `<component> - Build & Deploy UAT`. Each runs on a push
+to `main` that changes that component's paths, and deploys to the GitHub environment `<component>-uat`.
+The harness reads those same environments to decide whether a merged pull request is already on UAT.
+
+| Workflow | GitHub environment | Starts QA by default | What it ships |
+|---|---|---|---|
+| docu-app - Build & Deploy UAT | `docu-app-uat` | **yes** | the main web app (`apps/docu-app`) |
+| docu-service - Build & Deploy UAT | `docu-service-uat` | **yes** | the API behind it (`services/docu-service`) |
+| platform-app - Build & Deploy UAT | `platform-app-uat` | optional | platform web app |
+| analytics-app - Build & Deploy UAT | `analytics-app-uat` | optional | analytics web app |
+| workflow-service - Build & Deploy UAT | `workflow-service-uat` | optional | workflow service |
+| indexer-service - Build & Deploy UAT | `indexer-service-uat` | optional | search indexing |
+| audit-service - Build & Deploy UAT | `audit-service-uat` | optional | audit events |
+| data-integration-service - Build & Deploy UAT | `data-integration-service-uat` | optional | data integration |
+| data-query-service - Build & Deploy UAT | `data-query-service-uat` | optional | data queries |
+| data-sync-service - Build & Deploy UAT | `data-sync-service-uat` | optional | data sync |
+| docu-etl - Build & Deploy UAT | `docu-etl-uat` | optional | ETL jobs |
+| extension-app, packages | none | no | not deployed to UAT by a deploy workflow |
+
+The harness tests the docu-app pages (search, assets, documents), so docu-app and docu-service are the
+two that matter. Add a backend only when its change can show in those pages.
+
+The choice is made in two places, and a deploy must pass both:
+
+1. **docu-stack** `qa-notify.yml`: the `workflows:` list decides which workflow finishes send an event.
+   A ready-to-copy file is in [docu-stack/qa-notify.yml](docu-stack/qa-notify.yml).
+2. **qa-harness** repository variable `QA_UAT_ENVIRONMENTS` (Settings > Secrets and variables > Actions >
+   Variables), a space-separated list such as `docu-app-uat docu-service-uat platform-app-uat`. When it is
+   not set the list is `docu-app-uat docu-service-uat`. The harness repo can change the list by itself,
+   without a change in docu-stack. A manual run (a sha, pull request or ticket) ignores the list.
+
+**One merge, two events, one run.** A merge that changes both `apps/docu-app` and `services/docu-service`
+starts both deploy workflows, which send two events with the same commit. The harness runs a commit once:
+the second event finds the first run and ends with `skipped`. To test the same commit again, run the
+workflow by hand with **again** ticked (or `--again` on the command line).
+
 ## 2. What you need
 
 On the QA machine:
@@ -109,6 +175,7 @@ number, or a ticket. Or from a terminal:
 ```bash
 gh workflow run qa-on-uat-deploy.yml -R Lexful-ai/qa-harness -f sha=<40-char sha>
 gh workflow run qa-on-uat-deploy.yml -R Lexful-ai/qa-harness -f pr=2263
+gh workflow run qa-on-uat-deploy.yml -R Lexful-ai/qa-harness -f sha=<40-char sha> -f again=true   # even if that commit was tested
 ```
 
 Or on the QA machine, without GitHub: `docker compose exec harness npm run ticket -- --pr 2263`.
@@ -122,39 +189,10 @@ deployed commit. The harness workflow runs the QA for that commit. It needs no o
 
 Send this to whoever owns `Lexful-ai/docu-stack` and the Lexful org settings.
 
-**a. A notify workflow in docu-stack.** Add `.github/workflows/qa-notify.yml`:
-
-```yaml
-name: Tell the QA harness about a UAT deploy
-on:
-  workflow_run:
-    workflows:
-      - "docu-app - Build & Deploy UAT"
-      - "docu-service - Build & Deploy UAT"
-    types: [completed]
-permissions: {}
-jobs:
-  notify:
-    if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Send the deployed commit to Lexful-ai/qa-harness
-        env:
-          GH_TOKEN: ${{ secrets.QA_HARNESS_DISPATCH_TOKEN }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          RUN_URL: ${{ github.event.workflow_run.html_url }}
-          WORKFLOW: ${{ github.event.workflow_run.name }}
-        run: |
-          gh api repos/Lexful-ai/qa-harness/dispatches \
-            -f event_type=uat-deployed \
-            -F "client_payload[sha]=$SHA" \
-            -F "client_payload[workflow]=$WORKFLOW" \
-            -F "client_payload[run_url]=$RUN_URL"
-```
-
-Decide which other "Build & Deploy UAT" workflows should trigger QA (analytics-app, audit-service,
-data-integration-service, data-query-service, data-sync-service, docu-etl) and add them to the list.
-The harness can only test the apps its pages cover; ask which ones matter.
+**a. A notify workflow in docu-stack.** Add [docu-stack/qa-notify.yml](docu-stack/qa-notify.yml) from this
+repo as `.github/workflows/qa-notify.yml`. It listens for the UAT deploy workflows in the table above, and
+sends the deployed commit and the workflow name to `Lexful-ai/qa-harness` when one succeeds on `main`. It
+starts with docu-app and docu-service; uncomment the others you want. Ask which backends matter.
 
 **b. A dispatch token.** A fine-grained personal access token, or better a GitHub App, owned by a
 Lexful admin account, with access to **only** `Lexful-ai/qa-harness` and the permission
@@ -187,22 +225,22 @@ comes later, and needs its own decision.
 | Run from a PR number, a ticket, or a deploy commit (`--pr`, `--ticket`, `--sha`) | built |
 | The ticket is read from the commit's pull request before the run folder is made | built |
 | `build.sh` (checks, image, container, `--runner`) | built, the runner registration is not yet tested on a real machine |
-| `qa-on-uat-deploy.yml` (manual and `repository_dispatch`) | built, not yet run on the runner |
-| `qa-notify.yml` in docu-stack | the draft above, not yet sent to Lexful |
-| One run per deploy commit, and no second run when docu-app and docu-service ship the same merge | to build (`find_active_sha` exists in the server but the CLI does not use it) |
+| `qa-on-uat-deploy.yml` (manual and `repository_dispatch`, with the environment list `QA_UAT_ENVIRONMENTS`) | built, not yet run on the runner |
+| `qa-notify.yml` in docu-stack | [ready to copy](docu-stack/qa-notify.yml), not yet sent to Lexful |
+| One run per deploy commit: no second run when docu-app and docu-service ship the same merge | built (`--sha` skips a commit already accepted; `--again` overrides) |
 | A deploy that ships several tickets (one commit per PR, several PRs) | to build; one run covers the commit's first ticket for now |
-| Linear comment with the report, bug tickets | to build, behind `QA_LINEAR_WRITE` |
+| Linear: tracking ticket, comment per run, Bug tickets | built, off by default (`QA_LINEAR_LOG`); see [linear-logging.md](linear-logging.md) |
 | Keeping `runs/` tidy (retention) | to build |
 
-Known gap in the deployment check: `workflow-service-uat` is not in the environments list the check reads,
-and changes to the shared `packages/typescript/ui` do not name an environment. Those PRs read as "not on
-UAT" and their runs halt unless `QA_ALLOW_UNDEPLOYED=true`.
+Known gap in the deployment check: it reads every GitHub environment ending in `-uat`, so a new
+component is picked up on its own. But a change to the shared `packages/typescript/ui` names no component, so
+those PRs read as "not on UAT" and their runs halt unless `QA_ALLOW_UNDEPLOYED=true`.
 
 ## 7. Order of work
 
-1. Push this repo to `Lexful-ai/qa-harness` (today it is pushed to a personal fork).
+1. Push this repo to `Lexful-ai/qa-harness` (done; the personal fork is kept in step).
 2. Lexful: items a, b and e. Us: run `./build.sh --runner` on the QA machine, then test the workflow
    by hand with a known sha and a ticket.
 3. Lexful: item d (CloudFront), so the runs are not blocked.
-4. Turn on `qa-notify.yml`. Watch the first three deploys.
-5. Build one-run-per-commit and multi-ticket deploys, then the Linear write-back, then retention.
+4. Turn on `qa-notify.yml`. Watch the first three deploys. Set `QA_UAT_ENVIRONMENTS` if more than docu-app and docu-service should start QA.
+5. Switch on `QA_LINEAR_LOG` once the write team and project are agreed. Then build multi-ticket deploys and retention.

@@ -151,6 +151,7 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 - `.agents/` the agent prompt, the QA skill (one file per phase), the UX audit skill, and the UX kit
 - `docs/run-reference.md` the run flow, the phases and the files a run writes
 - `docs/setup.md` deployment: the QA machine, the trigger and what to configure in the product repo
+- `docs/docu-stack/qa-notify.yml` the workflow to copy into docu-stack so a UAT deploy starts a run
 - `docs/linear-logging.md` how a run is written to Linear: the tickets, the comment, E2E bugs, counters and the UX report link
 - `docs/security.md` what protects the secrets, what does not, and the risks that remain
 - `docs/process-diagram-full-run.html` the architecture and the run flow as a diagram (open it in a browser)

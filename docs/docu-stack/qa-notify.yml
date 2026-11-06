@@ -1,0 +1,52 @@
+# Copy this file to  .github/workflows/qa-notify.yml  in Lexful-ai/docu-stack.
+#
+# When a UAT deploy workflow finishes successfully, send the deployed commit to Lexful-ai/qa-harness.
+# That repo's workflow "QA a UAT deploy" runs the harness on the QA machine.
+#
+# Each "Build & Deploy UAT" workflow in docu-stack runs on a push to main that touches its own paths,
+# so one merge can start several of them. Each sends its own event with the same commit; the harness
+# runs a commit only once.
+#
+# Edit the `workflows` list to choose which deploys start QA. The names must match the `name:` line of
+# the workflow file exactly. qa-harness checks the list again (repository variable QA_UAT_ENVIRONMENTS),
+# so a name added here but not there is received and ignored.
+name: Tell the QA harness about a UAT deploy
+
+on:
+  workflow_run:
+    workflows:
+      - "docu-app - Build & Deploy UAT"          # environment docu-app-uat
+      - "docu-service - Build & Deploy UAT"      # environment docu-service-uat
+      # Add these only if QA should also start after them:
+      # - "platform-app - Build & Deploy UAT"              # platform-app-uat
+      # - "analytics-app - Build & Deploy UAT"             # analytics-app-uat
+      # - "workflow-service - Build & Deploy UAT"          # workflow-service-uat
+      # - "indexer-service - Build & Deploy UAT"           # indexer-service-uat
+      # - "audit-service - Build & Deploy UAT"             # audit-service-uat
+      # - "data-integration-service - Build & Deploy UAT"  # data-integration-service-uat
+      # - "data-query-service - Build & Deploy UAT"        # data-query-service-uat
+      # - "data-sync-service - Build & Deploy UAT"         # data-sync-service-uat
+      # - "docu-etl - Build & Deploy UAT"                  # docu-etl-uat
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  notify:
+    # Only a deploy that succeeded. A failed or cancelled deploy is not a build to test.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send the deployed commit to Lexful-ai/qa-harness
+        env:
+          GH_TOKEN: ${{ secrets.QA_HARNESS_DISPATCH_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+        run: |
+          gh api repos/Lexful-ai/qa-harness/dispatches \
+            -f event_type=uat-deployed \
+            -F "client_payload[sha]=$SHA" \
+            -F "client_payload[workflow]=$WORKFLOW" \
+            -F "client_payload[run_url]=$RUN_URL"

@@ -810,5 +810,17 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(main(["--e2e", "--sha", "abc"]), 64)
             self.assertEqual(list_runs(), [])
 
+    def test_a_commit_already_accepted_is_skipped_unless_asked_again(self):
+        from app.cli import main
+        sha = "a" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["QA_RUNS_DIR"] = tmp
+            first = create_run(ticket="LEX-1", pr=None, sha=sha, trigger="uat-deploy")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(main(["--sha", sha]), 0)
+            self.assertIn("skipped", out.getvalue())
+            self.assertIn(first["id"], out.getvalue())
+            self.assertEqual(len(list_runs()), 1)  # no second run was made
+
 if __name__ == "__main__":
     unittest.main()
