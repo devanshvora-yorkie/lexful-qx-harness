@@ -82,3 +82,24 @@ The server appends one entry per heal and one per promotion from a ticket run (w
 +  test.setTimeout(360_000)
  })
 
+2026-11-06T11:22:03Z  LEX-2255-20261106T111220Z-1ccc  promote from LEX-2255
+  - skipped: LEX-2255 external sharing — sanity › TC-LEX-2255-005: an activation one character short is refused with 400 VALIDATION_ERROR — API-only, no page; not a journey
+  - skipped: LEX-2255 external sharing — sanity › TC-LEX-2255-006: a mistyped share path answers 404 with the token redacted, never echoed — API-only, no page; not a journey
+  - skipped: LEX-2255 external sharing — sanity › TC-LEX-2255-009: a share with 0 or 51 fields is refused with 400 before any asset lookup — API-only, no page; new endpoint contract check
+  - skipped: LEX-2255 external sharing — sanity › TC-LEX-2255-010: a viewer is refused a share create with the edit-permission message, not the flag message — API-only, no page; new endpoint contract check
+  - skipped: LEX-2255 external sharing — smoke › TC-LEX-2255-004: a describe token one character short is refused with 400 VALIDATION_ERROR — API-only, no page; new endpoint contract check
+  - skipped: LEX-2255 external sharing — smoke › TC-LEX-2255-007: a share create without a session is refused with 401 — API-only, no page; new endpoint contract check
+  - skipped: LEX-2255 external sharing — smoke › TC-LEX-2255-008: a share create with no fields is refused with 400 VALIDATION_ERROR — API-only, no page; new endpoint contract check
+  - skipped: LEX-2255 external sharing — smoke › TC-LEX-2255-011: a share create is refused for admin and support while external sharing is off for the account — depends on account mode (external sharing off); not durable
+
+2026-11-06T11:43:20Z  LEX-3861-20261106T113224Z-036f  promote from LEX-3861
+  - skipped: TC-LEX-3861-001: Admin gets NOT_FOUND for the current quote when the account has no offer — API-only; not a journey
+  - skipped: TC-LEX-3861-002: A malformed version id is refused with VALIDATION_ERROR — API-only contract check
+  - skipped: TC-LEX-3861-003: An identity query field on the quote read is refused with INVALID_QUOTE — API-only contract check
+  - skipped: TC-LEX-3861-004: Support and viewer cannot read the current quote or the agreement — API-only; role matrix of a new endpoint
+  - skipped: TC-LEX-3861-005: A signature request that names an actor is refused and creates no signature — API-only contract check; writes state
+  - skipped: TC-LEX-3861-006: Signing a version the account does not have answers NOT_FOUND — API-only contract check
+  - skipped: TC-LEX-3861-007: Apply refuses any body; it accepts only the empty object — API-only contract check of a new endpoint
+  - skipped: TC-LEX-3861-008: A viewer is sent away from Account > Billing and sees no plan — Account > Billing is not search, asset crud or document editing; tied to this rollout
+  - skipped: TC-LEX-3861-009: Billing shows no quote card when the native quote lookup answers NOT_FOUND — Depends on this account having no native offer (account state, not a durable journey); not a journey in the three areas
+
