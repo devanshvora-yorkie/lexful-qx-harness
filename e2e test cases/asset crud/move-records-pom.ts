@@ -125,15 +125,17 @@ export async function openRecordFromPalette(page: Page, name: string): Promise<v
 
 /** Navigate to a list. UAT sometimes answers with a CloudFront 403 page; reload until the app shell renders. */
 export async function gotoApp(page: Page, url: string): Promise<void> {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // Four navigations, 45 s apart: a CloudFront WAF block on UAT can outlast three.
+  const attempts = 4
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     const blocked = page.getByRole('heading', { name: '403 ERROR' })
     const shell = page.getByRole('heading', { level: 1 })
     await expect(blocked.or(shell).first()).toBeVisible({ timeout: 15000 })
     if (!(await blocked.isVisible())) return
-    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 45_000))
+    if (attempt < attempts) await new Promise(resolve => setTimeout(resolve, 45_000))
   }
-  throw new Error(`CloudFront 403 persisted for ${url} after 3 navigations`)
+  throw new Error(`CloudFront 403 persisted for ${url} after ${attempts} navigations`)
 }
 
 export class MovePage {

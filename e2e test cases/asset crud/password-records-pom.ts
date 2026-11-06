@@ -42,20 +42,23 @@ export class PasswordsListPage {
    * Returns the X-Account-ID the app sends.
    */
   async open(): Promise<string> {
-    const accountRequest = this.page.waitForRequest(
-      (request) => request.url().startsWith(API_URL) && Boolean(request.headers()['x-account-id']),
-      { timeout: 20_000 },
-    )
-    const listing = this.page.waitForResponse(
-      (response) =>
-        response.url().startsWith(`${API_URL}/v1/assets/system.password?`) && response.status() === 200,
-      { timeout: 20_000 },
-    )
-    await gotoApp(this.page, PASSWORDS_URL)
-    await listing
-    await this.row(SEEDED_PASSWORD).waitFor({ state: 'visible', timeout: 15_000 })
-    const request: Request = await accountRequest
-    return request.headers()['x-account-id']
+    // A CloudFront 403 can arrive after gotoApp has returned, so the app's own request never
+    // fires. Re-navigate until the seeded row renders; only then is the request expected.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const accountRequest = this.page.waitForRequest(
+        (request) => request.url().startsWith(API_URL) && Boolean(request.headers()['x-account-id']),
+        { timeout: 20_000 },
+      )
+      accountRequest.catch(() => undefined)
+      await gotoApp(this.page, PASSWORDS_URL)
+      const rendered = await this.row(SEEDED_PASSWORD)
+        .waitFor({ state: 'visible', timeout: 20_000 })
+        .then(() => true, () => false)
+      if (!rendered) continue
+      const request: Request = await accountRequest
+      return request.headers()['x-account-id']
+    }
+    throw new Error(`Passwords listing did not render for ${PASSWORDS_URL} after 2 navigations`)
   }
 
   /** The name cell of a password row (rows are grouped by organization). */

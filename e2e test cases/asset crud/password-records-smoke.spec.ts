@@ -27,7 +27,8 @@ test.afterEach(async ({ page }) => {
 })
 
 test.beforeEach(() => {
-  test.setTimeout(240_000)
+  // Two listing navigations, each with CloudFront 403 retries spaced 45 s apart, fit in this budget.
+  test.setTimeout(360_000)
 })
 
 test.describe('Password records — smoke', () => {
