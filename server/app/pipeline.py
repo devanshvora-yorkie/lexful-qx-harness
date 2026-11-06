@@ -858,6 +858,7 @@ def _seal(
     _log_to_linear(run_id, folder, row, status or str(row.get("status") or ""))
     try:
         runners.cleanup_source(folder)
+        runners.cleanup_agent_tmp(folder)
     except Exception:
         log.exception("worktree was not removed")
     try:

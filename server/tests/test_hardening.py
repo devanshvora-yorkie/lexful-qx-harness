@@ -106,12 +106,20 @@ class GitAndEnvTest(unittest.TestCase):
             self.assertNotIn(name, env)
         self.assertEqual(env["QA_PW_WORKERS"], "3")
 
-    def test_opencode_env_has_the_tool_path_and_a_writable_tmp(self):
-        with tempfile.TemporaryDirectory() as raw, mock.patch.object(runners, "agent_identity", return_value=None):
-            env = runners._opencode_env(Path(raw))
+    def test_opencode_env_has_the_tool_path_and_a_short_writable_tmp(self):
+        with tempfile.TemporaryDirectory() as raw, tempfile.TemporaryDirectory() as tmp_root, \
+             mock.patch.object(runners, "AGENT_TMP_ROOT", Path(tmp_root)), \
+             mock.patch.object(runners, "agent_identity", return_value=None):
+            run = Path(raw) / "tickets" / "LEX-2255" / "2026-11-06_1112Z_1ccc"
+            run.mkdir(parents=True)
+            env = runners._opencode_env(run)
             self.assertTrue(env["PATH"].split(os.pathsep)[0].endswith("node_modules/.bin"))
-            self.assertEqual(env["TMPDIR"], str(Path(raw) / "tmp"))
-            self.assertTrue((Path(raw) / "tmp").is_dir())
+            self.assertEqual(env["TMPDIR"], str(Path(tmp_root) / "qa-2026-11-06_1112Z_1ccc"))
+            self.assertTrue(Path(env["TMPDIR"]).is_dir())
+            # Chromium's socket: <TMPDIR>/org.chromium.Chromium.XXXXXX/SingletonSocket must fit in 108 bytes
+            self.assertLess(len("/tmp/qa-2026-11-06_1112Z_1ccc/org.chromium.Chromium.XXXXXX/SingletonSocket"), 100)
+            runners.cleanup_agent_tmp(run)
+            self.assertFalse(Path(env["TMPDIR"]).exists())
 
     def test_session_check_runs_at_most_once_in_five_minutes(self):
         runners._LAST_SESSION_CHECK[0] = 0.0

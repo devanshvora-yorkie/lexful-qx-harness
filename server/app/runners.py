@@ -361,6 +361,13 @@ def prepare_source(folder: Path) -> Path | None:
     return first
 
 
+def cleanup_agent_tmp(folder: Path) -> None:
+    """Remove the run's agent temp folder (`agent_tmp`)."""
+    tmp = AGENT_TMP_ROOT / f"qa-{_key(folder)}"
+    if tmp.is_dir() and not tmp.is_symlink():
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def cleanup_source(folder: Path) -> None:
     """Remove this run's worktrees. The clones stay for the next run."""
     root = worktree_root(folder)
@@ -395,10 +402,18 @@ def scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in SECRET_ENV and not _SECRET_NAME.search(k)}
 
 
+AGENT_TMP_ROOT = Path(os.environ.get("QA_AGENT_TMP_ROOT") or "/tmp")
+
+
 def agent_tmp(run_dir: Path) -> Path:
-    """A temp folder the agent can write: the system /tmp is not reliably writable for the qa user."""
-    tmp = run_dir / "tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
+    """A short temp folder the agent can write, one per run: /tmp/qa-<run key>.
+
+    Short on purpose: Chromium puts its singleton socket under TMPDIR, and a Unix socket path is limited
+    to about 108 bytes. A folder inside the run directory was too long, and the browser would not start.
+    /tmp/opencode, which OpenCode makes as root, is not writable for the agent user.
+    """
+    tmp = AGENT_TMP_ROOT / f"qa-{_key(run_dir)}"
+    tmp.mkdir(mode=0o700, parents=True, exist_ok=True)
     identity = agent_identity()
     if identity is not None:
         try:
