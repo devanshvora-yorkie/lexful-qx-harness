@@ -21,7 +21,7 @@ it on a shared machine.
 | No agent may start a subagent | `task` deny in `opencode.jsonc` | One session per phase, one agent. The rule is also written in `AGENTS.md`, but the config is what enforces it |
 | The agent can edit only `runs/` and `e2e test cases/` | `edit` rules in `opencode.jsonc` | The server code, scripts, `.agents/`, the OpenCode config, `qa-fixtures.ts`, `auth-helper.ts` and the Docker files are read-only to it. `runs/cache/` (sessions) and `runs/source/` (the clone) are read-only even inside `runs/` |
 | The checked-in suite is restored after a ticket session | `_guard_suite` in `server/app/pipeline.py` (explore, heal, verify) | One agent serves every phase, so the permission file cannot tell a ticket session from the E2E heal. A ticket run cannot leave edits in `e2e test cases/`. Residual: the guard does not wrap the UX audit on its own (it runs beside the affected-case heal, which may legitimately edit the suite), so a UX session's suite edit is only reverted if it lands inside a heal's window; the prompt forbids it. With `QA_MAX_PARALLEL_RUNS` above 1 the guard only logs |
-| Nothing is written to Linear or GitHub | no write calls in the code | The harness only reads |
+| Linear is written only when asked, and only to the write team | `server/app/linear_log.py`; `QA_LINEAR_LOG` is off by default | The server writes, never the agent. It stops if the write team is the read team or `LEX`. GitHub is never written |
 
 ## What is only a guard rail
 

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app import checks, linear_report, prune, runners, store, summary as run_summary
+from app import checks, linear_log, linear_report, prune, runners, store, summary as run_summary
 from app.bugs import failure_kind, latest_triage, publish_bugs, publish_findings, triage_files
 from app.coverage import load_cases, write_coverage_index
 from app.logbook import Logbook, echo_run, plain, route, unroute
@@ -785,6 +785,7 @@ def _seal(
         linear_report.write(folder, row, verdict=verdict or "HALTED", issues=issues or [])
     except Exception:
         log.exception("linear report was not written")
+    _log_to_linear(run_id, folder, row, status or str(row.get("status") or ""))
     try:
         runners.cleanup_source(folder)
     except Exception:
@@ -801,6 +802,25 @@ def _seal(
             Logbook(folder).row("server", "prune", f"removed {prune.mib(freed)} of scratch and duplicate files")
     except Exception:
         log.exception("run folder was not pruned")
+
+
+def _log_to_linear(run_id: str, folder: Path, row: dict[str, Any], status: str) -> None:
+    """Optional last step of a finished run: tracking ticket, comment, bug tickets. Never fails the run."""
+    if not linear_log.is_enabled():
+        return
+    book = Logbook(folder)
+    if status not in linear_log.FINISHED:
+        book.row("server", "linear", f"not filed: the run ended as {status or 'unknown'}")
+        return
+    try:
+        manifest = store.get_run(run_id) or row
+        attempt, total = linear_log.attempt_of(manifest, store.list_runs())
+        result = linear_log.file_run(folder, store.relative_folder(manifest), manifest, attempt, total)
+        bugs = len(result["feature_bugs"]) + len(result["e2e_bugs"])
+        book.row("server", "linear", f"{result['ticket']['identifier']}: comment added, {bugs} bug(s) handled")
+    except Exception as exc:
+        log.exception("run was not logged to Linear")
+        book.row("server", "linear", f"not filed: {str(exc)[:200]}. Retry: python -m app.linear_log {run_id}")
 
 
 def _phase1_meta() -> dict[str, Any]:

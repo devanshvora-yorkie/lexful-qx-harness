@@ -6,7 +6,7 @@
 
 The run is the same one the server would queue: preflight, the E2E stage, the ticket's tests, the
 UX audit and the report. Its folder is written under QA_RUNS_DIR (mount runs/ to keep it), and run.log
-is printed as it grows. Nothing is written to Linear or GitHub.
+is printed as it grows. Nothing is written to GitHub; Linear is written only when QA_LINEAR_LOG=true.
 
 Exit status: 0 PERFECT, 1 NEEDS_REVISION, 2 HALTED or failed, 64 bad arguments. When GITHUB_OUTPUT is
 set (a GitHub Actions step), `run_dir`, `verdict` and `report` are appended to it for later steps.

@@ -4,7 +4,7 @@ An AI agent that tests a Lexful change on UAT. Given a ticket or a pull request,
 ticket and the code, walks the feature in the live app, writes Playwright specs, runs them, heals
 the specs when the UI has drifted, files the bugs it can reproduce, and writes one report per run.
 
-Nothing is written to Linear or GitHub yet. The harness reads both.
+The harness reads Linear and GitHub. It writes to Linear only when `QA_LINEAR_LOG=true`: a tracking ticket, a comment per run and a Bug ticket per bug, in a separate write team and project ([docs/linear-logging.md](docs/linear-logging.md)). It never writes to GitHub.
 
 ## Set up
 
@@ -134,6 +134,8 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 | `QA_PHASE1_ON_START` | true | Every ticket run starts with the E2E stage |
 | `QA_RUN_UX_AUDIT` | true | Run the UX audit. `false` stops after functional QA |
 | `QA_VERIFY_FINDINGS` | true | A fresh session reproduces each bug before it is filed |
+| `QA_LINEAR_LOG` | false | Log each finished run to Linear: tracking ticket, run comment, Bug tickets. Needs `LINEAR_WRITE_TEAM_ID` and `LINEAR_WRITE_PROJECT_ID` |
+| `QA_REPORT_BASE_URL` | empty | Where run folders are hosted. Empty uploads `ux-report.html` to Linear, which downloads it |
 | `QA_ALLOW_UNDEPLOYED` | false | Run a PR that is not on UAT yet |
 | `QA_CONTEXT_MAX_IMAGES` | 12 | Images saved from the ticket and its pull requests. Each costs tokens only if the agent opens it |
 | `QA_LOOKUP_MAX_TICKETS`, `QA_LOOKUP_MAX_PRS` | 8, 5 | Extra tickets and pull requests the agent may fetch per run with `scripts/lookup.mjs` |
@@ -149,6 +151,7 @@ Set them in `.env`, then restart the container with `docker compose up -d --forc
 - `.agents/` the agent prompt, the QA skill (one file per phase), the UX audit skill, and the UX kit
 - `docs/run-reference.md` the run flow, the phases and the files a run writes
 - `docs/setup.md` deployment: the QA machine, the trigger and what to configure in the product repo
+- `docs/linear-logging.md` how a run is written to Linear: the tickets, the comment, E2E bugs, counters and the UX report link
 - `docs/security.md` what protects the secrets, what does not, and the risks that remain
 - `docs/process-diagram-full-run.html` the architecture and the run flow as a diagram (open it in a browser)
 - `docs/deployment_overview.html` the deploy trigger and what Lexful sets up (open it in a browser)
